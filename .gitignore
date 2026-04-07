@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Environment
+.env
+backend/.env
+
+# IDE & Tools
+.idea/
+.vscode/
+.qoder/
+*.swp
+*.swo
+
+# Database files
+*.db
+*.sqlite3
+
+# RAG index (generated, can be rebuilt via build_index.py)
+backend/data/rag_index/
+
+# OS
+.DS_Store
+Thumbs.db
+nul

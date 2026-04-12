@@ -84,3 +84,41 @@ def format_reference_for_knowledge(cases: List[Dict]) -> str:
             f"标准处方: {c.get('prescriptions', '无处方')}"
         )
     return "\n\n".join(parts)
+
+
+from app.services.rag.medical_store import get_medical_store
+
+
+async def retrieve_medical_evidence(
+    diagnosis: str, top_k: int = 5
+) -> List[Dict]:
+    """基于诊断结果检索医学指南证据
+
+    Args:
+        diagnosis: 医生的诊断文本
+        top_k: 返回条数
+    Returns:
+        医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
+    """
+    store = get_medical_store()
+    if store.collection is None or store.collection.count() == 0:
+        logger.debug("医学知识库索引不可用，跳过医学证据检索")
+        return []
+    try:
+        return await store.search(diagnosis, top_k=top_k)
+    except Exception as e:
+        logger.warning(f"医学证据检索失败，降级为无证据模式: {e}")
+        return []
+
+
+def format_evidence_for_verification(evidences: List[Dict]) -> str:
+    """为 knowledge_agent 格式化医学证据"""
+    if not evidences:
+        return "未检索到相关医学证据"
+    parts = []
+    for i, ev in enumerate(evidences, 1):
+        parts.append(
+            f"证据{i}（来源: {ev.get('source', '未知')}, 第{ev.get('page', '?')}页）:\n"
+            f"{ev.get('text', '')}"
+        )
+    return "\n\n".join(parts)

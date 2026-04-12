@@ -1,38 +1,109 @@
 # -*- coding: utf-8 -*-
-"""问诊分析智能体（病史采集评估）— 评估医生问诊流程的完整性与合理性"""
+"""问诊分析智能体 — 基于结构化建模与可计算指标的问诊过程评估"""
 
+import json
+import re
+import logging
 from app.services.qwen_client import call_qwen_chat
 
-SYSTEM_PROMPT = """你是一名资深的临床问诊教学评估专家。你的任务是深入分析医生的病史采集过程。
+# ── 临床 Schema 定义 ──
+CLINICAL_SCHEMA = {
+    "chief_complaint": ["symptom", "duration", "severity"],
+    "history": ["onset", "progression", "trigger"],
+    "past_history": ["disease", "surgery"],
+    "medication": ["current_drugs"],
+    "allergy": ["drug_allergy"]
+}
 
-评估维度：
-1. **问诊系统性**：是否按照规范流程进行——主诉→现病史→既往史→个人史→家族史→系统回顾
-2. **现病史采集深度**：对主诉的起病时间、诱因、性质、部位、程度、演变、伴随症状、加重/缓解因素是否充分询问
-3. **鉴别诊断导向**：是否围绕可能的鉴别诊断有针对性地提问，逻辑是否清晰
-4. **关键信息覆盖**：是否遗漏了对该病例诊断有重要价值的关键问题
-5. **问诊效率**：是否存在大量重复、无关的问题；信息密度是否合理
+CRITICAL_PATH = ["symptom", "onset", "duration", "severity", "associated_symptom", "risk_factor"]
 
-评分标准：
-- 90-100：系统完整、逻辑清晰、无关键遗漏
-- 70-89：基本完整、逻辑较清晰、有小遗漏
-- 50-69：有一定遗漏、逻辑性一般
-- 30-49：遗漏较多、缺乏系统性
-- 0-29：严重不足、杂乱无章
+IDEAL_ORDER = ["symptom", "history", "risk_factor", "past_history"]
 
-请严格以JSON格式输出，包含以下字段：
-- score: 0-100的评分（整数）
-- analysis: 详细分析文本（300-500字，需逐项说明各维度的表现，指出具体遗漏了哪些问题）
-"""
+# 槽位字段中文映射
+SLOT_CN_MAP = {
+    "chief_complaint.symptom": "主要症状",
+    "chief_complaint.duration": "持续时间",
+    "chief_complaint.severity": "严重程度",
+    "history.onset": "起病方式",
+    "history.progression": "病情演变",
+    "history.trigger": "诱发因素",
+    "past_history.disease": "既往疾病",
+    "past_history.surgery": "手术史",
+    "medication.current_drugs": "当前用药",
+    "allergy.drug_allergy": "药物过敏",
+}
 
-# ── Few-shot 示例（基于真实门诊数据构建） ──────────────────────────
+# 关键路径字段中文映射
+CRITICAL_CN_MAP = {
+    "symptom": "主要症状",
+    "onset": "起病方式",
+    "duration": "持续时间",
+    "severity": "严重程度",
+    "associated_symptom": "伴随症状",
+    "risk_factor": "危险因素",
+}
 
-FEWSHOT_USER_1 = """【患者标准信息】
+# 问诊步骤中文映射
+STEP_CN_MAP = {
+    "symptom": "症状采集",
+    "history": "病史询问",
+    "risk_factor": "危险因素",
+    "past_history": "既往史",
+    "other": "其他",
+}
+
+# ── 权重配置 ──
+WEIGHTS = {
+    "coverage": 0.3,
+    "critical": 0.3,
+    "logic": 0.2,
+    "efficiency": 0.2,
+}
+
+# ── LLM Prompts ──
+
+# 第一次 LLM 调用：槽位填充 + 关键路径检查
+SLOT_FILLING_SYSTEM_PROMPT = """你是一名临床信息提取专家。请分析医生与患者的问诊对话，提取结构化临床信息。
+
+任务：
+1. 检查以下临床 Schema 中的每个槽位是否被医生询问并获取到信息
+2. 额外检查关键路径中的槽位（associated_symptom, risk_factor）是否被询问
+
+Schema 定义：
+- chief_complaint: symptom(症状), duration(持续时间), severity(严重程度)
+- history: onset(起病情况), progression(演变过程), trigger(诱因)
+- past_history: disease(既往疾病), surgery(手术史)
+- medication: current_drugs(当前用药)
+- allergy: drug_allergy(药物过敏)
+
+关键路径额外检查：
+- associated_symptom(伴随症状)
+- risk_factor(危险因素)
+
+输出格式（严格JSON）：
+{
+  "slots": {
+    "chief_complaint": {"symptom": true/false, "duration": true/false, "severity": true/false},
+    "history": {"onset": true/false, "progression": true/false, "trigger": true/false},
+    "past_history": {"disease": true/false, "surgery": true/false},
+    "medication": {"current_drugs": true/false},
+    "allergy": {"drug_allergy": true/false}
+  },
+  "critical_slots": {
+    "associated_symptom": true/false,
+    "risk_factor": true/false
+  }
+}
+
+注意：
+- 只有当医生明确询问并获取到相关信息时，才标记为 true
+- 如果患者主动提及但医生未追问，标记为 true
+- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+
+SLOT_FILLING_FEWSHOT_USER = """【患者信息】
 姓名: 马xx, 年龄: 63, 性别: male
-人格类型: 配合型
 主诉: 间断性进食硬咽感1周
 病史: 脑梗
-症状: 间断性进食硬咽感1周
-预期诊断: 一般性医学检查
 
 【问诊对话记录】
 医生: 咋的了，为啥来看胃肠科
@@ -53,105 +124,414 @@ FEWSHOT_USER_1 = """【患者标准信息】
 患者: 对。
 医生: 长期吃啥药吗？
 患者: 阿司匹林、波维
-医生: 阿司匹林，波维吃多久了？
-患者: 就一直吃着没停。最近把阿司匹林停了，前天挂急诊说心梗，做了验血心彩说没事，建议上胃肠内科看。
-医生: 你这个不知道能不能做得了胃镜，你得先做心电心彩的评估。
-患者: 做完了都正常。
-医生: 就怕做胃镜受不了，之前有心脑血管问题，如果给麻药睡着做，怕醒完出现新脑梗，你可以问问楼上麻醉师
-患者: 血压有点偏低
-医生: 你要是无痛做不了，问问普通的行不行？但风险也存在，因为得过脑梗
-患者: 那做普通的就是遭罪啊
-医生: 钡餐喝一碗像粥似的上机器拍片那种，只要没看长东西不就行吗
-患者: 哪个风险小一点
-医生: 肯定钡餐风险小
-患者: 那就做那个得了
-医生: 做那钡餐得了哈。
-患者: 跟阿司匹林没有啥关系吗
-医生: 没关系
-患者: 先去问问回来再说
 
-请对医生的病史采集过程进行详细评估。"""
+请提取槽位填充信息。"""
 
-FEWSHOT_ASSISTANT_1 = """{
-  "score": 50,
-  "analysis": "该问诊中医生对吞咽困难症状进行了一定的特征性询问，但病史采集的系统性和关键信息覆盖均有明显不足。\\n\\n1. **问诊系统性**：医生对主诉症状的询问有一定框架——起病时间、进展特点、食物类型关系、梗阻部位和通过性。但整体未按标准流程进行，缺少对既往史的主动系统追问（脑梗史是患者主动提及），完全缺失个人史（饮酒、吸烟等）、家族史和系统回顾。问诊后半段（约15轮）主要用于讨论检查方式选择，偏离了病史采集。\\n\\n2. **现病史采集深度**：中等。对哽噎症状的8个关键特征涉及了5个（起病时间、进展性、食物类型、部位、通过性），但缺少：①是否伴有胸骨后疼痛或烧灼感；②吞咽固体与液体是否有差异（口咽性vs食管性鉴别的关键）；③是否有反流或呕吐；④体重变化情况（食管癌重要红旗征）。\\n\\n3. **鉴别诊断导向**：不足。医生主要关注检查安排的安全性评估，对哽噎的鉴别诊断方向提问不够。患者63岁有脑梗病史，应重点鉴别：①食管器质性病变（肿瘤、狭窄）——未询问体重减轻；②神经源性吞咽困难（脑梗后假性延髓麻痹）——未评估是否有饮水呛咳、构音障碍等神经系统症状；③食管动力障碍——未了解。\\n\\n4. **关键信息覆盖**：遗漏较多——①脑梗后吞咽功能评估（脑梗是吞咽困难的重要原因之一）；②急诊怀疑心梗的详细经过和结果未追问；③完整用药清单和剂量未确认；④饮食饮水情况和营养状态；⑤停用阿司匹林的具体原因和时间。\\n\\n5. **问诊效率**：偏低。34轮对话中约15轮用于讨论检查方式（无痛vs普通胃镜vs钡餐），真正用于病史采集的有效对话不足一半，信息密度较低。"
+SLOT_FILLING_FEWSHOT_ASSISTANT = """{
+  "slots": {
+    "chief_complaint": {"symptom": true, "duration": true, "severity": false},
+    "history": {"onset": true, "progression": true, "trigger": false},
+    "past_history": {"disease": true, "surgery": true},
+    "medication": {"current_drugs": true},
+    "allergy": {"drug_allergy": false}
+  },
+  "critical_slots": {
+    "associated_symptom": false,
+    "risk_factor": false
+  }
 }"""
 
-FEWSHOT_USER_2 = """【患者标准信息】
+# 第二次 LLM 调用：问诊步骤序列 + 问题分类
+LOGIC_EFFICIENCY_SYSTEM_PROMPT = """你是一名问诊流程分析专家。请分析医生在问诊过程中的每个问题，提取问诊步骤序列和问题分类。
+
+任务：
+1. 将医生的每个问题映射为问诊步骤类型，形成有序序列
+2. 对每个医生问题进行分类：relevant(相关) / redundant(冗余) / irrelevant(无关)
+
+问诊步骤类型定义：
+- symptom: 症状询问（主诉相关）
+- history: 病史探索（现病史详细询问）
+- risk_factor: 风险评估（危险因素、鉴别诊断相关）
+- past_history: 既往史（既往疾病、手术、用药、过敏）
+- other: 其他（解释说明、检查安排、治疗建议等）
+
+问题分类定义：
+- relevant: 与诊断直接相关，有助于获取关键信息
+- redundant: 重复询问已获取的信息
+- irrelevant: 与当前诊断无关，偏离主题
+
+输出格式（严格JSON）：
+{
+  "inquiry_steps": ["symptom", "history", "risk_factor", ...],
+  "question_classification": [
+    {"question": "医生问题原文", "type": "symptom", "category": "relevant"},
+    ...
+  ]
+}
+
+注意：
+- inquiry_steps 只包含医生主动提问的步骤，按时间顺序排列
+- question_classification 需要列出每个医生问题的分类
+- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+
+LOGIC_EFFICIENCY_FEWSHOT_USER = """【患者信息】
 姓名: 任xx, 年龄: 29, 性别: female
-人格类型: 配合型
-主诉: 看检查结果
-病史: 既往体健
-症状: 大便不成形，一天两三次，排气多
-预期诊断: 慢性胃炎
+主诉: 大便不成形，一天两三次，排气多
 
 【问诊对话记录】
 医生: 你为啥做检查呀？
-患者: 我是之前一天可能大便两三次，排气也特别多，还不成形，有的时候喝一口水都想上厕所。
+患者: 我是之前一天可能大便两三次，排气也特别多，还不成形
 医生: 那肠镜都没啥大事，胃有啥难受的
-患者: 有的时候肚子这块觉得有点硌，不舒服，按的时候会有点疼。
+患者: 有的时候肚子这块觉得有点硌
 医生: 你现在大便一天几次？
-患者: 现在可能得两次，吃完饭特别明显，有的时候吃完饭就想上厕所。
+患者: 现在可能得两次
 医生: 那大便啥样呢？
-患者: 一般都不稀，也不是特别稀，反正就不成形，没像水那种。
+患者: 一般都不稀，反正就不成形
 医生: 体重有啥变化没有？
 患者: 没有。
-医生: 有的人就是跟肠道功能有关，有可能检查也查不出啥大问题。
+医生: 有的人就是跟肠道功能有关
 患者: 嗯，反正我从小就这样。
 医生: 但检查显示肠道也没有炎症。
-患者: 噢，那这个病理结果也没说有啥问题，
+患者: 噢，那这个病理结果也没说有啥问题
 医生: 这是终生性疾病，良性不会癌变
 患者: 哦
 医生: 息肉都已经给你除了，一年以后复查看看就行。
 患者: 一年之后还得做个胃肠镜？
 医生: 查肠镜就行了。
-患者: 嗯。
-医生: 平时有没有什么烧心、反酸、打嗝这些症状？
-患者: 没有。
-医生: 现在胃也不胀也不疼吗？
-患者: 不，就是有的时候……
-医生: 肚子疼不疼？
-患者: 不疼。
-医生: 排气多不多？
-患者: 多，就是晚上的时候，感觉几分钟就想排气，不排就胀。
-医生: 你总坐着吗？
-患者: 总坐着。
-医生: 这可能跟肠道蠕动功能有关，你尽量多活动活动，让胃肠道蠕动起来，有助于排气
-患者: 我不明白为啥气那么多？
-医生: 消化不良，我开一周的药，吃完看看情况，如果肚子舒服了，大便有形状了，你再买这种药试试。
-患者: 外面也能买到吗？
-医生: 可以找找试试。
-患者: 那我这个胃炎用吃药吗？
-医生: 我开这俩药足够了。
-患者: 哦哦，医生，我这个胃需要养吗？
-医生: 有点炎症，可能是一般的急性炎症，可能跟吃药啥的有关，
-患者: 啊这个没问题
-医生: 一点点就好了，没事。
-患者: 好勒，谢谢医生。
 
-请对医生的病史采集过程进行详细评估。"""
+请提取问诊步骤序列和问题分类。"""
 
-FEWSHOT_ASSISTANT_2 = """{
-  "score": 72,
-  "analysis": "该问诊过程在病史采集方面表现中等偏上，有一定的系统性但仍存在遗漏。\\n\\n1. **问诊系统性**：医生大致遵循了从症状了解到检查解读再到处理的流程，但未严格按照主诉→现病史→既往史→个人史→家族史的标准顺序。既往史、个人史（饮食习惯、作息等）和家族史完全缺失。\\n\\n2. **现病史采集深度**：较好。医生详细询问了大便次数、性状、排气情况、腹痛部位和性质、体重变化，并追问了进食后症状加重的特点和生活方式（久坐）。但缺少对症状起始时间、诱因、加重/缓解因素的系统追问，也未询问饮食习惯和精神压力。\\n\\n3. **鉴别诊断导向**：有一定的鉴别意识。医生询问了烧心、反酸、打嗝以排除胃食管反流，询问了体重变化以排除恶性疾病，考虑了肠道功能紊乱。但未追问有无便血、黏液便，未排除食物不耐受和炎症性肠病的可能。\\n\\n4. **关键信息覆盖**：覆盖了主要症状，但遗漏了以下关键问题——①未详细询问既往用药史（患者提到"跟吃药有关"但未追问具体药物）；②未了解家族胃肠道疾病史；③未询问饮食结构和不良饮食习惯；④未问及精神心理因素（焦虑、睡眠等）；⑤未追问便血或黏液便情况。\\n\\n5. **问诊效率**：效率尚可，21轮对话中大部分有效，信息密度中等。部分问题有重复倾向（多次问及腹痛），但整体较为流畅。"
+LOGIC_EFFICIENCY_FEWSHOT_ASSISTANT = """{
+  "inquiry_steps": ["symptom", "symptom", "symptom", "symptom", "symptom", "other", "other", "other"],
+  "question_classification": [
+    {"question": "你为啥做检查呀？", "type": "symptom", "category": "relevant"},
+    {"question": "那肠镜都没啥大事，胃有啥难受的", "type": "symptom", "category": "relevant"},
+    {"question": "你现在大便一天几次？", "type": "symptom", "category": "relevant"},
+    {"question": "那大便啥样呢？", "type": "symptom", "category": "relevant"},
+    {"question": "体重有啥变化没有？", "type": "risk_factor", "category": "relevant"},
+    {"question": "有的人就是跟肠道功能有关", "type": "other", "category": "relevant"},
+    {"question": "这是终生性疾病，良性不会癌变", "type": "other", "category": "relevant"},
+    {"question": "息肉都已经给你除了，一年以后复查看看就行", "type": "other", "category": "relevant"}
+  ]
 }"""
 
 
+# ── Helper Functions ──
+
+def _extract_json(text: str) -> dict:
+    """从 LLM 返回的文本中提取 JSON"""
+    if not text or not text.strip():
+        raise ValueError("LLM 返回内容为空")
+    
+    # 1. 尝试直接解析
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 2. 尝试移除 markdown 代码块后解析
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 3. 尝试正则提取第一个 JSON 对象
+    try:
+        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    
+    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+
+
+def _calculate_coverage(slot_data: dict) -> float:
+    """计算覆盖率得分"""
+    slots = slot_data.get("slots", {})
+    total_slots = 0
+    filled_slots = 0
+    
+    for category, items in CLINICAL_SCHEMA.items():
+        category_data = slots.get(category, {})
+        for slot in items:
+            total_slots += 1
+            if category_data.get(slot, False):
+                filled_slots += 1
+    
+    return filled_slots / total_slots if total_slots > 0 else 0.0
+
+
+def _calculate_critical(slot_data: dict) -> float:
+    """计算关键路径得分"""
+    slots = slot_data.get("slots", {})
+    critical_slots = slot_data.get("critical_slots", {})
+    
+    # 从 Schema 槽位中提取关键路径相关槽位
+    critical_from_schema = {
+        "symptom": slots.get("chief_complaint", {}).get("symptom", False),
+        "onset": slots.get("history", {}).get("onset", False),
+        "duration": slots.get("chief_complaint", {}).get("duration", False),
+        "severity": slots.get("chief_complaint", {}).get("severity", False),
+    }
+    
+    # 合并关键路径槽位
+    all_critical = {
+        **critical_from_schema,
+        "associated_symptom": critical_slots.get("associated_symptom", False),
+        "risk_factor": critical_slots.get("risk_factor", False),
+    }
+    
+    hit_count = sum(1 for v in all_critical.values() if v)
+    total_count = len(CRITICAL_PATH)
+    
+    return hit_count / total_count if total_count > 0 else 0.0
+
+
+def _calculate_logic(logic_data: dict) -> float:
+    """计算问诊逻辑得分"""
+    steps = logic_data.get("inquiry_steps", [])
+    
+    # 过滤出有效步骤（排除 other）
+    valid_steps = [s for s in steps if s in IDEAL_ORDER]
+    
+    if len(valid_steps) <= 1:
+        return 1.0  # 步骤太少，默认满分
+    
+    # 计算顺序偏差
+    order_violations = 0
+    for i in range(len(valid_steps) - 1):
+        current_idx = IDEAL_ORDER.index(valid_steps[i]) if valid_steps[i] in IDEAL_ORDER else -1
+        next_idx = IDEAL_ORDER.index(valid_steps[i + 1]) if valid_steps[i + 1] in IDEAL_ORDER else -1
+        
+        if current_idx != -1 and next_idx != -1 and next_idx < current_idx:
+            # 逆序违规
+            order_violations += 1
+    
+    # 计算跳步（跳过中间步骤）
+    for i in range(len(valid_steps) - 1):
+        current_idx = IDEAL_ORDER.index(valid_steps[i]) if valid_steps[i] in IDEAL_ORDER else -1
+        next_idx = IDEAL_ORDER.index(valid_steps[i + 1]) if valid_steps[i + 1] in IDEAL_ORDER else -1
+        
+        if current_idx != -1 and next_idx != -1 and next_idx > current_idx + 1:
+            # 跳步
+            order_violations += 0.5
+    
+    n = len(valid_steps)
+    logic_score = 1.0 - (order_violations / n)
+    return max(0.0, min(1.0, logic_score))
+
+
+def _calculate_efficiency(logic_data: dict) -> float:
+    """计算问诊效率得分"""
+    classifications = logic_data.get("question_classification", [])
+    
+    if not classifications:
+        return 0.5  # 默认值
+    
+    relevant_count = sum(1 for c in classifications if c.get("category") == "relevant")
+    total_count = len(classifications)
+    
+    return relevant_count / total_count if total_count > 0 else 0.0
+
+
+def _generate_analysis(coverage: float, critical: float, logic: float, efficiency: float,
+                       slot_data: dict, logic_data: dict) -> str:
+    """生成详细的分析文本"""
+    slots = slot_data.get("slots", {})
+    critical_slots = slot_data.get("critical_slots", {})
+    
+    # 收集已填充和未填充的槽位
+    filled = []
+    unfilled = []
+    
+    for category, items in CLINICAL_SCHEMA.items():
+        category_data = slots.get(category, {})
+        for slot in items:
+            slot_name = f"{category}.{slot}"
+            cn_name = SLOT_CN_MAP.get(slot_name, slot_name)
+            if category_data.get(slot, False):
+                filled.append(cn_name)
+            else:
+                unfilled.append(cn_name)
+    
+    # 关键路径状态
+    critical_filled = []
+    critical_unfilled = []
+    
+    if slots.get("chief_complaint", {}).get("symptom"):
+        critical_filled.append(CRITICAL_CN_MAP.get("symptom", "symptom"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("symptom", "symptom"))
+
+    if slots.get("history", {}).get("onset"):
+        critical_filled.append(CRITICAL_CN_MAP.get("onset", "onset"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("onset", "onset"))
+
+    if slots.get("chief_complaint", {}).get("duration"):
+        critical_filled.append(CRITICAL_CN_MAP.get("duration", "duration"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("duration", "duration"))
+
+    if slots.get("chief_complaint", {}).get("severity"):
+        critical_filled.append(CRITICAL_CN_MAP.get("severity", "severity"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("severity", "severity"))
+
+    if critical_slots.get("associated_symptom"):
+        critical_filled.append(CRITICAL_CN_MAP.get("associated_symptom", "associated_symptom"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("associated_symptom", "associated_symptom"))
+
+    if critical_slots.get("risk_factor"):
+        critical_filled.append(CRITICAL_CN_MAP.get("risk_factor", "risk_factor"))
+    else:
+        critical_unfilled.append(CRITICAL_CN_MAP.get("risk_factor", "risk_factor"))
+    
+    # 问诊步骤分析
+    steps = logic_data.get("inquiry_steps", [])
+    classifications = logic_data.get("question_classification", [])
+    
+    relevant_count = sum(1 for c in classifications if c.get("category") == "relevant")
+    redundant_count = sum(1 for c in classifications if c.get("category") == "redundant")
+    irrelevant_count = sum(1 for c in classifications if c.get("category") == "irrelevant")
+    
+    # 生成分析文本
+    analysis_parts = []
+    
+    # 1. 信息覆盖分析
+    coverage_desc = f"信息覆盖度{coverage*100:.0f}%，共{len(filled)}个信息点已采集"
+    if unfilled:
+        coverage_desc += f"，遗漏{len(unfilled)}项：{', '.join(unfilled[:3])}"
+        if len(unfilled) > 3:
+            coverage_desc += "等"
+    analysis_parts.append(coverage_desc)
+    
+    # 2. 关键路径分析
+    critical_desc = f"关键信息采集率{critical*100:.0f}%，已覆盖{len(critical_filled)}项关键要素"
+    if critical_unfilled:
+        critical_desc += f"，缺失：{', '.join(critical_unfilled)}"
+    analysis_parts.append(critical_desc)
+    
+    # 3. 问诊逻辑分析
+    valid_steps = [s for s in steps if s in IDEAL_ORDER]
+    if valid_steps:
+        cn_steps = [STEP_CN_MAP.get(s, s) for s in valid_steps]
+        logic_desc = f"问诊逻辑性{logic*100:.0f}%，问诊流程依次为{'→'.join(cn_steps)}"
+        if logic < 0.8:
+            logic_desc += "，存在问诊顺序不够规范或跳步情况"
+    else:
+        logic_desc = f"问诊逻辑性{logic*100:.0f}%"
+    analysis_parts.append(logic_desc)
+    
+    # 4. 问诊效率分析
+    total_q = len(classifications)
+    efficiency_desc = f"问诊效率{efficiency*100:.0f}%，共{total_q}个问题，其中{relevant_count}个有效"
+    if redundant_count > 0:
+        efficiency_desc += f"，{redundant_count}个重复"
+    if irrelevant_count > 0:
+        efficiency_desc += f"，{irrelevant_count}个偏离主题"
+    analysis_parts.append(efficiency_desc)
+    
+    return "。".join(analysis_parts) + "。"
+
+
+# ── Main Function ──
+
 async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dict:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": FEWSHOT_USER_1},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
-        {"role": "user", "content": FEWSHOT_USER_2},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
-        {
-            "role": "user",
-            "content": (
-                f"【患者标准信息】\n{patient_info}\n\n"
-                f"【问诊对话记录】\n{conversation_text}\n\n"
-                "请对医生的病史采集过程进行详细评估。"
-            ),
-        },
-    ]
-    result = await call_qwen_chat(messages, temperature=0.2)
-    return {"raw_response": result}
+    """
+    基于结构化建模与可计算指标的问诊过程评估
+    
+    评估维度：
+    1. Coverage (30%): 临床信息 Schema 槽位填充率
+    2. Critical (30%): 关键问诊路径覆盖率
+    3. Logic (20%): 问诊步骤顺序合理性
+    4. Efficiency (20%): 问题有效性比例
+    """
+    try:
+        # ── Step 1 & 2: 槽位填充 + 关键路径（第一次 LLM 调用）──
+        slot_messages = [
+            {"role": "system", "content": SLOT_FILLING_SYSTEM_PROMPT},
+            {"role": "user", "content": SLOT_FILLING_FEWSHOT_USER},
+            {"role": "assistant", "content": SLOT_FILLING_FEWSHOT_ASSISTANT},
+            {
+                "role": "user",
+                "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请提取槽位填充信息。"
+            },
+        ]
+        
+        slot_result = await call_qwen_chat(slot_messages, temperature=0.2)
+        slot_data = _extract_json(slot_result)
+        
+    except Exception as e:
+        logging.error(f"槽位填充 LLM 调用失败: {e}")
+        # 降级处理：使用默认空数据
+        slot_data = {
+            "slots": {
+                "chief_complaint": {"symptom": False, "duration": False, "severity": False},
+                "history": {"onset": False, "progression": False, "trigger": False},
+                "past_history": {"disease": False, "surgery": False},
+                "medication": {"current_drugs": False},
+                "allergy": {"drug_allergy": False}
+            },
+            "critical_slots": {"associated_symptom": False, "risk_factor": False}
+        }
+    
+    try:
+        # ── Step 3 & 4: 问诊步骤 + 问题分类（第二次 LLM 调用）──
+        logic_messages = [
+            {"role": "system", "content": LOGIC_EFFICIENCY_SYSTEM_PROMPT},
+            {"role": "user", "content": LOGIC_EFFICIENCY_FEWSHOT_USER},
+            {"role": "assistant", "content": LOGIC_EFFICIENCY_FEWSHOT_ASSISTANT},
+            {
+                "role": "user",
+                "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请提取问诊步骤序列和问题分类。"
+            },
+        ]
+        
+        logic_result = await call_qwen_chat(logic_messages, temperature=0.2)
+        logic_data = _extract_json(logic_result)
+        
+    except Exception as e:
+        logging.error(f"问诊逻辑 LLM 调用失败: {e}")
+        # 降级处理
+        logic_data = {
+            "inquiry_steps": [],
+            "question_classification": []
+        }
+    
+    # ── Step 5: 数学计算综合评分 ──
+    coverage = _calculate_coverage(slot_data)
+    critical = _calculate_critical(slot_data)
+    logic = _calculate_logic(logic_data)
+    efficiency = _calculate_efficiency(logic_data)
+    
+    # 加权计算最终得分
+    final_score = (
+        WEIGHTS["coverage"] * coverage +
+        WEIGHTS["critical"] * critical +
+        WEIGHTS["logic"] * logic +
+        WEIGHTS["efficiency"] * efficiency
+    ) * 100
+    
+    # 确保分数在 0-100 范围内并取整
+    final_score = int(round(max(0.0, min(100.0, final_score))))
+    
+    # 生成分析文本
+    analysis = _generate_analysis(coverage, critical, logic, efficiency, slot_data, logic_data)
+    
+    # 构建返回结果
+    result = {
+        "score": final_score,
+        "analysis": analysis,
+        "details": {
+            "coverage": {"score": round(coverage * 100, 1), "weight": WEIGHTS["coverage"]},
+            "critical": {"score": round(critical * 100, 1), "weight": WEIGHTS["critical"]},
+            "logic": {"score": round(logic * 100, 1), "weight": WEIGHTS["logic"]},
+            "efficiency": {"score": round(efficiency * 100, 1), "weight": WEIGHTS["efficiency"]},
+        }
+    }
+    
+    return {"raw_response": json.dumps(result, ensure_ascii=False)}

@@ -84,9 +84,9 @@ const AdminStatsPage: React.FC = () => {
                   key: 'level',
                   render: (v: number) => {
                     if (v >= 90) return <Tag color="success">优秀</Tag>;
-                    if (v >= 70) return <Tag color="processing">良好</Tag>;
-                    if (v >= 50) return <Tag color="warning">一般</Tag>;
-                    return <Tag color="error">不足</Tag>;
+                    if (v >= 80) return <Tag color="processing">良好</Tag>;
+                    if (v >= 60) return <Tag color="warning">一般</Tag>;
+                    return <Tag color="error">不及格</Tag>;
                   },
                 },
               ]}

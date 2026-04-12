@@ -1,145 +1,306 @@
 # -*- coding: utf-8 -*-
-"""医学知识核对智能体 — 核对医生在问诊中展现的医学知识准确性"""
+"""医学知识核对智能体 — 基于 RAG 检索增强与一致性评估的医学合理性评估"""
 
+import json
+import re
+import logging
 from app.services.qwen_client import call_qwen_chat
-from app.services.rag.retriever import retrieve_similar_cases, format_reference_for_knowledge
+from app.services.rag.retriever import retrieve_medical_evidence, format_evidence_for_verification
 
-SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是基于临床指南和循证医学，评估医生在整个问诊过程中展现的医学专业能力。
+# ── System Prompt ──
+SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是对比医生的诊断和治疗方案与检索到的临床指南证据，评估其一致性。
 
-系统会为你提供与当前病例相似的【参照病例】（来自真实门诊数据库），其中包含标准诊断、处方和检查结果。你可以利用这些参照信息判断医生是否遗漏了重要的检查发现、是否忽略了关键的合并症。注意：参照病例仅供参考，请结合患者的具体临床情况综合判断。
+评估标准：
+1. 诊断一致性：医生的诊断是否与医学证据支持的诊断方向一致
+2. 治疗合理性：治疗方案是否符合临床指南推荐的标准治疗方案
+3. 禁忌症检查：治疗方案中是否存在医学证据明确指出的禁忌或不当之处
+4. 遗漏检查：是否遗漏了医学证据建议的必要检查或评估
 
-评估维度：
-1. **临床推理逻辑**：问诊中的提问是否体现了合理的临床推理链条，思维是否有层次
-2. **鉴别诊断思维**：是否考虑了主要的鉴别诊断方向，排除危险疾病的意识是否充分
-3. **指南符合度**：问诊策略是否符合相关疾病的临床指南和专家共识
-4. **医学术语使用**：与患者沟通中医学概念的表达是否准确，对患者描述的理解是否到位
-5. **红旗征识别**：是否及时识别和追问了提示严重疾病的"红旗征"症状
+输出格式（严格JSON）：
+{
+  "consistency": true/false,  // 诊断和治疗方案与医学证据是否一致
+  "confidence": 0.85,         // 置信度 0-1，表示判断的确定程度
+  "evidence": "用于核对的核心医学证据内容摘要，包括相关指南的关键推荐内容"
+}
 
-评分标准：
-- 90-100：临床推理严谨，鉴别全面，符合指南
-- 70-89：推理基本合理，鉴别较全面
-- 50-69：推理有偏差，鉴别有遗漏
-- 30-49：推理不清晰，专业知识有明显不足
-- 0-29：缺乏基本临床推理
+注意：
+- consistency 为 true 表示诊断和治疗方案与医学证据基本一致
+- consistency 为 false 表示存在明显不一致或不当之处
+- confidence 表示你对判断的确定程度，证据越充分、判断越明确则 confidence 越高
+- evidence 字段应简洁概括用于评估的核心医学证据要点
+- 输出纯JSON，不要包含任何markdown格式或额外说明"""
 
-请严格以JSON格式输出，包含以下字段：
-- score: 0-100的评分（整数）
-- analysis: 详细分析文本（300-500字，需逐项说明各维度的表现）
-"""
-
-# ── Few-shot 示例（基于真实门诊数据构建） ──────────────────────────
-
-FEWSHOT_USER_1 = """【患者标准信息】
-姓名: 戴xx, 年龄: 43, 性别: male
-人格类型: 配合型
-主诉: 看检查结果
-病史: 既往体健
-症状: 萎缩性胃炎，胃溃疡，十二指肠溃疡
-预期诊断: 慢性萎缩性胃炎
+# ── Few-shot 示例 ──
+FEWSHOT_USER_1 = """【患者信息】
+姓名: 张xx, 年龄: 65, 性别: male
+主诉: 咳嗽、咳痰2周，痰中带血3天
+病史: 吸烟史40年，每天20支
 
 【问诊对话记录】
-医生: 我看一眼胃肠镜报告。
-患者: 过年回家做的，肠镜和胃镜。
-医生: 这次做就是个萎缩性胃炎，不是特别厉害，是一个轻度的。
-患者: 去年是挺重的。
-医生: 去年当时是有溃疡，胃有溃疡，十二指肠也有溃疡，也是萎缩性胃炎。
-患者: 我喝胃乐新喝7个月。
-医生: 病理都没问题，你这幽门螺杆菌查没查呢？
-患者: 查完了，有。
-医生: 除没除掉呢？
-患者: 再没查过
-医生: 查完之后不得吃那个4联用药吗？吃完让你复查。那咋没查呢
-患者: 都没查
-医生: 确认这个菌除掉才行，你又有胃溃疡，又有十二指肠溃疡，还有萎缩，这都是要除菌的
-患者: 嗯
-医生: 除完菌之后对你这个胃的状态能有一个不错的改善。最近一个月吃没吃过抗生素？
-患者: 没吃过
-医生: 吃没吃管胃的，什么什么拉唑？
-患者: 都没吃过
-医生: 你早上吃饭了吗？
-患者: 早上吃完了
-医生: 8点多行，10点多就可以查幽门螺杆菌了
-患者: 我们当地医院让我吃维生素B12，说有可能会逆转
-医生: 这两个药对它有好处，你现在萎缩程度比较轻是有可能逆转的，如果到了C3那就逆转不了
-患者: 不能癌变啥的吧
-医生: 现在离癌变特别特别远，多吃新鲜蔬菜水果。结肠有息肉但都很小问题不大
-患者: 两三年复查呗
-医生: 对两三年一复查。平时不能抽烟喝酒
-患者: 行，谢谢医生。
+医生: 咳嗽多长时间了？
+患者: 有两周了，最近3天痰里还有血。
+医生: 有胸痛或呼吸困难吗？
+患者: 有点胸闷，但不太疼。
+医生: 吸烟吗？
+患者: 吸了40年了，一天一包。
 
-请对医生展现的医学知识和临床推理进行评估。"""
+【医生诊断】
+肺癌（疑似中央型肺癌）
+
+【治疗方案】
+1. 胸部CT增强扫描
+2. 支气管镜检查+活检
+3. 根据病理结果制定后续治疗方案（手术/化疗/放疗）
+
+【检索到的医学证据】
+1. NCCN非小细胞肺癌指南2025：对于疑似肺癌患者，推荐进行胸部CT增强扫描以评估肿瘤位置和分期。对于中央型病变，支气管镜检查是获取病理诊断的首选方法。
+2. CSCO肺癌诊疗指南2025：痰中带血、长期吸烟史是肺癌的高危因素。推荐对可疑病灶进行组织病理学确诊后再制定治疗方案。
+3. 临床指南：肺癌诊断需要病理确诊，影像学检查只能作为辅助诊断依据。治疗前应明确病理类型和分期。"""
 
 FEWSHOT_ASSISTANT_1 = """{
-  "score": 58,
-  "analysis": "该问诊中医生展现了一定的消化科专业知识，但在跨学科异常识别和指南细节应用方面有明显不足。\\n\\n1. **临床推理逻辑**：医生展现了较为清晰的推理链——从胃镜结果判断萎缩程度变化（去年重→今年轻度）→关注Hp状态→评估逆转可能性→制定随访策略。对萎缩分级的认知（提到C3就逆转不了）基本正确。但对患者'溃疡→治疗→萎缩好转'的病程演变分析不够深入，未探究溃疡愈合的具体机制。\\n\\n2. **鉴别诊断思维**：有一定意识但不够全面。关注了Hp状态和萎缩性胃炎的进展风险。但患者43岁即出现胃溃疡+十二指肠溃疡+萎缩性胃炎三者并存，应考虑：①Zollinger-Ellison综合征（胃泌素瘤）的可能性；②NSAID相关溃疡的排除（未询问用药史）；③自身免疫性胃炎的可能（未查抗体）。多发溃疡在青壮年患者中应引起警惕。\\n\\n3. **指南符合度**：部分符合。正确指出Hp根除后需复查确认，对萎缩性胃炎的分级评估和逆转可能性判断基本准确。但存在重要遗漏——患者的糖化血红蛋白检验结果为6.6%（正常参考值<6.0%），提示糖尿病前期或早期糖尿病，这是一个需要关注的代谢异常，医生完全未提及和处理，也未建议进一步检查（如空腹血糖、OGTT）或转内分泌科。\\n\\n4. **医学术语使用**：使用了通俗易懂的语言解释疾病。'离癌变特别特别远'的安抚性表述虽然有助于缓解焦虑，但不够严谨——萎缩性胃炎确实是癌前状态，应在安抚的同时强调定期随访的重要性。'4联用药''C3'等术语使用基本恰当。\\n\\n5. **红旗征识别**：部分识别。对癌变风险进行了说明并建议随访。但遗漏了：①HbA1c 6.6%这一代谢异常完全未发现或未提及；②未追问有无体重变化、黑便等消化道肿瘤报警症状；③43岁男性有多发溃疡+萎缩，应更主动排除恶性可能和罕见病因。"
+  "consistency": true,
+  "confidence": 0.92,
+  "evidence": "NCCN和CSCO指南均推荐：1）对疑似肺癌患者进行胸部CT增强扫描评估；2）中央型病变首选支气管镜活检获取病理诊断；3）强调病理确诊是制定治疗方案的前提。医生的诊断思路符合指南推荐的诊断流程。"
 }"""
 
-FEWSHOT_USER_2 = """【患者标准信息】
-姓名: 任xx, 年龄: 29, 性别: female
-人格类型: 配合型
-主诉: 看检查结果
-病史: 既往体健
-症状: 大便不成形，一天两三次，排气多
-预期诊断: 慢性胃炎
+FEWSHOT_USER_2 = """【患者信息】
+姓名: 李xx, 年龄: 45, 性别: female
+主诉: 上腹痛1周，反酸、烧心
+病史: 既往体健，无特殊病史
 
 【问诊对话记录】
-医生: 你为啥做检查呀？
-患者: 我是之前一天可能大便两三次，排气也特别多，还不成形，有的时候喝一口水都想上厕所。
-医生: 那肠镜都没啥大事，胃有啥难受的
-患者: 有的时候肚子这块觉得有点硌，不舒服，按的时候会有点疼。
-医生: 你现在大便一天几次？
-患者: 现在可能得两次，吃完饭特别明显，有的时候吃完饭就想上厕所。
-医生: 那大便啥样呢？
-患者: 一般都不稀，也不是特别稀，反正就不成形，没像水那种。
-医生: 体重有啥变化没有？
+医生: 腹痛具体位置在哪？
+患者: 就在心口窝这，有时候反酸水。
+医生: 吃饭后加重还是空腹时重？
+患者: 吃完饭更明显。
+医生: 有恶心呕吐吗？
 患者: 没有。
-医生: 有的人就是跟肠道功能有关，有可能检查也查不出啥大问题。
-患者: 嗯，反正我从小就这样。
-医生: 但检查显示肠道也没有炎症。
-患者: 噢，那这个病理结果也没说有啥问题，
-医生: 这是终生性疾病，良性不会癌变
-患者: 哦
-医生: 息肉都已经给你除了，一年以后复查看看就行。
-患者: 一年之后还得做个胃肠镜？
-医生: 查肠镜就行了。
-医生: 平时有没有什么烧心、反酸、打嗝这些症状？
-患者: 没有。
-医生: 排气多不多？
-患者: 多，就是晚上的时候，感觉几分钟就想排气，不排就胀。
-医生: 你总坐着吗？
-患者: 总坐着。
-医生: 这可能跟肠道蠕动功能有关，你尽量多活动活动，让胃肠道蠕动起来，有助于排气
-医生: 消化不良，我开一周的药，吃完看看情况
 
-请对医生展现的医学知识和临床推理进行评估。"""
+【医生诊断】
+急性胃炎
+
+【治疗方案】
+1. 奥美拉唑 20mg bid
+2. 铝碳酸镁片 1g tid
+3. 多潘立酮 10mg tid（促进胃动力）
+
+【检索到的医学证据】
+1. CSCO胃癌诊疗指南2025：对于新发上腹痛的45岁以上患者，应警惕胃癌可能，建议胃镜检查排除恶性病变。单纯按胃炎治疗可能延误诊断。
+2. 中国胃食管反流病专家共识：反酸、烧心、餐后加重的上腹痛是GERD的典型表现，PPI治疗有效，但需排除器质性病变。
+3. 临床指南：45岁以上新发消化不良症状患者，建议胃镜检查以排除胃癌等器质性病变，尤其对于有报警症状（体重下降、贫血、吞咽困难等）的患者。"""
 
 FEWSHOT_ASSISTANT_2 = """{
-  "score": 78,
-  "analysis": "该问诊中医生展现了较好的临床推理能力和医学知识水平。\\n\\n1. **临床推理逻辑**：医生的推理层次清晰——先解读检查结果（肠镜和病理均无异常）→结合症状特点（餐后便意、大便不成形但非水样、从小就有）→判断为肠道功能性疾病（肠易激综合征）→给予对症治疗。告知患者'终生性疾病、良性不会癌变'的表述符合IBS的疾病特征认知。推理链条合理。\\n\\n2. **鉴别诊断思维**：较为全面。医生通过询问体重变化排除恶性疾病和吸收障碍；通过询问烧心、反酸排除GERD；通过确认肠镜正常排除器质性肠道疾病。还关注了生活方式因素（久坐）对肠道功能的影响。不足在于：未询问精神心理因素（焦虑/抑郁与IBS关系密切）、未评估食物不耐受情况。\\n\\n3. **指南符合度**：基本符合肠易激综合征的诊治流程。对于已完成肠镜排除器质性病变的年轻患者，结合罗马IV标准的腹痛/大便性状改变等症状，诊断方向正确。息肉切除后建议一年复查肠镜符合指南推荐。建议多运动改善肠道蠕动也是指南推荐的非药物治疗手段。\\n\\n4. **医学术语使用**：医生全程使用通俗语言，如'肠道功能''消化不良'等患者可理解的表述，沟通得当。解释疾病性质时'终生性疾病，良性不会癌变'表述准确易懂。\\n\\n5. **红旗征识别**：较好。通过询问体重变化、检查结果解读等排除了红旗征。但应更主动追问有无便血、夜间症状、发热等报警症状以进一步排除炎症性肠病。29岁女性还应考虑甲状腺功能对胃肠道的影响。"
+  "consistency": false,
+  "confidence": 0.85,
+  "evidence": "CSCO胃癌诊疗指南明确指出：45岁以上新发上腹痛患者应警惕胃癌可能，建议胃镜检查排除恶性病变。该患者45岁，出现新发上腹痛症状，医生直接诊断为急性胃炎并开始药物治疗，未建议胃镜检查排除器质性病变，存在漏诊风险，不符合指南推荐的诊疗流程。"
 }"""
 
 
-async def run_knowledge_check(conversation_text: str, patient_info: str) -> dict:
-    # RAG：检索相似病例的完整临床信息作为知识参照
-    similar_cases = await retrieve_similar_cases(patient_info, top_k=3)
-    reference_text = format_reference_for_knowledge(similar_cases)
+# ── Helper Functions ──
 
-    user_content_parts = []
-    if reference_text:
-        user_content_parts.append(f"【相似病例参照（来自门诊数据库）】\n{reference_text}\n")
-    user_content_parts.append(
-        f"【患者标准信息】\n{patient_info}\n\n"
-        f"【问诊对话记录】\n{conversation_text}\n\n"
-        "请对医生展现的医学知识和临床推理进行评估。"
-    )
+def _extract_json(text: str) -> dict:
+    """从 LLM 返回的文本中提取 JSON"""
+    if not text or not text.strip():
+        raise ValueError("LLM 返回内容为空")
+    
+    # 1. 尝试直接解析
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 2. 尝试移除 markdown 代码块后解析
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 3. 尝试正则提取第一个 JSON 对象
+    try:
+        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    
+    raise ValueError(f"无法解析 JSON: {text[:200]}...")
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": FEWSHOT_USER_1},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
-        {"role": "user", "content": FEWSHOT_USER_2},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
-        {"role": "user", "content": "\n".join(user_content_parts)},
+
+def _calculate_score(consistency: bool, confidence: float) -> int:
+    """
+    基于一致性和置信度计算评分
+    
+    评分规则：
+    - 一致时：Score = confidence * 100（置信度越高分越高）
+    - 不一致时：Score = (1 - confidence) * 100（置信度越高分越低）
+    """
+    confidence = max(0.0, min(1.0, confidence))
+    if consistency:
+        score = confidence * 100
+    else:
+        score = (1 - confidence) * 100
+    return int(round(max(0.0, min(100.0, score))))
+
+
+def _generate_analysis(
+    consistency: bool,
+    confidence: float,
+    evidence: str,
+    doctor_diagnosis: str,
+    treatment_plan: str
+) -> str:
+    """生成详细的分析文本（150-300字）"""
+    
+    # 一致性判断描述
+    if consistency:
+        consistency_desc = "诊断和治疗方案与医学证据基本一致"
+        quality_desc = "医学知识运用合理"
+    else:
+        consistency_desc = "诊断和治疗方案与医学证据存在不一致"
+        quality_desc = "存在改进空间"
+    
+    # 置信度描述
+    if confidence >= 0.8:
+        confidence_desc = "判断置信度高"
+    elif confidence >= 0.6:
+        confidence_desc = "判断置信度中等"
+    else:
+        confidence_desc = "判断置信度较低，建议进一步核实"
+    
+    # 构建分析文本
+    analysis_parts = [
+        f"医学知识核对结果：{consistency_desc}，{quality_desc}。",
+        f"评估置信度为{confidence*100:.0f}%，{confidence_desc}。",
+        f"核心医学证据：{evidence}",
     ]
-    result = await call_qwen_chat(messages, temperature=0.2)
-    return {"raw_response": result}
+    
+    # 添加诊断和治疗方案概述
+    if doctor_diagnosis:
+        analysis_parts.append(f"医生诊断：{doctor_diagnosis[:50]}{'...' if len(doctor_diagnosis) > 50 else ''}")
+    
+    analysis = " ".join(analysis_parts)
+    
+    # 确保长度在 150-300 字之间
+    if len(analysis) < 150:
+        # 补充说明
+        analysis += " 建议医生在后续诊疗中持续关注指南更新，确保诊疗方案符合最新的循证医学证据。"
+    
+    return analysis[:300] if len(analysis) > 300 else analysis
+
+
+# ── Main Function ──
+
+async def run_knowledge_check(
+    conversation_text: str,
+    patient_info: str,
+    doctor_diagnosis: str,
+    treatment_plan: str,
+) -> dict:
+    """
+    基于 RAG 检索增强与一致性评估的医学知识核对
+    
+    评估流程：
+    1. RAG 检索：从医学知识库检索相关临床指南证据
+    2. 一致性评估：LLM 评估诊断/治疗方案与医学证据的一致性
+    3. 代码计算：基于一致性和置信度计算最终评分
+    4. 生成分析：代码生成详细的分析文本
+    
+    Args:
+        conversation_text: 问诊对话记录
+        patient_info: 患者基本信息
+        doctor_diagnosis: 医生提交的诊断
+        treatment_plan: 医生提交的治疗方案
+    
+    Returns:
+        dict: {"raw_response": json.dumps({"score": int, "analysis": str, "details": {...}})}
+    """
+    
+    # ── Step 1: RAG 检索增强 ──
+    evidence_text = ""
+    rag_success = False
+    try:
+        # 基于诊断和治疗方案检索医学证据
+        query = f"{doctor_diagnosis} {treatment_plan}".strip()
+        if query:
+            evidences = await retrieve_medical_evidence(query, top_k=5)
+            evidence_text = format_evidence_for_verification(evidences)
+            rag_success = True
+    except Exception as e:
+        logging.error(f"RAG 检索失败: {e}")
+        evidence_text = "未检索到医学证据"
+    
+    # ── Step 2: LLM 一致性评估 ──
+    try:
+        # 构建用户输入内容
+        user_content_parts = [
+            f"【患者信息】\n{patient_info}\n",
+            f"【问诊对话记录】\n{conversation_text}\n",
+            f"【医生诊断】\n{doctor_diagnosis}\n",
+            f"【治疗方案】\n{treatment_plan}\n",
+        ]
+        
+        if evidence_text:
+            user_content_parts.append(f"【检索到的医学证据】\n{evidence_text}")
+        
+        user_content = "\n".join(user_content_parts)
+        
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": FEWSHOT_USER_1},
+            {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
+            {"role": "user", "content": FEWSHOT_USER_2},
+            {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
+            {"role": "user", "content": user_content},
+        ]
+        
+        result = await call_qwen_chat(messages, temperature=0.2)
+        
+        # 解析 LLM 输出
+        consistency_data = _extract_json(result)
+        
+        consistency = consistency_data.get("consistency", False)
+        confidence = float(consistency_data.get("confidence", 0.5))
+        evidence = consistency_data.get("evidence", "未提供证据摘要")
+        
+    except Exception as e:
+        logging.error(f"一致性评估 LLM 调用失败: {e}")
+        # 错误降级：返回默认中等分数
+        return {
+            "raw_response": json.dumps({
+                "score": 50,
+                "analysis": "医学知识核对过程中遇到技术问题，无法完成评估。默认给予中等分数，建议人工复核。",
+                "details": {
+                    "consistency": None,
+                    "confidence": 0.5,
+                    "error": str(e),
+                    "rag_success": rag_success,
+                }
+            }, ensure_ascii=False)
+        }
+    
+    # ── Step 3: 代码计算评分 ──
+    final_score = _calculate_score(consistency, confidence)
+    
+    # ── Step 4: 生成分析文本 ──
+    analysis = _generate_analysis(
+        consistency=consistency,
+        confidence=confidence,
+        evidence=evidence,
+        doctor_diagnosis=doctor_diagnosis,
+        treatment_plan=treatment_plan,
+    )
+    
+    # 构建返回结果
+    result = {
+        "score": final_score,
+        "analysis": analysis,
+        "details": {
+            "consistency": consistency,
+            "confidence": round(confidence, 2),
+            "evidence_summary": evidence,
+            "rag_success": rag_success,
+        }
+    }
+    
+    return {"raw_response": json.dumps(result, ensure_ascii=False)}

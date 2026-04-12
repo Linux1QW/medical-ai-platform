@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Card, Typography, Progress, Row, Col, Descriptions, Button, Spin, message, Tag } from 'antd';
-import { FileTextOutlined, RobotOutlined } from '@ant-design/icons';
+import { Card, Typography, Progress, Row, Col, Collapse, Button, Spin, message, Tag, Badge } from 'antd';
+import { FileTextOutlined, RobotOutlined, MedicineBoxOutlined, ReadOutlined, HeartOutlined, CheckCircleOutlined, ExperimentOutlined, BulbOutlined, TrophyOutlined, WarningOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { getEvaluation, createEvaluation } from '../../api/evaluation';
@@ -188,6 +188,44 @@ const EvaluationPage: React.FC = () => {
     { subject: '治疗方案', score: evaluation.treatment_score, fullMark: 100 },
   ];
 
+  const dimensionItems = [
+    { key: 'inquiry', label: '病史采集', score: evaluation.inquiry_score, analysis: evaluation.inquiry_analysis, icon: <ReadOutlined /> },
+    { key: 'diagnosis', label: '诊断结果', score: evaluation.diagnosis_score, analysis: evaluation.diagnosis_analysis, icon: <CheckCircleOutlined /> },
+    { key: 'treatment', label: '治疗方案', score: evaluation.treatment_score, analysis: evaluation.treatment_analysis, icon: <MedicineBoxOutlined /> },
+    { key: 'knowledge', label: '医学知识', score: evaluation.knowledge_score, analysis: evaluation.knowledge_analysis, icon: <ExperimentOutlined /> },
+    { key: 'humanistic', label: '人文关怀', score: evaluation.humanistic_score, analysis: evaluation.humanistic_analysis, icon: <HeartOutlined /> },
+  ];
+
+  const scoreLevel = (score: number) => {
+    if (score >= 80) return { text: '优秀', color: '#52c41a' };
+    if (score >= 60) return { text: '良好', color: '#faad14' };
+    return { text: '待提升', color: '#ff4d4f' };
+  };
+
+  const parseSuggestions = (text: string) => {
+    if (!text) return [];
+    const sections = text.split(/(?=[一二三四五六七八九十]、)/);
+    return sections.filter(s => s.trim()).map((section) => {
+      const titleMatch = section.match(/^([一二三四五六七八九十])、(.+?)(?:\n|$)/);
+      const number = titleMatch ? titleMatch[1] : '';
+      const title = titleMatch ? titleMatch[2].trim() : '';
+      const problemMatch = section.match(/问题描述[：:]\s*([\s\S]*?)(?=\n*改进方法[：:]|$)/);
+      const problem = problemMatch ? problemMatch[1].trim() : '';
+      const methodMatch = section.match(/改进方法[：:]\s*([\s\S]*?)$/);
+      const method = methodMatch ? methodMatch[1].trim() : '';
+      // 如果没有匹配到"问题描述/改进方法"结构，将标题后的全部内容作为 content
+      let content = '';
+      if (!problem && !method && titleMatch) {
+        content = section.replace(/^[一二三四五六七八九十]、.+?\n+/, '').trim();
+      }
+      return { number, title, problem, method, content };
+    });
+  };
+
+  const suggestionItems = parseSuggestions(evaluation.improvement_suggestions || '');
+  const hasParsedSuggestions = suggestionItems.length > 0 && suggestionItems.some(s => s.title);
+  const suggestionColors = ['#1677ff', '#52c41a', '#faad14', '#722ed1', '#eb2f96'];
+
   return (
     <div>
       <Title level={4}>评估报告 <Tag color="success">问诊 #{evaluation.consultation_id}</Tag></Title>
@@ -229,33 +267,116 @@ const EvaluationPage: React.FC = () => {
         </Col>
       </Row>
 
-      {/* 详细分析 */}
+      {/* 五维度分数概览卡片 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        {dimensionItems.map(item => {
+          const level = scoreLevel(item.score);
+          return (
+            <Col xs={12} sm={8} lg={Math.floor(24 / 5)} key={item.key} style={{ minWidth: 140 }}>
+              <Card size="small" style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 20, color: '#555', marginBottom: 4 }}>{item.icon}</div>
+                <div style={{ fontSize: 13, color: '#888' }}>{item.label}</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: level.color }}>{item.score}</div>
+                <Tag color={level.color} style={{ borderRadius: 10 }}>{level.text}</Tag>
+              </Card>
+            </Col>
+          );
+        })}
+      </Row>
+
+      {/* 详细分析 - 可折叠面板 */}
       <Card title="五维度详细分析" style={{ marginBottom: 16 }}>
-        <Descriptions column={1} bordered size="small">
-          <Descriptions.Item label="病史采集分析">
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.inquiry_analysis}</Paragraph>
-          </Descriptions.Item>
-          <Descriptions.Item label="医学知识核对">
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.knowledge_analysis}</Paragraph>
-          </Descriptions.Item>
-          <Descriptions.Item label="沟通交流评估">
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.humanistic_analysis}</Paragraph>
-          </Descriptions.Item>
-          <Descriptions.Item label="诊断结果评估">
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.diagnosis_analysis}</Paragraph>
-          </Descriptions.Item>
-          <Descriptions.Item label="治疗方案评估">
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.treatment_analysis}</Paragraph>
-          </Descriptions.Item>
-        </Descriptions>
+        <Collapse
+          accordion
+          items={dimensionItems.map(item => {
+            const level = scoreLevel(item.score);
+            return {
+              key: item.key,
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {item.icon}
+                  <span style={{ fontWeight: 500 }}>{item.label}</span>
+                  <Badge
+                    count={item.score}
+                    showZero
+                    style={{ backgroundColor: level.color, fontWeight: 600, fontSize: 13 }}
+                    overflowCount={100}
+                  />
+                </span>
+              ),
+              children: (
+                <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, lineHeight: 1.8, color: '#333' }}>
+                  {item.analysis}
+                </Paragraph>
+              ),
+            };
+          })}
+        />
       </Card>
 
-      <Card title="综合评价" style={{ marginBottom: 16 }}>
-        <Paragraph style={{ whiteSpace: 'pre-wrap' }}>{evaluation.overall_summary}</Paragraph>
+      {/* 综合评价 */}
+      <Card
+        title={<span><TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />综合评价</span>}
+        style={{ marginBottom: 16 }}
+      >
+        <Paragraph style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{evaluation.overall_summary}</Paragraph>
       </Card>
 
-      <Card title="改进建议">
-        <Paragraph style={{ whiteSpace: 'pre-wrap' }}>{evaluation.improvement_suggestions}</Paragraph>
+      {/* 改进建议 - 结构化展示 */}
+      <Card
+        title={<span><BulbOutlined style={{ color: '#1677ff', marginRight: 8 }} />改进建议</span>}
+        style={{ marginBottom: 16 }}
+      >
+        {hasParsedSuggestions ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {suggestionItems.map((item, idx) => (
+              <div
+                key={idx}
+                style={{
+                  borderLeft: `4px solid ${suggestionColors[idx % suggestionColors.length]}`,
+                  borderRadius: 6,
+                  background: '#fafafa',
+                  padding: '16px 20px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, borderRadius: '50%',
+                    background: suggestionColors[idx % suggestionColors.length],
+                    color: '#fff', fontWeight: 700, fontSize: 14,
+                  }}>
+                    {item.number}
+                  </span>
+                  <Text strong style={{ fontSize: 15 }}>{item.title}</Text>
+                </div>
+                {item.problem && (
+                  <div style={{ marginBottom: 10, padding: '10px 14px', background: '#fff7e6', borderRadius: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                      <WarningOutlined style={{ color: '#faad14' }} />问题描述
+                    </Text>
+                    <Text style={{ lineHeight: 1.8 }}>{item.problem}</Text>
+                  </div>
+                )}
+                {item.method && (
+                  <div style={{ padding: '10px 14px', background: '#e6f7ff', borderRadius: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                      <ToolOutlined style={{ color: '#1677ff' }} />改进方法
+                    </Text>
+                    <Text style={{ lineHeight: 1.8 }}>{item.method}</Text>
+                  </div>
+                )}
+                {item.content && !item.problem && !item.method && (
+                  <div style={{ padding: '10px 14px', background: '#f6ffed', borderRadius: 4 }}>
+                    <Text style={{ lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{item.content}</Text>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Paragraph style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{evaluation.improvement_suggestions}</Paragraph>
+        )}
       </Card>
     </div>
   );

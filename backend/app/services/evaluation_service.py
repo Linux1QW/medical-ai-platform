@@ -126,7 +126,7 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
             treatment_result,
         ) = await asyncio.gather(
             run_with_progress(run_inquiry_analysis(conversation_text, patient_info), 0),
-            run_with_progress(run_knowledge_check(conversation_text, patient_info), 1),
+            run_with_progress(run_knowledge_check(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 1),
             run_with_progress(run_humanistic_evaluation(conversation_text, patient_info), 2),
             run_with_progress(run_diagnosis_evaluation(conversation_text, patient_info, doctor_diagnosis), 3),
             run_with_progress(run_treatment_evaluation(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 4),
@@ -141,17 +141,24 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
         # 第二阶段：综合评分智能体
         await manager.send_progress(consultation_id, 70, "综合评分计算中...")
         scoring_result = await run_scoring(
-            inquiry_result["raw_response"],
-            knowledge_result["raw_response"],
-            humanistic_result["raw_response"],
-            diagnosis_result["raw_response"],
-            treatment_result["raw_response"],
+            inquiry_score=inquiry_data.get("score", 0),
+            inquiry_analysis=inquiry_data.get("analysis", ""),
+            knowledge_score=knowledge_data.get("score", 0),
+            knowledge_analysis=knowledge_data.get("analysis", ""),
+            humanistic_score=humanistic_data.get("score", 0),
+            humanistic_analysis=humanistic_data.get("analysis", ""),
         )
         scoring_data = _extract_json(scoring_result["raw_response"])
 
         # 第三阶段：建议指导智能体
         await manager.send_progress(consultation_id, 85, "生成改进建议中...")
-        suggestion_result = await run_suggestion(scoring_result["raw_response"])
+        suggestion_result = await run_suggestion(
+            conversation_text=conversation_text,
+            patient_info=patient_info,
+            inquiry_result=inquiry_result["raw_response"],
+            knowledge_result=knowledge_result["raw_response"],
+            humanistic_result=humanistic_result["raw_response"],
+        )
         suggestion_data = _extract_json(suggestion_result["raw_response"])
         
         await manager.send_progress(consultation_id, 95, "正在保存评估结果...")
@@ -216,11 +223,11 @@ async def get_evaluation_by_consultation(
 def _score_range_label(score: float) -> str:
     if score >= 90:
         return "优秀(90-100)"
-    if score >= 70:
-        return "良好(70-89)"
-    if score >= 50:
-        return "一般(50-69)"
-    return "不足(<50)"
+    if score >= 80:
+        return "良好(80-89)"
+    if score >= 60:
+        return "一般(60-79)"
+    return "不及格(<60)"
 
 
 async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
@@ -261,7 +268,7 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
     if doctor_id is not None:
         # 个人统计：直接用该用户的平均分归类
         user_avg = avgs[5]  # avg_total_score
-        distribution = {"优秀(90-100)": 0, "良好(70-89)": 0, "一般(50-69)": 0, "不足(<50)": 0}
+        distribution = {"优秀(90-100)": 0, "良好(80-89)": 0, "一般(60-79)": 0, "不及格(<60)": 0}
         if user_avg is not None:
             label = _score_range_label(user_avg)
             distribution[label] = 1
@@ -278,7 +285,7 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
         user_avgs_result = await db.execute(q_user_avgs)
         user_avgs_rows = user_avgs_result.all()
         
-        distribution = {"优秀(90-100)": 0, "良好(70-89)": 0, "一般(50-69)": 0, "不足(<50)": 0}
+        distribution = {"优秀(90-100)": 0, "良好(80-89)": 0, "一般(60-79)": 0, "不及格(<60)": 0}
         for row in user_avgs_rows:
             if row.avg_score is not None:
                 label = _score_range_label(row.avg_score)

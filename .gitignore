@@ -33,3 +33,6 @@ backend/data/rag_index/
 .DS_Store
 Thumbs.db
 nul
+
+# 医学指南PDF文件（体积过大不适合Git管理）
+data/*.pdf

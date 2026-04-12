@@ -1,0 +1,162 @@
+# -*- coding: utf-8 -*-
+"""ChromaDB 医学知识存储 — 基于向量检索的医学指南管理"""
+
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import chromadb
+from chromadb.config import Settings
+
+from app.services.rag.embeddings import get_embedding, EMBEDDING_DIM
+
+logger = logging.getLogger(__name__)
+
+# 持久化目录: backend/data/medical_kb/
+PERSIST_DIR = (
+    Path(__file__).resolve().parent.parent.parent.parent / "data" / "medical_kb"
+)
+
+COLLECTION_NAME = "medical_guidelines"
+
+
+class MedicalKnowledgeStore:
+    """基于 ChromaDB 的医学指南向量存储"""
+
+    def __init__(self):
+        self.client: Optional[chromadb.PersistentClient] = None
+        self.collection: Optional[chromadb.Collection] = None
+
+    def _init_client(self):
+        """初始化 ChromaDB 客户端（持久化模式）"""
+        PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(
+            path=str(PERSIST_DIR),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        self.collection = self.client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
+        )
+        logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR}")
+
+    def add_documents(
+        self,
+        ids: List[str],
+        documents: List[str],
+        embeddings: List[List[float]],
+        metadatas: List[Dict],
+    ):
+        """添加文档块到集合
+
+        Args:
+            ids: 文档唯一标识列表
+            documents: 文档文本列表
+            embeddings: 文档向量列表
+            metadatas: 文档元数据列表（包含 source, page 等）
+        """
+        if self.collection is None:
+            self._init_client()
+
+        # ChromaDB 单次添加上限约 5000 条，分批处理
+        batch_size = 1000
+        total = len(ids)
+
+        for i in range(0, total, batch_size):
+            batch_ids = ids[i : i + batch_size]
+            batch_docs = documents[i : i + batch_size]
+            batch_embs = embeddings[i : i + batch_size]
+            batch_metas = metadatas[i : i + batch_size]
+
+            self.collection.add(
+                ids=batch_ids,
+                documents=batch_docs,
+                embeddings=batch_embs,
+                metadatas=batch_metas,
+            )
+            logger.debug(
+                f"已添加批次 {i // batch_size + 1}/{(total - 1) // batch_size + 1}: "
+                f"{len(batch_ids)} 条文档"
+            )
+
+        logger.info(f"共添加 {total} 条文档到医学知识库")
+
+    async def search(self, query_text: str, top_k: int = 5) -> List[Dict]:
+        """检索相关医学证据
+
+        Args:
+            query_text: 查询文本（如诊断结果）
+            top_k: 返回条数
+
+        Returns:
+            医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
+        """
+        if self.collection is None:
+            self._init_client()
+
+        if self.collection.count() == 0:
+            logger.debug("医学知识库为空，无检索结果")
+            return []
+
+        # 1. 异步获取查询向量
+        query_embedding = await get_embedding(query_text)
+
+        # 2. 同步执行 ChromaDB 查询
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        # 3. 格式化结果
+        evidences = []
+        if results["ids"] and len(results["ids"]) > 0:
+            for i, doc_id in enumerate(results["ids"][0]):
+                doc_text = (
+                    results["documents"][0][i]
+                    if results["documents"]
+                    else ""
+                )
+                metadata = (
+                    results["metadatas"][0][i]
+                    if results["metadatas"]
+                    else {}
+                )
+                distance = (
+                    results["distances"][0][i]
+                    if results["distances"]
+                    else 0.0
+                )
+                # 余弦距离转相似度分数 (1 - distance)
+                score = 1.0 - float(distance)
+
+                evidences.append(
+                    {
+                        "text": doc_text,
+                        "source": metadata.get("source", "未知"),
+                        "page": metadata.get("page", 0),
+                        "score": round(score, 4),
+                    }
+                )
+
+        logger.debug(f"医学知识库检索返回 {len(evidences)} 条证据")
+        return evidences
+
+    def count(self) -> int:
+        """返回知识库中文档总数"""
+        if self.collection is None:
+            return 0
+        return self.collection.count()
+
+
+# 全局单例
+_medical_store: Optional[MedicalKnowledgeStore] = None
+
+
+def get_medical_store() -> MedicalKnowledgeStore:
+    """获取全局医学知识库单例（懒加载）"""
+    global _medical_store
+    if _medical_store is None:
+        _medical_store = MedicalKnowledgeStore()
+        _medical_store._init_client()
+    return _medical_store

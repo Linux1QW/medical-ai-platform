@@ -11,7 +11,7 @@
 | 前端 | React + TypeScript + Vite + Ant Design | React 19 / Vite 7 / Antd 6 |
 | 后端 | FastAPI + Python | Python 3.10 / FastAPI 0.115 |
 | 数据库 | MySQL | 8.0 |
-| AI 引擎 | 阿里云百炼平台 Qwen API | qwen-max |
+| AI 引擎 | 阿里云百炼平台 Qwen API | qwen3-max |
 
 ---
 

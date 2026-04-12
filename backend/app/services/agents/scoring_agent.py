@@ -1,126 +1,216 @@
 # -*- coding: utf-8 -*-
-"""综合评分生成智能体 — 汇总五个维度评分并生成综合评估"""
+"""综合评分智能体 — 代码计算三维加权评分，LLM生成综合评估摘要"""
 
+import json
+import re
+import logging
 from app.services.qwen_client import call_qwen_chat
 
-SYSTEM_PROMPT = """你是一名临床问诊综合评估专家。你需要根据以下五个维度的评估结果，生成综合评分报告。
-
-五个评估维度：
-1. 病史采集评估（权重25%）
-2. 医学知识评估（权重20%）
-3. 沟通交流评估（权重15%）
-4. 诊断结果评估（权重20%）
-5. 治疗方案评估（权重20%）
-
-请综合考虑各项评分和分析意见，按上述权重计算加权综合分数，并撰写一份全面的综合评估报告。
-报告应包含：整体表现概述、主要优点、主要不足、各维度表现排名。
-
-请严格以JSON格式输出，包含以下字段：
-- total_score: 综合评分（0-100，按权重计算）
-- summary: 综合评估摘要（300-600字）
-"""
-
-# ── Few-shot 示例（基于真实门诊数据构建） ──────────────────────────
-
-FEWSHOT_USER_1 = """【维度1 - 病史采集评估结果】
-{
-  "score": 35,
-  "analysis": "该问诊过程在病史采集方面存在较多不足，整体缺乏系统性。医生未按照规范流程进行，仅5轮对话即结束问诊。缺少对现病史的系统询问，未涉及既往史的详细追问，完全缺少个人史、家族史和系统回顾环节。患者因复查胃肠镜就诊，已知有萎缩性胃炎和肠炎病史，但医生未询问当前消化道症状（如腹痛、腹胀、反酸等），未了解上次检查时间和结果，未追问目前有无新增不适。鉴别诊断思维缺乏，关键信息遗漏较多。"
+# ── 权重配置 ──────────────────────────────────────────────────────
+SCORING_WEIGHTS = {
+    "inquiry": 0.4,
+    "knowledge": 0.3,
+    "humanistic": 0.3,
 }
 
-【维度2 - 医学知识评估结果】
-{
-  "score": 40,
-  "analysis": "医学知识应用表现不足。医生对萎缩性胃炎的诊疗规范了解有限。未评估萎缩范围和程度（C-1至C-3分级），未关注肠上皮化生和不典型增生等癌前病变指标。对胃肠镜复查指征掌握不够——萎缩性胃炎患者应根据病理结果决定复查间隔（轻度萎缩1-2年，中重度萎缩伴肠化6-12个月），医生未做任何风险分层。未评估幽门螺杆菌感染状态。对合并甲状腺疾病的处理也缺乏跨学科意识。"
-}
+# ── LLM Prompts ────────────────────────────────────────────────────
 
-【维度3 - 沟通交流评估结果】
-{
-  "score": 42,
-  "analysis": "沟通技巧和人文关怀存在较多不足。医生态度较为直接生硬，对患者的情绪关注不够，全程未表达任何共情性语言。对检查安排的解释不充分，未告知患者无痛与普通胃肠镜的区别和风险。未回应患者对甲状腺问题的关切。整体沟通过于简短，信息传递不充分。"
-}
+SYSTEM_PROMPT = """你是一名临床问诊综合评估专家。你需要根据三个维度的评分和分析结果，生成一份综合评估摘要。
 
-【维度4 - 诊断结果评估结果】
-{
-  "score": 50,
-  "analysis": "诊断思维表现一般。医生依据既往检查结果做出了萎缩性胃炎和肠炎的初步判断，方向基本正确。但未进行详细的鉴别诊断分析——未考虑功能性消化不良、胃食管反流病等可能。未结合当前症状（如有的话）进行诊断推理。诊断深度不够，未对萎缩程度进行分级评估，也未评估癌变风险。诊断依据主要来自患者自述和既往检查，缺少当前病情的独立判断。"
-}
+三个评估维度：
+1. 问诊分析（权重40%）- 评估医生病史采集的系统性、完整性和逻辑性
+2. 医学知识（权重30%）- 评估医生医学知识应用、诊断思维和治疗方案
+3. 人文关怀（权重30%）- 评估医生沟通技巧、共情能力和人文关怀
 
-【维度5 - 治疗方案评估结果】
-{
-  "score": 45,
-  "analysis": "治疗方案存在较多不足。医生仅安排了胃肠镜复查，未制定系统的治疗计划。未考虑药物治疗（如胃黏膜保护剂、促动力药）。未评估是否需要根除幽门螺杆菌。未给出饮食和生活方式指导。对甲状腺问题未做转诊安排说明。随访计划不具体，未告知何时复查以及复查指标。整体治疗方案缺乏针对性和完整性。"
-}
+请根据各维度评分和分析，撰写一份150-300字的综合评估摘要。摘要应包含：
+- 整体表现概述：对医生本次问诊的整体评价
+- 主要优点：医生表现突出的方面
+- 主要不足：需要改进的方面
+- 各维度表现排名：按得分从高到低排序
 
-请按权重生成综合评分报告。"""
+注意：
+- 输出纯文本，不要使用任何Markdown格式符号（如*、#、-列表等）
+- 直接输出JSON格式，包含 summary 字段
+- 摘要应客观、专业、有建设性"""
 
-FEWSHOT_ASSISTANT_1 = """{
-  "total_score": 42,
-  "summary": "该医生在本次问诊中的综合表现不足，加权总分42分。各维度按权重计算：病史采集35分×25%=8.75，医学知识40分×20%=8.0，沟通交流42分×15%=6.3，诊断结果50分×20%=10.0，治疗方案45分×20%=9.0。\\n\\n**整体表现概述**：本次问诊过于简短（仅5轮对话），医生过早进入检查安排阶段，未充分采集病史和评估病情，导致各维度得分均偏低。问诊流程缺乏系统性，医学知识应用不够深入，沟通关怀明显不足。\\n\\n**主要优点**：①能够确认患者就诊目的（复查胃肠镜）；②有基本的安全意识，询问了心电图和心脑血管疾病史；③对检查方式给予了患者选择权。\\n\\n**主要不足**：①病史采集严重不足，未系统询问现病史、既往史、个人史、家族史；②医学知识应用欠佳，未对萎缩性胃炎进行风险分层和规范管理；③沟通态度生硬，缺乏共情和人文关怀；④诊断深度不够，依赖既往结果而缺少独立判断；⑤治疗方案单一，缺少药物治疗和生活方式指导。\\n\\n**各维度表现排名**（从高到低）：诊断结果（50分）> 治疗方案（45分）> 沟通交流（42分）> 医学知识（40分）> 病史采集（35分）。病史采集是最薄弱环节，建议重点加强系统性问诊训练。"
-}"""
+# ── Few-shot 示例 ─────────────────────────────────────────────────
 
-FEWSHOT_USER_2 = """【维度1 - 病史采集评估结果】
-{
-  "score": 72,
-  "analysis": "问诊过程在病史采集方面表现中等偏上。医生大致遵循了从症状了解到检查解读的流程，详细询问了大便次数、性状、排气情况、腹痛部位和性质、体重变化，并追问了进食后症状加重的特点和生活方式。但未严格按照标准问诊顺序，既往史、个人史和家族史缺失。缺少对症状起始时间、诱因、加重/缓解因素的系统追问。"
-}
+FEWSHOT_USER = """【维度1 - 问诊分析】
+评分：72分
+分析：问诊过程在病史采集方面表现中等偏上。医生大致遵循了从症状了解到检查解读的流程，详细询问了大便次数、性状、排气情况、腹痛部位和性质、体重变化，并追问了进食后症状加重的特点和生活方式。但未严格按照标准问诊顺序，既往史、个人史和家族史缺失。缺少对症状起始时间、诱因、加重/缓解因素的系统追问。
 
-【维度2 - 医学知识评估结果】
-{
-  "score": 78,
-  "analysis": "医学知识应用表现良好。医生正确识别了肠道功能紊乱的可能性，结合肠镜结果排除了器质性病变。对息肉切除后的随访安排合理（一年后复查肠镜）。对慢性胃炎的评估基本准确。但未详细评估肠易激综合征的Rome IV诊断标准，未考虑食物不耐受的可能，对胃炎的分型和Hp感染状态未做评估。药物选择的依据未充分阐述。"
-}
+【维度2 - 医学知识】
+评分：78分
+分析：医学知识应用表现良好。医生正确识别了肠道功能紊乱的可能性，结合肠镜结果排除了器质性病变。对息肉切除后的随访安排合理（一年后复查肠镜）。对慢性胃炎的评估基本准确。但未详细评估肠易激综合征的Rome IV诊断标准，未考虑食物不耐受的可能，对胃炎的分型和Hp感染状态未做评估。
 
-【维度3 - 沟通交流评估结果】
-{
-  "score": 73,
-  "analysis": "沟通整体表现尚可。医生态度平和亲切，未出现不耐烦或打断患者的情况。对患者的提问均给予了回应。使用了通俗语言，避免了专业术语。但共情能力中等，对患者困惑（'为啥气那么多'）回应过于简单，用药告知不充分，未说明药物名称、服用方法和注意事项。"
-}
+【维度3 - 人文关怀】
+评分：73分
+分析：沟通整体表现尚可。医生态度平和亲切，未出现不耐烦或打断患者的情况。对患者的提问均给予了回应。使用了通俗语言，避免了专业术语。但共情能力中等，对患者困惑回应过于简单，用药告知不充分，未说明药物名称、服用方法和注意事项。
 
-【维度4 - 诊断结果评估结果】
-{
-  "score": 80,
-  "analysis": "诊断思维表现良好。医生结合症状和检查结果做出了慢性胃炎的诊断，方向正确。能够综合分析肠镜、胃镜结果，排除器质性病变后考虑功能性疾病。诊断推理逻辑较清晰。但鉴别诊断不够全面——未明确排除肠易激综合征、乳糖不耐受等可能。诊断分层不够细致，未区分慢性非萎缩性胃炎和萎缩性胃炎。"
-}
+请生成综合评估摘要。"""
 
-【维度5 - 治疗方案评估结果】
-{
-  "score": 75,
-  "analysis": "治疗方案基本合理。医生开具了一周试验性用药并安排了疗效观察，治疗策略正确。给予了生活方式指导（多活动促进肠道蠕动）。安排了息肉切除后复查计划。但药物具体信息未告知患者，未制定饮食指导方案，未考虑益生菌等辅助治疗。对胃炎的治疗未做具体安排。随访计划仅限于息肉复查，缺少功能性症状的短期随访。"
-}
+FEWSHOT_ASSISTANT = """{"summary": "该医生在本次问诊中的综合表现良好，加权总分74分。各维度按权重计算：问诊分析72分x40%=28.8，医学知识78分x30%=23.4，人文关怀73分x30%=21.9。整体表现概述：本次问诊历时较长，医生较为系统地了解了患者症状特征和检查结果，做出了合理的临床判断，各维度表现均衡，医学知识是亮点。主要优点：症状采集较详细，涵盖大便频次、性状、排气、体重变化等关键指标；诊断推理清晰，能结合检查结果综合分析；医学知识扎实；态度友善，语言通俗。主要不足：病史采集缺少既往史、个人史、家族史；鉴别诊断不够全面；用药告知不充分；缺少饮食指导和短期随访计划。各维度表现排名（从高到低）：医学知识（78分）、人文关怀（73分）、问诊分析（72分）。建议重点加强问诊系统性训练和用药告知规范。"}"""
 
-请按权重生成综合评分报告。"""
 
-FEWSHOT_ASSISTANT_2 = """{
-  "total_score": 76,
-  "summary": "该医生在本次问诊中的综合表现良好，加权总分76分。各维度按权重计算：病史采集72分×25%=18.0，医学知识78分×20%=15.6，沟通交流73分×15%=10.95，诊断结果80分×20%=16.0，治疗方案75分×20%=15.0。\\n\\n**整体表现概述**：本次问诊历时21轮对话，医生较为系统地了解了患者的症状特征和检查结果，在此基础上做出了合理的临床判断和治疗安排。整体表现处于良好水平，各维度较为均衡，其中诊断推理和医学知识应用是亮点，病史采集的完整性和沟通深度有提升空间。\\n\\n**主要优点**：①症状采集较为详细，涵盖了大便频次、性状、排气、体重变化等关键指标；②诊断推理较清晰，能结合检查结果和症状综合分析；③医学知识扎实，对息肉随访、功能性肠病有正确认知；④态度友善，使用通俗语言与患者沟通。\\n\\n**主要不足**：①病史采集缺少既往史、个人史、家族史等重要环节；②鉴别诊断不够全面，未明确排除IBS和食物不耐受；③用药告知不充分，未说明药物名称和注意事项；④缺少饮食指导和短期随访计划。\\n\\n**各维度表现排名**（从高到低）：诊断结果（80分）> 医学知识（78分）> 治疗方案（75分）> 沟通交流（73分）> 病史采集（72分）。建议重点加强问诊系统性训练和患者沟通技巧。"
-}"""
+# ── Helper Functions ──────────────────────────────────────────────
 
+def _extract_json(text: str) -> dict:
+    """从 LLM 返回的文本中提取 JSON"""
+    if not text or not text.strip():
+        raise ValueError("LLM 返回内容为空")
+    
+    # 1. 尝试直接解析
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 2. 尝试移除 markdown 代码块后解析
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
+    # 3. 尝试正则提取第一个 JSON 对象
+    try:
+        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    
+    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+
+
+def _calculate_total_score(inquiry_score: int, knowledge_score: int, humanistic_score: int) -> int:
+    """计算加权综合评分"""
+    total = (
+        SCORING_WEIGHTS["inquiry"] * inquiry_score +
+        SCORING_WEIGHTS["knowledge"] * knowledge_score +
+        SCORING_WEIGHTS["humanistic"] * humanistic_score
+    )
+    return round(total)
+
+
+def _generate_fallback_summary(
+    inquiry_score: int,
+    inquiry_analysis: str,
+    knowledge_score: int,
+    knowledge_analysis: str,
+    humanistic_score: int,
+    humanistic_analysis: str,
+    total_score: int,
+) -> str:
+    """当 LLM 调用失败时，生成简单的降级摘要"""
+    # 排序维度
+    dimensions = [
+        ("问诊分析", inquiry_score),
+        ("医学知识", knowledge_score),
+        ("人文关怀", humanistic_score),
+    ]
+    dimensions.sort(key=lambda x: x[1], reverse=True)
+    
+    # 判断表现等级
+    if total_score >= 90:
+        level = "优秀"
+    elif total_score >= 80:
+        level = "良好"
+    elif total_score >= 60:
+        level = "一般"
+    else:
+        level = "不及格"
+    
+    # 生成简单摘要
+    summary = (
+        f"该医生在本次问诊中的综合表现为{level}，加权总分{total_score}分。"
+        f"各维度按权重计算：问诊分析{inquiry_score}分x40%={inquiry_score * 0.4:.1f}，"
+        f"医学知识{knowledge_score}分x30%={knowledge_score * 0.3:.1f}，"
+        f"人文关怀{humanistic_score}分x30%={humanistic_score * 0.3:.1f}。"
+        f"整体表现概述：本次问诊各维度表现{'较为均衡' if max(inquiry_score, knowledge_score, humanistic_score) - min(inquiry_score, knowledge_score, humanistic_score) < 15 else '存在差异'}，"
+        f"{dimensions[0][0]}是亮点。"
+        f"各维度表现排名（从高到低）：{dimensions[0][0]}（{dimensions[0][1]}分）、"
+        f"{dimensions[1][0]}（{dimensions[1][1]}分）、{dimensions[2][0]}（{dimensions[2][1]}分）。"
+    )
+    
+    return summary
+
+
+# ── Main Function ─────────────────────────────────────────────────
 
 async def run_scoring(
-    inquiry_result: str,
-    knowledge_result: str,
-    humanistic_result: str,
-    diagnosis_result: str,
-    treatment_result: str,
+    inquiry_score: int,
+    inquiry_analysis: str,
+    knowledge_score: int,
+    knowledge_analysis: str,
+    humanistic_score: int,
+    humanistic_analysis: str,
 ) -> dict:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": FEWSHOT_USER_1},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
-        {"role": "user", "content": FEWSHOT_USER_2},
-        {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
-        {
-            "role": "user",
-            "content": (
-                f"【维度1 - 病史采集评估结果】\n{inquiry_result}\n\n"
-                f"【维度2 - 医学知识评估结果】\n{knowledge_result}\n\n"
-                f"【维度3 - 沟通交流评估结果】\n{humanistic_result}\n\n"
-                f"【维度4 - 诊断结果评估结果】\n{diagnosis_result}\n\n"
-                f"【维度5 - 治疗方案评估结果】\n{treatment_result}\n\n"
-                "请按权重生成综合评分报告。"
-            ),
+    """
+    综合评分智能体 — 代码计算三维加权评分，LLM生成综合评估摘要
+    
+    评分维度：
+    1. Inquiry (40%): 问诊分析评分
+    2. Knowledge (30%): 医学知识评分
+    3. Humanistic (30%): 人文关怀评分
+    
+    Returns:
+        dict: {"raw_response": json_string}
+              json_string 包含 total_score 和 summary 字段
+    """
+    # ── Step 1: 代码计算加权综合评分 ──
+    total_score = _calculate_total_score(inquiry_score, knowledge_score, humanistic_score)
+    
+    # ── Step 2: 调用 LLM 生成综合评估摘要 ──
+    try:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": FEWSHOT_USER},
+            {"role": "assistant", "content": FEWSHOT_ASSISTANT},
+            {
+                "role": "user",
+                "content": (
+                    f"【维度1 - 问诊分析】\n"
+                    f"评分：{inquiry_score}分\n"
+                    f"分析：{inquiry_analysis}\n\n"
+                    f"【维度2 - 医学知识】\n"
+                    f"评分：{knowledge_score}分\n"
+                    f"分析：{knowledge_analysis}\n\n"
+                    f"【维度3 - 人文关怀】\n"
+                    f"评分：{humanistic_score}分\n"
+                    f"分析：{humanistic_analysis}\n\n"
+                    f"请生成综合评估摘要。"
+                ),
+            },
+        ]
+        
+        result = await call_qwen_chat(messages, temperature=0.3)
+        llm_data = _extract_json(result)
+        summary = llm_data.get("summary", "")
+        
+        if not summary:
+            raise ValueError("LLM 返回的 summary 为空")
+            
+    except Exception as e:
+        logging.error(f"LLM 摘要生成失败: {e}，使用降级摘要")
+        # 降级处理：使用代码生成简单摘要
+        summary = _generate_fallback_summary(
+            inquiry_score, inquiry_analysis,
+            knowledge_score, knowledge_analysis,
+            humanistic_score, humanistic_analysis,
+            total_score,
+        )
+    
+    # ── Step 3: 构建返回结果 ──
+    result = {
+        "total_score": total_score,
+        "summary": summary,
+        "weights": SCORING_WEIGHTS,
+        "dimension_scores": {
+            "inquiry": inquiry_score,
+            "knowledge": knowledge_score,
+            "humanistic": humanistic_score,
         },
-    ]
-    result = await call_qwen_chat(messages, temperature=0.2)
-    return {"raw_response": result}
+    }
+    
+    return {"raw_response": json.dumps(result, ensure_ascii=False)}

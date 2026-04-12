@@ -90,7 +90,33 @@ const ConsultationPage: React.FC = () => {
     try {
       const values = await form.validateFields();
       setSubmitting(true);
-      await submitDiagnosis(Number(id), values.diagnosis, values.treatment_plan);
+      // 将结构化表单字段拼接为文本
+      const diagnosisParts: string[] = [];
+      diagnosisParts.push(`主诊断：${values.main_diagnosis}`);
+      if (values.differential_diagnosis) {
+        diagnosisParts.push(`鉴别诊断：${values.differential_diagnosis}`);
+      }
+      if (values.diagnosis_basis) {
+        diagnosisParts.push(`诊断依据：${values.diagnosis_basis}`);
+      }
+      const diagnosis = diagnosisParts.join('\n');
+
+      const treatmentParts: string[] = [];
+      if (values.drug_treatment) {
+        treatmentParts.push(`药物治疗：${values.drug_treatment}`);
+      }
+      if (values.non_drug_treatment) {
+        treatmentParts.push(`非药物治疗：${values.non_drug_treatment}`);
+      }
+      if (values.followup_plan) {
+        treatmentParts.push(`随访计划：${values.followup_plan}`);
+      }
+      if (values.precautions) {
+        treatmentParts.push(`注意事项：${values.precautions}`);
+      }
+      const treatment_plan = treatmentParts.join('\n');
+
+      await submitDiagnosis(Number(id), diagnosis, treatment_plan);
       setStatus('completed');
       setDiagnosisVisible(false);
       message.success('诊断与治疗方案已提交，问诊结束');
@@ -217,14 +243,31 @@ const ConsultationPage: React.FC = () => {
         confirmLoading={submitting}
         okText="提交并结束问诊"
         cancelText="继续问诊"
-        width={640}
+        width={700}
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="diagnosis" label="诊断结果" rules={[{ required: true, message: '请输入诊断结果' }]}>
-            <TextArea rows={4} placeholder="请输入您的诊断结果，包括主诊断和鉴别诊断..." />
+        <Form form={form} layout="vertical" style={{ maxHeight: '60vh', overflow: 'auto', paddingRight: 8 }}>
+          <Divider orientation="left" style={{ marginTop: 0 }}>诊断结果</Divider>
+          <Form.Item name="main_diagnosis" label="主诊断" rules={[{ required: true, message: '请输入主诊断' }]}>
+            <Input placeholder="例如：慢性胃炎（非萎缩性）" />
           </Form.Item>
-          <Form.Item name="treatment_plan" label="治疗方案" rules={[{ required: true, message: '请输入治疗方案' }]}>
-            <TextArea rows={4} placeholder="请输入治疗方案，包括药物治疗、非药物治疗、随访计划等..." />
+          <Form.Item name="differential_diagnosis" label="鉴别诊断">
+            <TextArea rows={2} placeholder="例如：功能性消化不良、胃食管反流病待排" />
+          </Form.Item>
+          <Form.Item name="diagnosis_basis" label="诊断依据">
+            <TextArea rows={2} placeholder="例如：根据患者反酸烧心症状、胃镜结果提示..." />
+          </Form.Item>
+          <Divider orientation="left">治疗方案</Divider>
+          <Form.Item name="drug_treatment" label="药物治疗">
+            <TextArea rows={2} placeholder="例如：奥美拉唑 20mg bid，铝碳酸镁 1g tid" />
+          </Form.Item>
+          <Form.Item name="non_drug_treatment" label="非药物治疗">
+            <TextArea rows={2} placeholder="例如：清淡饮食、避免辛辣刺激、规律作息、适当运动" />
+          </Form.Item>
+          <Form.Item name="followup_plan" label="随访计划">
+            <Input placeholder="例如：2周后复诊，1年后复查胃镜" />
+          </Form.Item>
+          <Form.Item name="precautions" label="注意事项">
+            <TextArea rows={2} placeholder="例如：如出现黑便、呕血等症状应立即就诊" />
           </Form.Item>
         </Form>
       </Modal>

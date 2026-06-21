@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Dict
+import logging
 
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,12 @@ from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
 from app.models.user import User
 from app.services.qwen_client import call_qwen_chat
+
+logger = logging.getLogger(__name__)
+
+# 滑动窗口配置
+MEMORY_RECENT_TURNS = 10   # 完整保留最近10轮（20条消息）
+MEMORY_COMPRESS_THRESHOLD = 14  # 超过14轮（28条消息）时触发压缩
 
 # 虚拟患者角色扮演约束：规范、符合医学与病情、不随意扩充
 PATIENT_ROLE_WRAPPER = """你正在参与临床医学教学模拟，必须严格扮演患者。你的回答必须规范、符合医学常识，且与档案病情一致。
@@ -171,10 +178,60 @@ async def get_messages(db: AsyncSession, consultation_id: int) -> List[Consultat
     return list(result.scalars().all())
 
 
+async def _summarize_early_messages(
+    early_messages: List[ConsultationMessage],
+    patient_profile: str,
+) -> str:
+    """将早期对话压缩为结构化摘要，小化 LLM context 占用。
+
+    提取已民露症状、已否认症状、重要病史和患者情绪，返回简洁文本块。
+    """
+    if not early_messages:
+        return ""
+    
+    history_lines = []
+    for m in early_messages:
+        role_label = "医生" if m.role == "doctor" else "患者"
+        history_lines.append(f"《{role_label}》{m.content}")
+    history_text = "\n".join(history_lines)
+
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "你是一个医学记录助手。请将以下医患对话压缩为结构化摘要，"
+                "重点保留：已民露症状/体征、患者否认的症状、重要病史、患者情绪反应。\n"
+                "输出格式（严格按格式，无内容用《无》填写）：\n"
+                "【已民露症状】...\n"
+                "【否认症状】...\n"
+                "【重要病史】...\n"
+                "【患者情绪】..."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"患者基本情况：{patient_profile[:200]}\n\n"
+                f"早期问诊对话（共 {len(early_messages)} 条）：\n{history_text}"
+            ),
+        },
+    ]
+    try:
+        summary = await call_qwen_chat(prompt, temperature=0.1, max_tokens=300)
+        return summary
+    except Exception as e:
+        logger.warning(f"早期对话摘要生成失败，降级为截断模式: {e}")
+        return ""
+
+
 async def send_doctor_message(
     db: AsyncSession, consultation_id: int, content: str
 ) -> tuple[ConsultationMessage, ConsultationMessage]:
-    """医生发送消息并获取虚拟患者回复"""
+    """医生发送消息并获取虚拟患者回复
+
+    当对话轮数超过 MEMORY_COMPRESS_THRESHOLD 时，将早期对话压缩为结构化摘要，
+    仅保留最近 MEMORY_RECENT_TURNS 轮完整对话，有效控制 LLM context 占用。
+    """
     messages = await get_messages(db, consultation_id)
     next_seq = len(messages) + 1
 
@@ -194,8 +251,23 @@ async def send_doctor_message(
 
     wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
     chat_history = [{"role": "system", "content": wrapped_prompt}]
-    # 截断过长的历史，避免 context 过长
-    recent_messages = messages[-30:] if len(messages) > 30 else messages
+
+    recent_window = MEMORY_RECENT_TURNS * 2  # 每轮 2 条消息
+    compress_threshold = MEMORY_COMPRESS_THRESHOLD * 2
+
+    if len(messages) > compress_threshold:
+        # 将早期对话压缩为摘要，仅保留最近 recent_window 条完整对话
+        early_messages = messages[:-recent_window]
+        recent_messages = messages[-recent_window:]
+        summary = await _summarize_early_messages(early_messages, patient.system_prompt or "")
+        if summary:
+            chat_history.append({
+                "role": "system",
+                "content": f"《早期问诊记录摘要》（口述展示的症状和对话要点，请保持与此一致）\n{summary}",
+            })
+    else:
+        recent_messages = messages[-recent_window:] if len(messages) > recent_window else messages
+
     for msg in recent_messages:
         chat_history.append({
             "role": "user" if msg.role == "doctor" else "assistant",

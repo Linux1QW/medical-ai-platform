@@ -5,7 +5,7 @@ import json
 import re
 import logging
 from app.services.qwen_client import call_qwen_chat
-from app.services.rag.retriever import retrieve_medical_evidence, format_evidence_for_verification
+from app.services.rag.retriever import retrieve_medical_evidence, retrieve_with_mqe, hybrid_retrieve, format_evidence_for_verification
 
 # ── System Prompt ──
 SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是对比医生的诊断和治疗方案与检索到的临床指南证据，评估其一致性。
@@ -196,6 +196,7 @@ async def run_knowledge_check(
     patient_info: str,
     doctor_diagnosis: str,
     treatment_plan: str,
+    enable_hyde: bool = True,
 ) -> dict:
     """
     基于 RAG 检索增强与一致性评估的医学知识核对
@@ -216,18 +217,22 @@ async def run_knowledge_check(
         dict: {"raw_response": json.dumps({"score": int, "analysis": str, "details": {...}})}
     """
     
-    # ── Step 1: RAG 检索增强 ──
+    # ── Step 1: RAG 混合检索增强（BM25 + 向量 + RRF + Cross-Encoder 重排序）──
     evidence_text = ""
     rag_success = False
     try:
-        # 基于诊断和治疗方案检索医学证据
+        # 基于诊断和治疗方案检索医学证据（MQE + 混合检索 + 重排序）
         query = f"{doctor_diagnosis} {treatment_plan}".strip()
         if query:
-            evidences = await retrieve_medical_evidence(query, top_k=5)
+            evidences = await retrieve_with_mqe(
+                query, top_k=5, enable_mqe=True,
+                enable_hybrid=True, enable_rerank=True,
+                enable_hyde=enable_hyde,
+            )
             evidence_text = format_evidence_for_verification(evidences)
             rag_success = True
     except Exception as e:
-        logging.error(f"RAG 检索失败: {e}")
+        logging.error(f"RAG 混合检索失败: {e}")
         evidence_text = "未检索到医学证据"
     
     # ── Step 2: LLM 一致性评估 ──
@@ -300,6 +305,8 @@ async def run_knowledge_check(
             "confidence": round(confidence, 2),
             "evidence_summary": evidence,
             "rag_success": rag_success,
+            "mqe_enabled": True,
+            "hyde_enabled": enable_hyde,
         }
     }
     

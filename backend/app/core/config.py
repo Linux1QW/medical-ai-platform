@@ -41,7 +41,13 @@ class Settings(BaseSettings):
     # 阿里云百炼平台 Qwen API — 优先从系统环境变量 DASHSCOPE_API_KEY 读取
     QWEN_API_KEY: str = os.environ.get("DASHSCOPE_API_KEY", "")
     QWEN_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL: str = "qwen3-max"
+    QWEN_MODEL: str = "qwen3.7-max"
+
+    # LLM 并发控制
+    # 全局同时允许的最大 LLM API 调用数（防止触发 API 限流 429）
+    LLM_MAX_CONCURRENT: int = 10
+    # 等待信号量超时（秒），超时后抛出异常避免无限排队
+    LLM_SEMAPHORE_TIMEOUT: int = 60
 
     class Config:
         env_file = ".env"

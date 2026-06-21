@@ -11,6 +11,5 @@ bcrypt==4.0.1
 python-multipart==0.0.20
 openai==1.58.1
 email-validator==2.2.0
-faiss-cpu==1.13.2
 chromadb
 pymupdf

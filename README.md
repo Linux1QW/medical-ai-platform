@@ -1,343 +1,280 @@
-# 多智能体协同的临床问诊评估平台
+# 基于多智能体的医生临床问诊评估平台
 
-基于多 AI 智能体协同的医学问诊实训与自动评估系统。医生可与虚拟患者进行模拟问诊，系统自动调用五个智能体进行多维度评估并生成改进建议。
+## 项目简介
 
----
+本平台是一个面向临床问诊实训的多智能体自动评估系统。医生可与虚拟患者进行模拟问诊，系统自动调用多个 AI 智能体，从问诊流程、诊断合理性、治疗方案、医学知识一致性和人文关怀五个维度进行多维度评估，并生成改进建议。核心亮点包括：RAG V2 分级检索与两阶段重排管线、统一 Pydantic 数据契约、拒答机制与引用追溯审计链，以及版本化知识库索引管理。
 
-## 一、技术栈
+## 系统架构
+
+### 整体架构
+
+```
+问诊对话记录 → 问诊分析智能体 ─┐
+              → 诊断评估智能体 ─┤（并行）
+              → 治疗评估智能体 ─┤
+              → 人文关怀智能体 ─┤
+              → 知识核对智能体 ─┘（RAG 检索 + 一致性评估）
+                                ↓
+                        综合评分智能体
+                                ↓
+                        建议指导智能体
+                                ↓
+                          评估报告
+```
+
+前五个评估智能体通过 `asyncio.gather` 并行执行；综合评分与建议指导依次串行完成。所有智能体均由阿里云百炼平台 Qwen API 驱动。
+
+### RAG 检索系统（V2）
+
+知识核对智能体依托 RAG V2 检索管线，从 80+ 部医学教材与 CSCO/NCCN 指南中检索循证证据。主要优化包括：
+
+- **统一数据契约（Pydantic Schema）** — `RetrievalQuery`、`EvidenceItem`、`RetrievalBundle`、`Citation`、`KnowledgeAssessment` 等结构化模型，作为检索子系统各模块间的强类型接口，替代原有 dict + raw_response 模式。
+- **三类独立查询构建** — 从问诊对话中提取结构化病例事实（`ClinicalFacts`），分别构建病例查询（case）、诊断查询（diagnosis）和治疗查询（treatment），消除仅依赖"医生诊断+治疗方案"导致的确认偏误。
+- **三级分级检索** — Level 1: BM25 + 向量混合检索 + RRF 融合；Level 2: LLM 多查询扩展（MQE）+ 语义漂移过滤；Level 3: HyDE（假设文档 embedding）。每级判断召回充分性，足够则提前返回，避免不必要的 LLM 调用开销。
+- **两阶段重排序** — Stage 1: DashScope gte-rerank 专用模型粗排（20→10）；Stage 2: LLM Cross-Encoder 精排（10→5），评估 relevance 与 completeness；最终排序融合权威性评分（authority_score）和时效性评分（freshness_score）。
+- **增强元数据** — 从 PDF 文件名和配置文件中解析机构、年份、版本、文档类型、科室、疾病标签、推荐等级、证据等级等 16 个元数据字段，支撑权威性与时效性计算。
+- **拒答机制** — `retrieval_status`（检索充分性）与 `evidence_stance`（证据立场）分离判断；当检索不充分或证据立场不确定时，触发人工复核标记，不强行评分。
+- **引用追溯** — `Citation` 模型将 LLM 生成的结论与具体知识库证据块绑定（`citation_id` 格式：`rag-v2:doc-hash:p{page}:c{seq}`），支持评估报告的完整审计链。
+- **版本化索引管理** — 支持 `rag-v1`、`rag-v2` 等多版本索引共存，通过 `ACTIVE_INDEX_VERSION` 配置热切换。
+
+### 评估维度
+
+| 维度 | 智能体 | 说明 |
+|------|--------|------|
+| 问诊流程 | 问诊分析智能体 | 评估问诊的系统性、完整性与临床规范 |
+| 诊断合理性 | 诊断评估智能体 | 评估诊断方向与鉴别诊断思路 |
+| 治疗方案 | 治疗评估智能体 | 评估治疗方案的合理性与指南符合度 |
+| 医学知识一致性 | 知识核对智能体 | 基于 RAG 检索对比临床指南，评估诊疗一致性 |
+| 人文关怀 | 人文关怀智能体 | 评估沟通态度、共情能力与患者教育 |
+
+综合评分智能体汇总上述五个维度生成总分，建议指导智能体输出针对性改进建议。
+
+## 技术栈
 
 | 层级 | 技术 | 版本 |
 |------|------|------|
 | 前端 | React + TypeScript + Vite + Ant Design | React 19 / Vite 7 / Antd 6 |
 | 后端 | FastAPI + Python | Python 3.10 / FastAPI 0.115 |
 | 数据库 | MySQL | 8.0 |
-| AI 引擎 | 阿里云百炼平台 Qwen API | qwen3-max |
+| AI/LLM | 阿里云百炼平台 Qwen API | qwen3-max |
+| 向量检索 | ChromaDB + text-embedding-v3 | — |
+| 关键词检索 | BM25（rank_bm25） | — |
+| 重排序 | DashScope gte-rerank + LLM Cross-Encoder | — |
+| PDF 解析 | PyMuPDF | — |
+| 并发控制 | asyncio.Semaphore（全局 LLM 限流） | — |
 
----
+## 项目结构
 
-## 二、环境要求
+```
+medical-ai-platform/
+├── backend/                              # 后端服务（FastAPI）
+│   ├── app/
+│   │   ├── api/v1/                       # REST API 路由
+│   │   │   ├── auth.py                   #   认证（注册/登录）
+│   │   │   ├── patients.py               #   虚拟患者管理
+│   │   │   ├── consultations.py          #   问诊交互
+│   │   │   ├── evaluations.py            #   评估触发与报告
+│   │   │   ├── knowledge_base.py         #   知识库管理
+│   │   │   └── stats.py                  #   管理员统计
+│   │   ├── core/                         # 核心基础设施
+│   │   │   ├── config.py                 #   配置管理
+│   │   │   ├── security.py               #   密码加密 + JWT
+│   │   │   └── deps.py                   #   认证依赖注入
+│   │   ├── models/                       # 数据库模型（SQLAlchemy）
+│   │   ├── schemas/                      # 请求/响应模型（Pydantic）
+│   │   ├── services/
+│   │   │   ├── agents/                   # AI 智能体
+│   │   │   │   ├── inquiry_agent.py      #   问诊分析
+│   │   │   │   ├── diagnosis_agent.py    #   诊断评估
+│   │   │   │   ├── treatment_agent.py    #   治疗评估
+│   │   │   │   ├── knowledge_agent.py    #   知识核对（RAG）
+│   │   │   │   ├── humanistic_agent.py   #   人文关怀
+│   │   │   │   ├── scoring_agent.py      #   综合评分
+│   │   │   │   └── suggestion_agent.py   #   建议指导
+│   │   │   ├── rag/                      # RAG 检索系统（V2）
+│   │   │   │   ├── types.py              #   统一数据契约
+│   │   │   │   ├── retriever.py          #   分级检索
+│   │   │   │   ├── reranker.py           #   两阶段重排
+│   │   │   │   ├── bm25_search.py        #   BM25 索引
+│   │   │   │   ├── embeddings.py         #   Embedding 接口
+│   │   │   │   ├── medical_store.py      #   ChromaDB 存储
+│   │   │   │   ├── metadata_config.py    #   元数据配置
+│   │   │   │   └── build_medical_index.py#   索引构建脚本
+│   │   │   ├── evaluation_service.py     #   评估编排器
+│   │   │   ├── consultation_service.py   #   问诊逻辑
+│   │   │   └── qwen_client.py            #   Qwen API 客户端
+│   │   └── db/session.py                 # 数据库连接
+│   ├── tests/                            # 测试
+│   │   ├── rag/                          #   RAG 单元测试与离线评测
+│   │   ├── test_auth_error_handling.py
+│   │   └── test_auth_password_length.py
+│   ├── requirements.txt
+│   └── .env                              # 环境变量
+├── frontend/                             # 前端应用（React + Vite）
+│   ├── src/
+│   │   ├── api/                          # 后端接口封装
+│   │   ├── pages/                        # 页面组件
+│   │   ├── store/useAuth.ts              # 状态管理
+│   │   └── utils/request.ts              # Axios 封装
+│   ├── vite.config.ts
+│   └── package.json
+├── database/
+│   ├── init.sql                          # 建表 SQL
+│   ├── migrate_v2.sql                    # 诊断/治疗字段 + 五维度评估
+│   ├── migrate_v3.sql                    # 密码字段扩容
+│   ├── migrate_v4.sql                    # RAG 审计字段
+│   └── seed.sql                          # 种子数据
+├── dataset/                              # 评测数据集（150+ 病例）
+└── data/                                 # 医学教材与指南 PDF（80+ 部）
+```
 
-在启动项目之前，请确保本机已安装以下软件：
+## 快速开始
+
+### 环境要求
 
 | 软件 | 最低版本 | 用途 |
 |------|----------|------|
 | Python | 3.10+ | 后端运行环境 |
 | Node.js | 18+ | 前端运行环境 |
 | MySQL | 8.0 | 数据存储 |
-| npm | 9+ | 前端包管理 |
 
-此外，需要在系统环境变量中配置阿里云百炼平台的 API Key：
-
-- 环境变量名：`DASHSCOPE_API_KEY`
-- 值：你的阿里云百炼平台 API Key（sk-xxx 格式）
-
----
-
-## 三、项目结构
+此外，需在系统环境变量中配置阿里云百炼平台 API Key：
 
 ```
-medical-ai-platform/
-├── backend/                          # 后端服务（FastAPI）
-│   ├── app/
-│   │   ├── api/v1/                   # REST API 路由
-│   │   │   ├── auth.py               #   注册 / 登录 / 获取当前用户
-│   │   │   ├── patients.py           #   虚拟患者管理
-│   │   │   ├── consultations.py      #   问诊交互（对话 / 结束）
-│   │   │   ├── evaluations.py        #   触发评估 / 查看评估报告
-│   │   │   └── stats.py              #   管理员数据统计
-│   │   ├── core/                     # 核心基础设施
-│   │   │   ├── config.py             #   配置（数据库 / JWT / Qwen）
-│   │   │   ├── security.py           #   密码加密 + JWT 令牌
-│   │   │   └── deps.py               #   认证守卫（依赖注入）
-│   │   ├── models/                   # 数据库模型（SQLAlchemy ORM）
-│   │   ├── schemas/                  # 请求 / 响应模型（Pydantic）
-│   │   ├── services/                 # 业务逻辑
-│   │   │   ├── agents/               #   五个 AI 智能体
-│   │   │   │   ├── inquiry_agent.py      # 问诊分析智能体
-│   │   │   │   ├── knowledge_agent.py    # 医学知识核对智能体
-│   │   │   │   ├── humanistic_agent.py   # 人文关怀评估智能体
-│   │   │   │   ├── scoring_agent.py      # 综合评分智能体
-│   │   │   │   └── suggestion_agent.py   # 建议指导智能体
-│   │   │   ├── evaluation_service.py #   评估编排器
-│   │   │   ├── consultation_service.py   # 问诊逻辑
-│   │   │   ├── qwen_client.py        #   Qwen API 客户端
-│   │   │   ├── user_service.py       #   用户管理
-│   │   │   └── patient_service.py    #   患者管理
-│   │   └── db/session.py             # 数据库连接
-│   ├── venv/                         # Python 虚拟环境（已创建）
-│   ├── requirements.txt              # Python 依赖
-│   ├── .env                          # 环境变量（实际配置）
-│   └── .env.example                  # 环境变量示例
-├── frontend/                         # 前端应用（React + Vite）
-│   ├── src/
-│   │   ├── api/                      # 后端接口封装
-│   │   ├── layouts/MainLayout.tsx    # 主布局（侧边栏 + 顶栏）
-│   │   ├── pages/                    # 页面组件
-│   │   │   ├── Login/                #   登录
-│   │   │   ├── Register/             #   注册
-│   │   │   ├── Dashboard/            #   工作台
-│   │   │   ├── PatientList/          #   虚拟患者列表
-│   │   │   ├── ConsultationList/     #   问诊记录列表
-│   │   │   ├── Consultation/         #   问诊对话
-│   │   │   ├── Evaluation/           #   评估报告
-│   │   │   └── AdminStats/           #   管理员统计
-│   │   ├── store/useAuth.ts          # 登录状态管理
-│   │   ├── types/index.ts            # TypeScript 类型
-│   │   └── utils/request.ts          # Axios 请求封装
-│   ├── node_modules/                 # Node 依赖（已安装）
-│   ├── vite.config.ts                # Vite 配置（含 API 代理）
-│   └── package.json
-├── database/
-│   ├── init.sql                      # 建表 SQL
-│   └── seed.sql                      # 种子数据（1 管理员 + 4 虚拟患者）
-├── .gitignore
-└── README.md
+DASHSCOPE_API_KEY=sk-xxx
 ```
 
----
+### 安装依赖
 
-#
----
+```powershell
+# 后端
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 
-## 四、部署初始化
+# 前端
+cd frontend
+npm install
+```
 
-首次部署项目时，请务必按照以下步骤完成管理员账号初始化：
+### 数据库初始化
 
-1. **后端初始化**：
-   ```powershell
-   cd backend
-   .\venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   ```
-   
-   **生产部署务必运行python init_admin.py完成初始化**，确保平台可零手动SQL启动。
-   ```powershell
-   python init_admin.py
-   ```
-   *注意：脚本会交互式提示输入管理员用户名、邮箱和密码。*
+```powershell
+# 1. 创建数据库
+mysql -u root -p -e "CREATE DATABASE medical_ai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-2. **数据库初始化**：
-   - 确保 MySQL 服务已启动并创建了名为 `medical_ai` 的数据库。
-   - 导入 `database/init.sql` 进行建表。
+# 2. 建表
+mysql -u root -p medical_ai < database/init.sql
 
----
+# 3. 导入种子数据（含管理员账号 + 虚拟患者）
+mysql -u root -p medical_ai < database/seed.sql
 
-## 五、日常启动步骤
+# 4. 执行迁移（按需）
+mysql -u root -p medical_ai < database/migrate_v2.sql
+mysql -u root -p medical_ai < database/migrate_v3.sql
+mysql -u root -p medical_ai < database/migrate_v4.sql
+```
 
-每次开发或使用时，只需执行以下两步：
-
-### 终端 1 — 启动后端
+或使用初始化脚本：
 
 ```powershell
 cd backend
-.\venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --port 8001
+python init_admin.py   # 交互式创建管理员账号
 ```
 
-看到 `Application startup complete.` 表示后端启动成功。
+### 知识库构建
 
-### 终端 2 — 启动前端
+将医学教材与指南 PDF 放入 `data/` 目录后，运行索引构建脚本：
 
 ```powershell
+cd backend
+python -m app.services.rag.build_medical_index
+```
+
+索引将存储在项目根目录的 ChromaDB 持久化目录中。
+
+### 启动服务
+
+```powershell
+# 终端 1 — 后端（默认 8000 端口）
+cd backend
+.\venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+
+# 终端 2 — 前端（默认 5173 端口）
 cd frontend
 npm run dev
 ```
 
-看到 `Local: http://localhost:5173/` 表示前端启动成功。
+访问 **http://localhost:5173** 即可使用。
 
-### 访问
+## 数据库迁移
 
-打开浏览器访问 **http://localhost:5173**
+| 文件 | 说明 |
+|------|------|
+| `init.sql` | 初始建表：users、patients、consultations、evaluations 等 |
+| `migrate_v2.sql` | 新增诊断/治疗方案字段（`diagnosis`、`treatment_plan`）及五维度评估字段 |
+| `migrate_v3.sql` | `users.hashed_password` 字段扩容为 TEXT |
+| `migrate_v4.sql` | RAG 审计字段：`citation_data`、`retrieval_status`、`evidence_stance`、`human_review_needed`、`review_reason`、`rag_trace_data`、`evaluation_status`；`knowledge_score` 和 `total_score` 允许 NULL |
 
----
+## 配置说明
 
-## 六、预置账号
+所有配置项通过 `backend/.env` 或系统环境变量管理：
 
-| 角色 | 用户名 | 密码 | 权限 |
-|------|--------|------|------|
-| 管理员 | admin | admin123 | 全部功能 + 数据统计 + 患者管理 |
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `MYSQL_HOST` | localhost | MySQL 地址 |
+| `MYSQL_PORT` | 3306 | MySQL 端口 |
+| `MYSQL_USER` | root | MySQL 用户 |
+| `MYSQL_PASSWORD` | （空） | MySQL 密码 |
+| `MYSQL_DATABASE` | medical_ai | 数据库名 |
+| `SECRET_KEY` | （内置默认值） | JWT 签名密钥 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | Token 有效期（24 小时） |
+| `DASHSCOPE_API_KEY` | （系统环境变量） | 阿里云百炼 API Key |
+| `QWEN_API_BASE_URL` | dashscope 兼容模式 | Qwen API 地址 |
+| `QWEN_MODEL` | qwen3.7-max | 默认 LLM 模型 |
+| `RERANK_MODEL` | gte-rerank | 专用重排模型 |
+| `LLM_MAX_CONCURRENT` | 10 | LLM 最大并发调用数 |
+| `LLM_SEMAPHORE_TIMEOUT` | 60 | 信号量等待超时（秒） |
+| `ACTIVE_INDEX_VERSION` | rag-v1 | 当前活跃 RAG 索引版本 |
 
-普通医生账号可通过注册页面自行创建。
+## 测试
 
----
+```powershell
+cd backend
 
-## 七、功能使用流程
+# 运行全部单元测试
+pytest tests/ -v
 
-### 7.1 医生完整使用流程
+# 仅运行 RAG 相关测试
+pytest tests/rag/ -v
 
+# 离线评测（评估 RAG 检索质量）
+python tests/rag/eval_offline.py
 ```
-登录 → 选择虚拟患者 → 开始问诊 → 与患者对话 → 结束问诊 → 生成评估 → 查看报告与建议
-```
 
-**第一步：登录系统**
+## API 文档
 
-- 访问 http://localhost:5173
-- 使用已有账号登录，或点击"立即注册"创建新医生账号
-
-**第二步：选择虚拟患者**
-
-- 点击左侧菜单「虚拟患者」
-- 可通过人格类型下拉框筛选（配合型 / 焦虑型 / 沉默型 / 对抗型）
-- 查看难度星级（1-5 星），选择合适的患者
-- 点击「开始问诊」按钮
-
-**第三步：进行问诊对话**
-
-- 进入对话界面后，左侧显示患者基本信息（姓名、年龄、主诉等）
-- 在底部输入框输入问诊内容，按 Enter 发送
-- 虚拟患者会根据其人格类型和病例设定自动回复
-- 建议按照临床问诊规范依次询问：主诉 → 现病史 → 既往史 → 个人史 → 家族史
-
-**第四步：结束问诊**
-
-- 问诊完毕后，点击右上角「结束问诊」按钮
-- 确认后问诊状态变为"已完成"
-
-**第五步：生成评估报告**
-
-- 问诊结束后，点击「查看评估」进入评估页面
-- 点击「生成评估报告」按钮
-- 系统后台五个 AI 智能体将协同工作（约需 15-30 秒）：
-  - **问诊分析智能体**：评估问诊流程的系统性与完整性
-  - **医学知识核对智能体**：核对鉴别诊断思路与临床指南
-  - **人文关怀评估智能体**：评估沟通态度与共情能力
-  - **综合评分智能体**：汇总三项评估生成综合分数
-  - **建议指导智能体**：生成具体的改进建议
-
-**第六步：查看评估结果**
-
-- 顶部显示四个维度的仪表盘评分（0-100 分）
-- 中部显示各维度的详细分析
-- 底部显示综合评价和改进建议
-
-### 7.2 管理员功能
-
-管理员除了拥有医生的全部功能外，还可以：
-
-- **数据统计**：点击左侧菜单「数据统计」，查看全平台的实训次数、评估报告数、各维度平均评分
-
----
-
-## 八、预置虚拟患者说明
-
-系统内置 4 个虚拟患者，覆盖四种人格类型：
-
-| 姓名 | 年龄/性别 | 人格类型 | 主诉 | 难度 |
-|------|-----------|----------|------|------|
-| 张明 | 45/男 | 配合型 | 反复胸闷气短 1 个月 | ★★ |
-| 李芳 | 32/女 | 焦虑型 | 头痛头晕伴失眠 2 周 | ★★★ |
-| 王建国 | 68/男 | 沉默型 | 咳嗽咳痰带血丝 1 周 | ★★★★ |
-| 赵红梅 | 55/女 | 对抗型 | 腹痛腹胀反复发作 3 个月 | ★★★★★ |
-
-**人格类型说明：**
-
-- **配合型**：积极回答问题，有问必答
-- **焦虑型**：话多、反复追问、担心病情严重
-- **沉默型**：回答简短，需要医生耐心引导
-- **对抗型**：质疑医生、态度强硬，需要展现专业性才会配合
-
----
-
-## 九、API 接口文档
-
-后端启动后，访问以下地址查看自动生成的交互式 API 文档：
+后端启动后，访问自动生成的交互式 API 文档：
 
 | 文档 | 地址 |
 |------|------|
-| Swagger UI | http://localhost:8000/docs |
-| ReDoc | http://localhost:8000/redoc |
+| Swagger UI | http://localhost:8000/api/v1/openapi.json |
+| 健康检查 | http://localhost:8000/health |
 
-### 主要接口一览
+### 主要接口
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| POST | /api/v1/auth/register | 注册 | 否 |
-| POST | /api/v1/auth/login | 登录 | 否 |
-| GET | /api/v1/auth/me | 获取当前用户 | Bearer |
-| GET | /api/v1/patients/ | 患者列表（支持筛选） | Bearer |
-| GET | /api/v1/patients/{id} | 患者详情 | Bearer |
-| POST | /api/v1/patients/ | 创建患者（管理员） | Bearer |
-| POST | /api/v1/consultations/ | 创建问诊 | Bearer |
-| GET | /api/v1/consultations/ | 我的问诊列表 | Bearer |
-| GET | /api/v1/consultations/{id} | 问诊详情（含消息） | Bearer |
-| POST | /api/v1/consultations/{id}/messages | 发送消息 | Bearer |
-| POST | /api/v1/consultations/{id}/end | 结束问诊 | Bearer |
-| POST | /api/v1/evaluations/ | 触发评估 | Bearer |
-| GET | /api/v1/evaluations/{id} | 查看评估报告 | Bearer |
-| GET | /api/v1/stats/ | 数据统计（管理员） | Bearer |
-
-### 认证密码说明
-
-- 注册与登录接口不再限制密码长度
-- 后端密码哈希使用可处理任意长度输入的算法链路
-- 历史 bcrypt 哈希密码可继续登录，系统会自动兼容验证
-
-### 错误响应规范
-
-- 登录接口错误响应统一为：`error_code`、`message`、`request_id`
-- 参数错误返回 `422 VALIDATION_ERROR`
-- 认证失败返回 `401 AUTH_INVALID_CREDENTIALS`
-- 数据库故障返回 `503 DB_UNAVAILABLE`
-- 未知异常返回 `500 INTERNAL_SERVER_ERROR`，不返回敏感堆栈信息
-
-### 灰度验证建议
-
-- 灰度期按 `request_id` 聚合 `POST /api/v1/auth/login` 的 `5xx` 占比
-- 指标口径：`同类错误率 = error_code=INTERNAL_SERVER_ERROR 的登录请求数 / 登录总请求数`
-- 发布前门禁：最近 24 小时同类错误率 `< 0.1%`
-- 出现告警时按 `request_id` 回查日志中的完整堆栈并执行回滚
-
----
-
-## 十、多智能体协同架构
-
-```
-                         ┌────────────────────┐
-                         │   问诊对话记录      │
-                         └────────┬───────────┘
-                                  │
-                    ┌─────────────┼─────────────┐
-                    ▼             ▼             ▼
-            ┌──────────┐  ┌──────────┐  ┌──────────┐
-            │ 问诊分析  │  │ 知识核对  │  │ 人文关怀  │
-            │ 智能体    │  │ 智能体    │  │ 智能体    │
-            └─────┬────┘  └─────┬────┘  └─────┬────┘
-                  │             │             │
-                  │    （三者并行执行）         │
-                  └─────────────┼─────────────┘
-                                ▼
-                       ┌──────────────┐
-                       │ 综合评分智能体 │
-                       └───────┬──────┘
-                               ▼
-                       ┌──────────────┐
-                       │ 建议指导智能体 │
-                       └───────┬──────┘
-                               ▼
-                        ┌────────────┐
-                        │  评估报告   │
-                        └────────────┘
-```
-
-- 前三个智能体通过 `asyncio.gather` **并行调用**，提高响应速度
-- 综合评分智能体汇总三项结果后**串行调用**建议智能体
-- 所有智能体均通过阿里云百炼平台 Qwen API 驱动
-
----
-
-## 十一、常见问题
-
-### Q: 后端启动报 `ModuleNotFoundError`
-确保已激活虚拟环境：`.\venv\Scripts\Activate.ps1`，终端前方应显示 `(venv)`。
-
-### Q: 数据库连接失败
-检查 `backend/.env` 中的 MySQL 密码是否正确，确认 MySQL 服务正在运行：`Get-Service MySQL80`。
-
-### Q: 问诊时虚拟患者不回复
-检查系统环境变量 `DASHSCOPE_API_KEY` 是否已配置。可在终端验证：`echo $env:DASHSCOPE_API_KEY`。
-
-### Q: 评估报告生成很慢
-正常现象，需要串行调用 5 个 AI 智能体（其中 3 个并行），通常需要 15-30 秒。
-
-### Q: 前端页面空白或报 CORS 错误
-确保后端已在 8000 端口运行，前端 Vite 的 API 代理配置会自动将 `/api` 请求转发到后端。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/v1/auth/register | 注册 |
+| POST | /api/v1/auth/login | 登录 |
+| GET | /api/v1/auth/me | 获取当前用户 |
+| GET | /api/v1/patients/ | 虚拟患者列表 |
+| POST | /api/v1/consultations/ | 创建问诊 |
+| POST | /api/v1/consultations/{id}/messages | 发送消息 |
+| POST | /api/v1/consultations/{id}/end | 结束问诊 |
+| POST | /api/v1/evaluations/ | 触发评估 |
+| GET | /api/v1/evaluations/{id} | 查看评估报告 |
+| GET | /api/v1/knowledge-base/status | 知识库状态 |
+| GET | /api/v1/stats/ | 管理员统计 |

@@ -138,12 +138,25 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
         diagnosis_data = _extract_json(diagnosis_result["raw_response"])
         treatment_data = _extract_json(treatment_result["raw_response"])
 
+        # 提取 knowledge_agent 新增的 RAG 审计字段
+        retrieval_status = knowledge_result.get("retrieval_status", "not_run")
+        evidence_stance = knowledge_result.get("evidence_stance", "undetermined")
+        human_review_needed = knowledge_result.get("human_review_needed", False)
+        review_reason = knowledge_result.get("review_reason")
+        citations = knowledge_result.get("citations", [])
+        rag_trace = knowledge_result.get("rag_trace", {})
+
+        # 拒答逻辑：如果 knowledge_agent 标记需要人工复核，knowledge_score 置 None
+        knowledge_score_value = knowledge_data.get("score")
+        if human_review_needed:
+            knowledge_score_value = None
+
         # 第二阶段：综合评分智能体
         await manager.send_progress(consultation_id, 70, "综合评分计算中...")
         scoring_result = await run_scoring(
             inquiry_score=inquiry_data.get("score", 0),
             inquiry_analysis=inquiry_data.get("analysis", ""),
-            knowledge_score=knowledge_data.get("score", 0),
+            knowledge_score=knowledge_score_value if knowledge_score_value is not None else 50,
             knowledge_analysis=knowledge_data.get("analysis", ""),
             humanistic_score=humanistic_data.get("score", 0),
             humanistic_analysis=humanistic_data.get("analysis", ""),
@@ -163,11 +176,16 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
         
         await manager.send_progress(consultation_id, 95, "正在保存评估结果...")
 
+        # 拒答时 total_score 也置为 None
+        total_score_value = scoring_data.get("total_score")
+        if human_review_needed:
+            total_score_value = None
+
         evaluation = Evaluation(
             consultation_id=consultation_id,
             inquiry_score=inquiry_data.get("score"),
             inquiry_analysis=inquiry_data.get("analysis", inquiry_result["raw_response"]),
-            knowledge_score=knowledge_data.get("score"),
+            knowledge_score=knowledge_score_value,
             knowledge_analysis=knowledge_data.get("analysis", knowledge_result["raw_response"]),
             humanistic_score=humanistic_data.get("score"),
             humanistic_analysis=humanistic_data.get("analysis", humanistic_result["raw_response"]),
@@ -175,17 +193,25 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
             diagnosis_analysis=diagnosis_data.get("analysis", diagnosis_result["raw_response"]),
             treatment_score=treatment_data.get("score"),
             treatment_analysis=treatment_data.get("analysis", treatment_result["raw_response"]),
-            total_score=scoring_data.get("total_score"),
+            total_score=total_score_value,
             overall_summary=scoring_data.get("summary", scoring_result["raw_response"]),
             improvement_suggestions=suggestion_data.get(
                 "suggestions", suggestion_result["raw_response"]
             ),
+            # RAG 审计字段
+            citation_data=citations,
+            retrieval_status=retrieval_status,
+            evidence_stance=evidence_stance,
+            human_review_needed=human_review_needed,
+            review_reason=review_reason,
+            rag_trace_data=rag_trace,
+            evaluation_status="needs_review" if human_review_needed else "completed",
         )
         
-        # 确保分值不为 None，若解析出的 JSON 缺少 score 字段也视为解析失败
-        if any(s is None for s in [evaluation.inquiry_score, evaluation.knowledge_score, 
+        # 非拒答情况下确保其他维度分数不为 None（knowledge_score 和 total_score 允许 None）
+        if any(s is None for s in [evaluation.inquiry_score,
                                  evaluation.humanistic_score, evaluation.diagnosis_score, 
-                                 evaluation.treatment_score, evaluation.total_score]):
+                                 evaluation.treatment_score]):
              raise EvaluationValidationError("评估 JSON 缺少分数字段", str(scoring_data))
 
         db.add(evaluation)
@@ -243,7 +269,7 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
 
     q_evals_count = select(func.count(Evaluation.id)).select_from(Evaluation).join(
         Consultation, Consultation.id == Evaluation.consultation_id
-    )
+    ).where(Evaluation.evaluation_status != "needs_review")
     if doctor_id is not None:
         q_evals_count = q_evals_count.where(Consultation.doctor_id == doctor_id)
     total_evaluations = await db.execute(q_evals_count)
@@ -258,6 +284,8 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
             func.avg(Evaluation.total_score),
         )
         .join(Consultation, Consultation.id == Evaluation.consultation_id)
+        .where(Evaluation.evaluation_status != "needs_review")
+        .where(Evaluation.total_score.isnot(None))
     )
     if doctor_id is not None:
         q_avgs = q_avgs.where(Consultation.doctor_id == doctor_id)
@@ -280,6 +308,8 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
                 func.avg(Evaluation.total_score).label("avg_score"),
             )
             .join(Consultation, Consultation.id == Evaluation.consultation_id)
+            .where(Evaluation.evaluation_status != "needs_review")
+            .where(Evaluation.total_score.isnot(None))
             .group_by(Consultation.doctor_id)
         )
         user_avgs_result = await db.execute(q_user_avgs)
@@ -327,6 +357,7 @@ async def get_user_stats_breakdown(db: AsyncSession) -> List[dict]:
         .outerjoin(Consultation, Consultation.doctor_id == User.id)
         .outerjoin(Evaluation, Evaluation.consultation_id == Consultation.id)
         .where(User.role == "doctor")
+        .where(Evaluation.evaluation_status != "needs_review")
         .group_by(User.id, User.username, User.real_name, User.department)
         .order_by(func.avg(Evaluation.total_score).desc())
     )

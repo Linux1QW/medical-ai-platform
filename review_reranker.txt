@@ -1,0 +1,487 @@
+﻿diff --git a/backend/app/services/rag/reranker.py b/backend/app/services/rag/reranker.py
+index 2f12830..718b722 100644
+--- a/backend/app/services/rag/reranker.py
++++ b/backend/app/services/rag/reranker.py
+@@ -1,128 +1,441 @@
+ # -*- coding: utf-8 -*-
+-"""Cross-Encoder 閲嶆帓搴忔ā鍧?鈥?浣跨敤 LLM 瀵规绱㈢粨鏋滆繘琛岀簿缁嗗寲鐩稿叧鎬ц瘎鍒?+"""涓ら樁娈甸噸鎺掑簭妯″潡 鈥?涓撶敤 reranker 绮楁帓 + LLM 绮炬帓
+ 
+-閫氳繃灏?query 鍜?document 鍚屾椂杈撳叆 LLM锛岃幏寰楁洿绮惧噯鐨勭浉鍏虫€у垽鏂紝
+-寮ヨˉ鍚戦噺妫€绱?绮楀彫鍥?鐨勪笉瓒炽€?+Stage 1: DashScope gte-rerank 涓撶敤妯″瀷绮楁帓锛?0 鈫?10锛?+Stage 2: LLM Cross-Encoder 绮炬帓锛?0 鈫?5锛夛紝浠呭垽鏂?relevance + completeness
++鏈€缁堟帓搴忓叕寮忚瀺鍚?authority_score锛堜唬鐮佽绠楋級鍜?freshness_score锛堜唬鐮佽绠楋級
+ """
+ 
+ import asyncio
+ import json
+ import logging
+ import re
+-from typing import Dict, List
++from typing import Dict, List, Optional, Tuple
+ 
++from app.core.config import settings
+ from app.services.qwen_client import call_qwen_chat
++from app.services.rag.types import (
++    EvidenceItem,
++    RerankResult,
++    MAX_RERANK_INPUT,
++    LLM_RERANK_INPUT,
++    RELEVANCE_WEIGHT,
++    COMPLETENESS_WEIGHT,
++    AUTHORITY_WEIGHT,
++    FRESHNESS_WEIGHT,
++)
+ 
+ logger = logging.getLogger(__name__)
+ 
+-# 鈹€鈹€ 閲嶆帓搴?System Prompt 鈹€鈹€
+-RERANK_SYSTEM_PROMPT = """浣犳槸涓€鍚嶅尰瀛︽枃鐚浉鍏虫€ц瘎浼颁笓瀹躲€備綘鐨勪换鍔℃槸鍒ゆ柇缁欏畾鐨勫尰瀛﹁瘉鎹枃鏈笌鏌ヨ鐨勭浉鍏崇▼搴︺€?+# 鈹€鈹€ 鏉冨▉鎬у垎鏁版槧灏勶紙鍩轰簬 organization 鍏冩暟鎹級鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++AUTHORITY_MAP = {
++    "NCCN": 10,
++    "CSCO": 9,
++    "CACA": 9,
++    "涓崕鍖诲浼?: 8,
++    "涓浗鍖诲笀鍗忎細": 8,
++}
++DEFAULT_AUTHORITY = 5  # 鏈煡鏉ユ簮
+ 
+-璇峰姣忔潯璇佹嵁涓庢煡璇㈢殑鐩稿叧鎬ф墦鍒嗭紝璇勫垎鑼冨洿 0-10锛?-- 9-10锛氶珮搴︾浉鍏筹紝璇佹嵁鐩存帴鍥炵瓟鎴栨敮鎸佹煡璇㈠唴瀹?-- 7-8锛氳緝鐩稿叧锛岃瘉鎹秹鍙婃煡璇㈢殑鏍稿績涓婚
+-- 5-6锛氶儴鍒嗙浉鍏筹紝璇佹嵁娑夊強鐩稿叧棰嗗煙浣嗕笉鐩存帴鐩稿叧
+-- 3-4锛氬急鐩稿叧锛屼粎鏈夊皯閲忓叧鑱?-- 0-2锛氫笉鐩稿叧
++# 鈹€鈹€ LLM 绮炬帓 System Prompt 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++LLM_RERANK_PROMPT = """浣犳槸涓€鍚嶅尰瀛︽枃鐚浉鍏虫€ц瘎浼颁笓瀹躲€傝鍒ゆ柇浠ヤ笅鍖诲璇佹嵁涓庢煡璇㈢殑鐩稿叧绋嬪害銆? 
+-杈撳嚭瑕佹眰锛?-- 涓ユ牸杈撳嚭 JSON 鏁扮粍锛屾瘡涓厓绱犱负鏁存暟璇勫垎
+-- 鏁扮粍闀垮害蹇呴』涓庤瘉鎹潯鏁颁竴鑷?-- 绀轰緥锛歔9, 7, 3, 8, 2]
+-- 涓嶈杈撳嚭浠讳綍瑙ｉ噴鎬ф枃瀛?""
++瀵规瘡鏉¤瘉鎹粠涓や釜缁村害鎵撳垎锛?-10 鏁存暟锛夛細
++- relevance锛氳瘉鎹笌鏌ヨ鐨勮涔夊尮閰嶅害锛堢洿鎺ュ洖绛旀煡璇?9-10锛岄儴鍒嗙浉鍏?5-6锛屼笉鐩稿叧=0-2锛?+- completeness锛氳瘉鎹槸鍚﹀寘鍚畬鏁寸殑鎺ㄨ崘鎰忚锛堝惈鍓傞噺銆佺枟绋嬨€佹鏌ラ」鐩瓑鍏蜂綋淇℃伅锛? 
+-# 鏈€澶у苟鍙戦噸鎺掑簭鐨勬枃妗ｆ暟閲忥紙閬垮厤 prompt 杩囬暱锛?-MAX_RERANK_DOCS = 10
++杈撳嚭瑕佹眰锛氫弗鏍?JSON 鏁扮粍锛屾瘡涓厓绱犲寘鍚?reference(doc_id)銆乺elevance銆乧ompleteness銆乺eason銆?+涓嶈杈撳嚭浠讳綍瑙ｉ噴鎬ф枃瀛椼€?""
+ 
+-# 鐩稿叧鎬ч槇鍊硷細浣庝簬姝ゅ垎鏁扮殑鏂囨。灏嗚杩囨护
++# 鐩稿叧鎬ч槇鍊硷細浣庝簬姝ゅ垎鏁扮殑鏂囨。灏嗚杩囨护锛堟棫鎺ュ彛鍏煎锛? RELEVANCE_THRESHOLD = 4
+ 
+ 
+-async def rerank_documents(
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# Stage 1: DashScope gte-rerank 涓撶敤妯″瀷绮楁帓
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def _sync_dashscope_rerank(
+     query: str,
+-    documents: List[Dict],
++    documents: List[EvidenceItem],
++    top_k: int,
++) -> List[EvidenceItem]:
++    """鍚屾璋冪敤 DashScope TextReRanking API锛堥渶鍦ㄧ嚎绋嬫睜涓繍琛岋級"""
++    from dashscope import TextReRanking
++
++    texts = [doc.text[:500] for doc in documents]
++    response = TextReRanking.call(
++        model=settings.RERANK_MODEL,
++        query=query,
++        documents=texts,
++        top_n=top_k,
++        api_key=settings.QWEN_API_KEY,
++    )
++
++    if response is None or not hasattr(response, "output") or response.output is None:
++        raise RuntimeError("DashScope rerank API 杩斿洖绌虹粨鏋?)
++
++    # 瑙ｆ瀽缁撴灉锛屾寜 relevance_score 闄嶅簭
++    scored = [
++        (item.index, item.relevance_score)
++        for item in response.output.results
++    ]
++    scored.sort(key=lambda x: x[1], reverse=True)
++
++    results = []
++    for idx, score in scored:
++        doc = documents[idx].model_copy()
++        doc.rerank_score = round(score, 4)
++        results.append(doc)
++
++    return results
++
++
++async def dedicated_rerank(
++    query: str,
++    documents: List[EvidenceItem],
+     top_k: int = 5,
+-    threshold: float = RELEVANCE_THRESHOLD,
+-) -> List[Dict]:
+-    """浣跨敤 LLM Cross-Encoder 瀵规绱㈢粨鏋滆繘琛岄噸鎺掑簭
++) -> List[EvidenceItem]:
++    """浣跨敤 DashScope gte-rerank 涓撶敤妯″瀷绮楁帓锛堝紓姝ュ寘瑁咃級"""
++    return await asyncio.to_thread(_sync_dashscope_rerank, query, documents, top_k)
++
++
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 浠ｇ爜璁＄畻 authority_score 鍜?freshness_score
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def _compute_authority_score(doc: EvidenceItem) -> float:
++    """鍩轰簬 organization 鍏冩暟鎹绠楁潈濞佹€у垎鏁帮紙褰掍竴鍖栧埌 0-1锛?""
++    org = (doc.organization or "").upper()
++    for key, score in AUTHORITY_MAP.items():
++        if key.upper() in org:
++            return score / 10.0
++    return DEFAULT_AUTHORITY / 10.0
++
++
++def _compute_freshness_score(doc: EvidenceItem) -> float:
++    """鍩轰簬 year 鍏冩暟鎹绠楁椂鏁堟€у垎鏁帮紙褰掍竴鍖栧埌 0-1锛?""
++    if doc.year is None:
++        return 0.5  # 鏈煡骞翠唤缁欎腑绛夊垎
++    current_year = 2026
++    age = current_year - doc.year
++    if age <= 1:
++        return 1.0
++    elif age <= 3:
++        return 0.8
++    elif age <= 5:
++        return 0.6
++    else:
++        return 0.4
++
++
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 鏈€缁堟帓搴忓叕寮?+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def _compute_final_score(
++    doc: EvidenceItem,
++    relevance: int,
++    completeness: int,
++) -> float:
++    """铻嶅悎 relevance / completeness / authority / freshness 鐨勬渶缁堝垎鏁?""
++    rel_norm = relevance / 10.0
++    comp_norm = completeness / 10.0
++    auth = doc.authority_score if doc.authority_score is not None else _compute_authority_score(doc)
++    fresh = doc.freshness_score if doc.freshness_score is not None else _compute_freshness_score(doc)
++
++    return (
++        RELEVANCE_WEIGHT * rel_norm
++        + COMPLETENESS_WEIGHT * comp_norm
++        + AUTHORITY_WEIGHT * auth
++        + FRESHNESS_WEIGHT * fresh
++    )
+ 
+-    Args:
+-        query: 鏌ヨ鏂囨湰
+-        documents: 鍊欓€夋枃妗ｅ垪琛紝姣忎釜鏂囨。闇€鍖呭惈 "text" 瀛楁
+-        top_k: 杩斿洖鐨勬渶澶ф枃妗ｆ暟
+-        threshold: 鏈€浣庣浉鍏虫€у垎鏁伴槇鍊硷紙0-10锛夛紝浣庝簬姝ゅ垎鐨勬枃妗ｅ皢琚繃婊? 
+-    Returns:
+-        閲嶆帓搴忓苟杩囨护鍚庣殑鏂囨。鍒楄〃锛屾瘡涓枃妗ｅ鍔?"rerank_score" 瀛楁
+-    """
+-    if not documents or not query or not query.strip():
+-        return documents[:top_k] if documents else []
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# Stage 2: LLM 绮炬帓
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+-    # 闄愬埗鍙備笌閲嶆帓搴忕殑鏂囨。鏁伴噺
+-    candidates = documents[:MAX_RERANK_DOCS]
++async def _llm_fine_rerank(
++    query: str,
++    documents: List[EvidenceItem],
++    top_k: int = 5,
++) -> List[EvidenceItem]:
++    """LLM 绮炬帓锛氫粎瀵圭矖鎺掑悗鐨勫墠 N 鏉℃墽琛岋紝鍒ゆ柇 relevance + completeness"""
++    input_docs = documents[:LLM_RERANK_INPUT]
+ 
+-    # 鏋勫缓璇勫垎璇锋眰
++    # 鏋勫缓璇勫垎璇锋眰锛屽寘鍚畬鏁翠笂涓嬫枃
+     evidence_parts = []
+-    for i, doc in enumerate(candidates, 1):
+-        text = doc.get("text", "")
+-        # 鎴彇鍓?00瀛楃閬垮厤 prompt 杩囬暱
+-        truncated = text[:300] + "..." if len(text) > 300 else text
+-        evidence_parts.append(f"璇佹嵁{i}锛歿truncated}")
+-
+-    evidence_text = "\n\n".join(evidence_parts)
++    for doc in input_docs:
++        part = (
++            f"銆恉oc_id: {doc.doc_id}銆慭n"
++            f"鏉ユ簮: {doc.source} | 鏈烘瀯: {doc.organization or '鏈煡'} | "
++            f"骞翠唤: {doc.year or '鏈煡'} | 椤电爜: {doc.page or '?'}\n"
++            f"绔犺妭: {doc.heading_path or '鏃?}\n"
++            f"鍐呭: {doc.text}\n"
++        )
++        evidence_parts.append(part)
+ 
+     user_content = (
+-        f"銆愭煡璇€慭n{query}\n\n"
+-        f"銆愬緟璇勫垎鐨勮瘉鎹紙鍏眥len(candidates)}鏉★級銆慭n{evidence_text}\n\n"
+-        f"璇峰浠ヤ笂{len(candidates)}鏉¤瘉鎹笌鏌ヨ鐨勭浉鍏虫€у垎鍒墦鍒嗭紙0-10鏁存暟锛夛紝杈撳嚭JSON鏁扮粍銆?
++        f"銆愭煡璇€憑query}\n\n"
++        f"銆愬緟璇勫垎璇佹嵁锛堝叡{len(input_docs)}鏉★級銆慭n\n"
++        + "\n---\n".join(evidence_parts)
+     )
+ 
+     messages = [
+-        {"role": "system", "content": RERANK_SYSTEM_PROMPT},
++        {"role": "system", "content": LLM_RERANK_PROMPT},
+         {"role": "user", "content": user_content},
+     ]
+ 
++    response = await call_qwen_chat(
++        messages=messages,
++        temperature=0.1,
++        max_tokens=500,
++    )
++
++    rerank_results = _parse_rerank_results(response, input_docs)
++    return rerank_results[:top_k]
++
++
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 瑙ｆ瀽鍑芥暟锛氫笁灞傜瓥鐣?+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def _parse_rerank_results(
++    response: str,
++    documents: List[EvidenceItem],
++) -> List[EvidenceItem]:
++    """浠?LLM 鍝嶅簲涓В鏋?RerankResult 鍒楄〃锛屼笁灞傝В鏋愮瓥鐣?+
++    1) 鐩存帴瑙ｆ瀽瀹屾暣 JSON 鏁扮粍
++    2) 姝ｅ垯鎻愬彇 JSON 鏁扮粍鐗囨
++    3) 闄嶇骇锛氱粰鎵€鏈夋枃妗ｉ粯璁ゅ垎鏁?+    """
++    if not response or not response.strip():
++        logger.warning("LLM 绮炬帓鍝嶅簲涓虹┖")
++        return _default_scored_docs(documents)
++
++    expected_ids = {doc.doc_id for doc in documents}
++
++    # 鈹€鈹€ 绛栫暐 1锛氱洿鎺ヨВ鏋?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++    parsed = _try_parse_json_array(response.strip(), expected_ids)
++    if parsed is not None:
++        return _apply_rerank_results(parsed, documents)
++
++    # 鈹€鈹€ 绛栫暐 2锛氭鍒欐彁鍙?JSON 鏁扮粍 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++    match = re.search(r'\[[\s\S]*?\]', response)
++    if match:
++        parsed = _try_parse_json_array(match.group(), expected_ids)
++        if parsed is not None:
++            return _apply_rerank_results(parsed, documents)
++
++    # 鈹€鈹€ 绛栫暐 3锛氶檷绾ч粯璁ゅ垎鏁?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++    logger.warning("LLM 绮炬帓鍝嶅簲瑙ｆ瀽澶辫触锛屼娇鐢ㄩ粯璁ゅ垎鏁?)
++    return _default_scored_docs(documents)
++
++
++def _try_parse_json_array(
++    text: str,
++    expected_ids: set,
++) -> Optional[List[RerankResult]]:
++    """灏濊瘯灏嗘枃鏈В鏋愪负 RerankResult 鍒楄〃"""
+     try:
+-        response = await call_qwen_chat(
+-            messages=messages,
+-            temperature=0.1,  # 浣庢俯搴︾‘淇濊瘎鍒嗙ǔ瀹?-            max_tokens=200,
++        data = json.loads(text)
++    except (json.JSONDecodeError, ValueError):
++        return None
++
++    if not isinstance(data, list) or not data:
++        return None
++
++    results = []
++    for item in data:
++        if not isinstance(item, dict):
++            continue
++        ref = item.get("reference", "")
++        if ref not in expected_ids:
++            continue
++        relevance = max(0, min(10, int(item.get("relevance", 0))))
++        completeness = max(0, min(10, int(item.get("completeness", 0))))
++        reason = str(item.get("reason", ""))
++        results.append(RerankResult(
++            reference=ref,
++            relevance=relevance,
++            completeness=completeness,
++            reason=reason,
++        ))
++
++    return results if results else None
++
++
++def _apply_rerank_results(
++    rerank_results: List[RerankResult],
++    documents: List[EvidenceItem],
++) -> List[EvidenceItem]:
++    """灏?RerankResult 搴旂敤鍒?EvidenceItem 鍒楄〃锛岃绠?final_score 骞舵帓搴?""
++    score_map = {r.reference: r for r in rerank_results}
++    scored_docs = []
++
++    for doc in documents:
++        doc_copy = doc.model_copy()
++        result = score_map.get(doc.doc_id)
++        if result:
++            doc_copy.rerank_score = _compute_final_score(
++                doc_copy, result.relevance, result.completeness
++            )
++        else:
++            # 鏈 LLM 璇勫垎鐨勬枃妗ｇ粰榛樿鍒?+            doc_copy.rerank_score = _compute_final_score(doc_copy, 5, 5)
++        scored_docs.append(doc_copy)
++
++    scored_docs.sort(key=lambda d: d.rerank_score or 0, reverse=True)
++    return scored_docs
++
++
++def _default_scored_docs(documents: List[EvidenceItem]) -> List[EvidenceItem]:
++    """瑙ｆ瀽鍏ㄩ儴澶辫触鏃剁殑闄嶇骇锛氱粰鎵€鏈夋枃妗ｉ粯璁や腑绛夊垎鏁?""
++    result = []
++    for doc in documents:
++        doc_copy = doc.model_copy()
++        doc_copy.rerank_score = _compute_final_score(doc_copy, 5, 5)
++        result.append(doc_copy)
++    return result
++
++
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 涓诲叆鍙ｏ細涓ら樁娈甸噸鎺?+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++async def two_stage_rerank(
++    query: str,
++    documents: List[EvidenceItem],
++    top_k: int = 5,
++) -> Tuple[List[EvidenceItem], bool]:
++    """涓ら樁娈甸噸鎺掞細涓撶敤 reranker 绮楁帓 + LLM 绮炬帓
++
++    Args:
++        query: 鏌ヨ鏂囨湰
++        documents: 鍊欓€夎瘉鎹垪琛紙EvidenceItem锛?+        top_k: 鏈€缁堣繑鍥炵殑鏂囨。鏁?+
++    Returns:
++        (reranked_documents, degraded)
++        degraded: True 琛ㄧず鏌愰樁娈甸檷绾?+    """
++    if not documents or not query or not query.strip():
++        return documents[:top_k] if documents else [], False
++
++    degraded = False
++    candidates = documents[:MAX_RERANK_INPUT]
++
++    # 涓烘瘡涓枃妗ｈ绠?authority 鍜?freshness 鍒嗘暟
++    for doc in candidates:
++        doc.authority_score = _compute_authority_score(doc)
++        doc.freshness_score = _compute_freshness_score(doc)
++
++    # Stage 1: 涓撶敤 reranker 绮楁帓锛?0 鈫?10锛?+    try:
++        candidates = await dedicated_rerank(
++            query, candidates, top_k=LLM_RERANK_INPUT * 2
+         )
++    except Exception as e:
++        logger.warning(f"涓撶敤 reranker 澶辫触锛屼娇鐢?RRF 鎺掑簭: {e}")
++        candidates = candidates[:LLM_RERANK_INPUT]
++        degraded = True
++
++    # Stage 2: LLM 绮炬帓锛?0 鈫?5锛?+    final: List[EvidenceItem] = []
++    try:
++        final = await _llm_fine_rerank(
++            query, candidates[:LLM_RERANK_INPUT], top_k=top_k
++        )
++    except Exception as e:
++        logger.warning(f"LLM 绮炬帓澶辫触锛屼娇鐢ㄤ笓鐢?reranker 缁撴灉: {e}")
++        final = candidates[:top_k]
++        degraded = True
++
++    # 濡傛灉涓よ€呴兘澶辫触
++    if degraded and not final:
++        final = documents[:top_k]
++
++    logger.info(
++        f"涓ら樁娈甸噸鎺掑畬鎴愶細{len(documents)} 鏉″€欓€?鈫?"
++        f"绮楁帓 {min(len(candidates), LLM_RERANK_INPUT * 2)} 鏉?鈫?"
++        f"绮炬帓杩斿洖 {len(final)} 鏉★紙degraded={degraded}锛?
++    )
++
++    return final, degraded
+ 
+-        # 瑙ｆ瀽璇勫垎鏁扮粍
+-        scores = _parse_scores(response, len(candidates))
+ 
+-        if scores is None:
+-            logger.warning("閲嶆帓搴忚瘎鍒嗚В鏋愬け璐ワ紝淇濇寔鍘熷鎺掑簭")
+-            return documents[:top_k]
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 鏃ф帴鍙ｅ吋瀹癸紙淇濈暀鍘熺鍚嶏紝鍐呴儴杞皟 two_stage_rerank锛?+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++async def rerank_documents(
++    query: str,
++    documents: List[Dict],
++    top_k: int = 5,
++    threshold: float = RELEVANCE_THRESHOLD,
++) -> List[Dict]:
++    """浣跨敤涓ら樁娈甸噸鎺掑簭瀵规绱㈢粨鏋滆繘琛岄噸鎺掑簭锛堟棫鎺ュ彛鍏煎锛? 
+-        # 涓烘瘡涓枃妗ｉ檮鍔犻噸鎺掑簭鍒嗘暟
+-        scored_docs = []
+-        for doc, score in zip(candidates, scores):
+-            doc_copy = dict(doc)
+-            doc_copy["rerank_score"] = score
+-            scored_docs.append(doc_copy)
++    鍐呴儴灏?dict 鍒楄〃杞崲涓?EvidenceItem锛岃皟鐢?two_stage_rerank锛?+    鍐嶅皢缁撴灉杞洖 dict 鏍煎紡銆? 
+-        # 杩囨护浣庣浉鍏虫€ф枃妗?-        filtered_docs = [d for d in scored_docs if d["rerank_score"] >= threshold]
++    Args:
++        query: 鏌ヨ鏂囨湰
++        documents: 鍊欓€夋枃妗ｅ垪琛紝姣忎釜鏂囨。闇€鍖呭惈 "text" 瀛楁
++        top_k: 杩斿洖鐨勬渶澶ф枃妗ｆ暟
++        threshold: 鏈€浣庣浉鍏虫€у垎鏁伴槇鍊硷紙鍏煎鍙傛暟锛屼袱闃舵妯″紡涓嬩笉寮哄埗杩囨护锛? 
+-        # 鎸夐噸鎺掑簭鍒嗘暟闄嶅簭鎺掑垪
+-        filtered_docs.sort(key=lambda x: x["rerank_score"], reverse=True)
++    Returns:
++        閲嶆帓搴忓悗鐨勬枃妗ｅ垪琛紙dict 鏍煎紡锛夛紝姣忎釜鏂囨。澧炲姞 "rerank_score" 瀛楁
++    """
++    if not documents or not query or not query.strip():
++        return documents[:top_k] if documents else []
+ 
+-        logger.info(
+-            f"Cross-Encoder 閲嶆帓搴忓畬鎴愶細{len(candidates)} 鏉″€欓€?鈫?"
+-            f"杩囨护鍚?{len(filtered_docs)} 鏉★紙闃堝€?{threshold}锛夛紝杩斿洖 top_{top_k}"
++    # dict 鈫?EvidenceItem
++    evidence_items = []
++    for doc in documents:
++        item = EvidenceItem(
++            doc_id=doc.get("doc_id", doc.get("id", str(len(evidence_items)))),
++            text=doc.get("text", ""),
++            source=doc.get("source", ""),
++            page=doc.get("page"),
++            heading_path=doc.get("heading_path", ""),
++            organization=doc.get("organization"),
++            year=doc.get("year"),
++            vector_score=doc.get("vector_score"),
++            bm25_score=doc.get("bm25_score"),
++            rrf_score=doc.get("rrf_score"),
+         )
++        evidence_items.append(item)
++
++    reranked, degraded = await two_stage_rerank(query, evidence_items, top_k=top_k)
++
++    # EvidenceItem 鈫?dict
++    result = []
++    for item in reranked:
++        doc_dict = item.model_dump(exclude_none=False)
++        # 淇濈暀鍘熷鏂囨。涓彲鑳芥惡甯︾殑棰濆瀛楁
++        for key in ("text", "source", "page", "heading_path", "rerank_score"):
++            if key in doc_dict:
++                continue
++        result.append(doc_dict)
++
++    logger.info(
++        f"rerank_documents锛堝吋瀹规帴鍙ｏ級瀹屾垚锛歿len(documents)} 鈫?{len(result)} 鏉?
++        f"锛坉egraded={degraded}锛?
++    )
+ 
+-        return filtered_docs[:top_k]
++    return result
+ 
+-    except Exception as e:
+-        logger.warning(f"Cross-Encoder 閲嶆帓搴忓け璐ワ紝淇濇寔鍘熷鎺掑簭: {e}")
+-        return documents[:top_k]
+ 
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++# 鏃х増璇勫垎瑙ｆ瀽锛堜繚鐣欎緵鍙兘鐨勭洿鎺ヤ娇鐢ㄥ満鏅級
++# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+-def _parse_scores(response: str, expected_count: int) -> List[int]:
+-    """浠?LLM 鍝嶅簲涓В鏋愯瘎鍒嗘暟缁?+def _parse_scores(response: str, expected_count: int) -> Optional[List[int]]:
++    """浠?LLM 鍝嶅簲涓В鏋愯瘎鍒嗘暟缁勶紙鏃х増鍏煎锛? 
+     Args:
+         response: LLM 鍘熷鍝嶅簲鏂囨湰

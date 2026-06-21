@@ -19,6 +19,12 @@ from app.services.qwen_client import call_qwen_chat
 from app.services.rag.embeddings import get_embedding, get_embeddings
 from app.services.rag.bm25_search import get_bm25_index
 from app.services.rag.reranker import rerank_documents
+from app.services.rag.types import (
+    EvidenceItem, RetrievalBundle, RetrievalQuery,
+    MIN_CANDIDATE_COUNT, MIN_QUERY_TYPE_COVERAGE, MIN_RRF_SCORE, MIN_SOURCE_COUNT,
+    MAX_MQE_EXPANSIONS, MAX_HYDE_CALLS, MAX_RAG_CANDIDATES,
+)
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +235,18 @@ async def hyde_retrieve(query: str, top_k: int = 5) -> List[Dict]:
                     "source": metadata.get("source", "未知"),
                     "page": metadata.get("page", 0),
                     "score": round(score, 4),
+                    "heading_path": metadata.get("heading_path", ""),
+                    "content_type": metadata.get("content_type", ""),
+                    "organization": metadata.get("organization"),
+                    "year": metadata.get("year"),
+                    "version": metadata.get("version"),
+                    "document_type": metadata.get("document_type"),
+                    "departments": metadata.get("departments"),
+                    "disease_tags": metadata.get("disease_tags"),
+                    "population": metadata.get("population"),
+                    "recommendation_level": metadata.get("recommendation_level"),
+                    "evidence_level": metadata.get("evidence_level"),
+                    "metadata_source": metadata.get("metadata_source"),
                 })
 
         logger.info(f"HyDE 检索完成：返回 {len(evidences)} 条结果")
@@ -376,6 +394,45 @@ def reciprocal_rank_fusion(
     return final_results
 
 
+async def hybrid_recall(
+    query: str,
+    top_k: int = 10,
+) -> tuple:
+    """基础混合召回：BM25 + 向量 + RRF，不含重排序
+
+    Args:
+        query: 查询文本
+        top_k: 返回条数
+
+    Returns:
+        (vector_results, bm25_results) 原始双路结果
+    """
+    loop = asyncio.get_event_loop()
+    recall_k = top_k * 2  # 粗召回数量
+
+    async def vector_search() -> List[Dict]:
+        try:
+            return await retrieve_medical_evidence(query, top_k=recall_k)
+        except Exception as e:
+            logger.warning(f"hybrid_recall-向量通道失败: {e}")
+            return []
+
+    def bm25_search_sync() -> List[Dict]:
+        try:
+            index = get_bm25_index()
+            return index.search(query, top_k=recall_k)
+        except Exception as e:
+            logger.warning(f"hybrid_recall-BM25通道失败: {e}")
+            return []
+
+    vector_results, bm25_results = await asyncio.gather(
+        vector_search(),
+        loop.run_in_executor(None, bm25_search_sync),
+    )
+
+    return vector_results, bm25_results
+
+
 async def hybrid_retrieve(
     query: str,
     top_k: int = 5,
@@ -508,96 +565,354 @@ async def retrieve_with_mqe(
     3. 合并去重所有结果
     4. Cross-Encoder 重排序取 top_k
 
+    当 enable_mqe=True 且 enable_hybrid=True 时，内部转调 tiered_retrieve 实现分级检索。
+
     Args:
         query: 原始医学查询文本
         top_k: 返回条数
         enable_mqe: 是否启用多查询扩展（False 则退化为单查询）
         enable_hybrid: 是否启用混合检索（False 则仅用向量检索）
         enable_rerank: 是否启用 Cross-Encoder 重排序
+        enable_hyde: 是否启用 HyDE
 
     Returns:
         合并去重后的医学证据列表
     """
-    start_time = time.time()
-
-    # 如果禁用 MQE 或查询为空，直接走混合检索
+    # 禁用 MQE 或非混合检索时，走原始路径
     if not enable_mqe or not query or not query.strip():
         logger.debug("MQE 已禁用或查询为空")
         if enable_hybrid:
             return await hybrid_retrieve(query, top_k=top_k, enable_rerank=enable_rerank, enable_hyde=enable_hyde)
         return await retrieve_medical_evidence(query, top_k=top_k)
 
-    # 1. 并行执行：原始查询的混合检索 + LLM 查询扩展
-    async def base_search():
-        if enable_hybrid:
-            return await hybrid_retrieve(query, top_k=top_k, enable_rerank=False, enable_hyde=enable_hyde)
-        return await retrieve_medical_evidence(query, top_k=top_k)
+    # 使用分级检索（tiered_retrieve）
+    queries = [RetrievalQuery(query_type="diagnosis", text=query, source="clinical_facts")]
+    bundle = await tiered_retrieve(queries, top_k_per_query=top_k)
 
-    base_results, expanded_queries = await asyncio.gather(
-        base_search(),
-        expand_queries(query, n=3)
+    # 将 EvidenceItem 转回 dict 格式以保持旧接口兼容
+    result = []
+    for item in bundle.candidates[:top_k]:
+        doc_dict = {
+            "doc_id": item.doc_id,
+            "text": item.text,
+            "source": item.source,
+            "page": item.page,
+            "heading_path": item.heading_path,
+            "score": item.rrf_score or item.vector_score or item.bm25_score or 0,
+            "rrf_score": item.rrf_score,
+            "bm25_score": item.bm25_score,
+            "vector_score": item.vector_score,
+        }
+        result.append(doc_dict)
+
+    logger.info(
+        f"retrieve_with_mqe（分级检索）：level={bundle.level_used}，"
+        f"status={bundle.status}，返回 {len(result)} 条"
     )
 
-    # 实体锁定第二层防护：通过 embedding 相似度阈值过滤语义漂移的扩展查询
-    # 确保疾病、药物、检查指标等核心实体不被替换，避免语义偏离原始医学意图
-    if expanded_queries:
-        expanded_queries = await _filter_by_embedding_similarity(query, expanded_queries)
-
-    all_results = list(base_results)
-
-    if expanded_queries:
-        logger.info(f"MQE 扩展查询 {len(expanded_queries)} 条，并行检索中...")
-
-        async def safe_retrieve(q: str) -> List[Dict]:
-            try:
-                if enable_hybrid:
-                    return await hybrid_retrieve(q, top_k=top_k, enable_rerank=False, enable_hyde=enable_hyde)
-                return await retrieve_medical_evidence(q, top_k=top_k)
-            except Exception as e:
-                logger.warning(f"扩展查询检索失败: {e}")
-                return []
-
-        expanded_results_list = await asyncio.gather(
-            *[safe_retrieve(q) for q in expanded_queries]
-        )
-        for results in expanded_results_list:
-            all_results.extend(results)
-
-    total_results = len(all_results)
-
-    # 3. 去重（优先用 doc_id，降级用 text[:100]）
-    seen_texts = {}
-    for evidence in all_results:
-        text = evidence.get("text", "")
-        if not text:
-            continue
-        dedup_key = evidence.get("doc_id") or (text[:100] if len(text) > 100 else text)
-        if dedup_key in seen_texts:
-            if evidence.get("score", 0) > seen_texts[dedup_key].get("score", 0):
-                seen_texts[dedup_key] = evidence
-        else:
-            seen_texts[dedup_key] = evidence
-
-    deduped_results = list(seen_texts.values())
-    deduped_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    # 4. Cross-Encoder 重排序
-    if enable_rerank and len(deduped_results) > top_k:
-        final_results = await rerank_documents(
+    # 如果需要重排序且结果足够，调用重排序
+    if enable_rerank and len(result) > 1:
+        result = await rerank_documents(
             query=query,
-            documents=deduped_results,
+            documents=result,
             top_k=top_k,
             threshold=4,
         )
-    else:
-        final_results = deduped_results[:top_k]
 
-    elapsed_time = time.time() - start_time
-    logger.info(
-        f"MQE+混合检索总结：扩展 {len(expanded_queries)} 条，"
-        f"原始 {total_results} 条，去重 {len(deduped_results)} 条，"
-        f"最终 {len(final_results)} 条，rerank={'ON' if enable_rerank else 'OFF'}，"
-        f"耗时 {elapsed_time:.3f}s"
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 分级检索：辅助函数
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _dict_to_evidence(
+    dicts: list,
+    query_type: str,
+    retrieved_via: str = "base",
+) -> list:
+    """将 dict 格式的检索结果转为 EvidenceItem"""
+    items = []
+    for d in dicts:
+        item = EvidenceItem(
+            doc_id=d.get("doc_id", d.get("id", "")),
+            text=d.get("text", ""),
+            source=d.get("source", "未知"),
+            page=d.get("page"),
+            heading_path=d.get("heading_path", ""),
+            query_types=[query_type],
+            vector_score=d.get("score") if retrieved_via == "base" else None,
+            bm25_score=d.get("bm25_score"),
+            rrf_score=d.get("rrf_score"),
+            # 从 metadata 提取增强字段（如果存在）
+            organization=d.get("organization"),
+            year=d.get("year") if isinstance(d.get("year"), int) and d.get("year", 0) > 0 else None,
+            version=d.get("version"),
+            document_type=d.get("document_type"),
+            departments=d.get("departments"),
+            disease_tags=d.get("disease_tags"),
+            population=d.get("population"),
+            content_type=d.get("content_type"),
+            recommendation_level=d.get("recommendation_level"),
+            evidence_level=d.get("evidence_level"),
+            retrieved_via=retrieved_via,
+        )
+        items.append(item)
+    return items
+
+
+def _assess_retrieval(
+    candidates: list,
+    query_types_with_hits: set,
+    all_query_types: set,
+) -> str:
+    """综合判断召回是否充分
+
+    Returns:
+        "sufficient" | "insufficient" | "unavailable"
+    """
+    if not candidates:
+        return "unavailable"
+
+    # 候选数量
+    if len(candidates) < MIN_CANDIDATE_COUNT:
+        return "insufficient"
+
+    # 查询类型覆盖率
+    if len(query_types_with_hits) < MIN_QUERY_TYPE_COVERAGE:
+        return "insufficient"
+
+    # 来源多样性
+    sources = set(c.source for c in candidates)
+    if len(sources) < MIN_SOURCE_COUNT:
+        return "insufficient"
+
+    # 分数检查（至少有一条高分结果）
+    max_score = max(
+        (c.rrf_score or c.vector_score or c.bm25_score or 0) for c in candidates
     )
+    if max_score < MIN_RRF_SCORE:
+        return "insufficient"
 
-    return final_results
+    return "sufficient"
+
+
+def _merge_evidence(
+    *result_lists: list,
+) -> list:
+    """合并多路证据并去重（按 doc_id），保留最高分数"""
+    seen: dict = {}
+
+    for results in result_lists:
+        for item in results:
+            key = item.doc_id
+            if key in seen:
+                existing = seen[key]
+                # 合并 query_types
+                existing.query_types = list(set(existing.query_types + item.query_types))
+                # 保留各阶段最高分
+                if (item.vector_score or 0) > (existing.vector_score or 0):
+                    existing.vector_score = item.vector_score
+                if (item.bm25_score or 0) > (existing.bm25_score or 0):
+                    existing.bm25_score = item.bm25_score
+                if (item.rrf_score or 0) > (existing.rrf_score or 0):
+                    existing.rrf_score = item.rrf_score
+            else:
+                seen[key] = item.model_copy()
+
+    # 按 rrf_score 降序排列
+    results = list(seen.values())
+    results.sort(key=lambda x: x.rrf_score or 0, reverse=True)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 分级检索主入口
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def tiered_retrieve(
+    queries: list,
+    top_k_per_query: int = 10,
+    candidate_limit: int = MAX_RAG_CANDIDATES,
+) -> RetrievalBundle:
+    """分级检索：Level 1 (BM25+向量+RRF) → Level 2 (MQE) → Level 3 (HyDE)
+
+    每个级别判断召回是否充分，足够则提前返回。
+
+    Args:
+        queries: 检索查询列表（通常包含 case/diagnosis/treatment 三类）
+        top_k_per_query: 每个查询的召回条数
+        candidate_limit: 最终候选上限
+
+    Returns:
+        RetrievalBundle 包含状态、级别、查询和候选证据
+    """
+    # 空查询防御
+    if not queries:
+        logger.warning("tiered_retrieve called with empty queries list")
+        return RetrievalBundle(
+            status="unavailable",
+            level_used="base",
+            queries=[],
+            candidates=[],
+            trace={"error": "empty_queries"},
+        )
+
+    start = time.monotonic()
+    trace = {
+        "index_version": settings.ACTIVE_INDEX_VERSION,
+        "queries": [{"type": q.query_type, "text": q.text[:100], "source": q.source} for q in queries],
+        "levels_attempted": [],
+        "retrieval_level": "base",
+        "candidate_count": 0,
+        "rerank_input_count": 0,
+        "llm_rerank_count": 0,
+        "retrieval_status": "candidate",
+        "timing": {
+            "embedding_ms": 0,
+            "retrieval_ms": 0,
+            "rerank_ms": 0,
+            "llm_ms": 0,
+        },
+        "estimated_cost": 0.0,
+        "degraded": False,
+    }
+
+    all_query_types = set(q.query_type for q in queries)
+    query_types_with_hits: set = set()
+    all_candidates: list = []
+    level_used = "base"
+
+    # ── Level 1: 基础混合召回 ──
+    trace["levels_attempted"].append("base")
+    for query in queries:
+        vector_results, bm25_results = await hybrid_recall(query.text, top_k=top_k_per_query)
+
+        # RRF 融合
+        if vector_results and bm25_results:
+            fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k_per_query)
+        elif vector_results:
+            fused = vector_results[:top_k_per_query]
+        elif bm25_results:
+            fused = bm25_results[:top_k_per_query]
+        else:
+            continue
+
+        if fused:
+            query_types_with_hits.add(query.query_type)
+
+        # 转换并合并
+        evidence_items = _dict_to_evidence(fused, query.query_type, retrieved_via="base")
+        # 为 RRF 融合的结果设置 rrf_score
+        for item in evidence_items:
+            if item.rrf_score is None:
+                raw = next((f for f in fused if f.get("doc_id") == item.doc_id), None)
+                if raw:
+                    item.rrf_score = raw.get("rrf_score", raw.get("score", 0))
+
+        all_candidates = _merge_evidence(all_candidates, evidence_items)
+
+    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
+    if status == "sufficient":
+        elapsed = time.monotonic() - start
+        trace["total_ms"] = round(elapsed * 1000, 1)
+        trace["timing"]["retrieval_ms"] = trace["total_ms"]
+        trace["retrieval_level"] = "base"
+        trace["candidate_count"] = len(all_candidates[:candidate_limit])
+        trace["retrieval_status"] = "candidate"
+        return RetrievalBundle(
+            status="candidate",
+            level_used="base",
+            queries=queries,
+            candidates=all_candidates[:candidate_limit],
+            trace=trace,
+        )
+
+    # ── Level 2: MQE ──
+    trace["levels_attempted"].append("mqe")
+    level_used = "mqe"
+    mqe_expansion_count = 0
+
+    for query in queries:
+        if mqe_expansion_count >= MAX_MQE_EXPANSIONS * len(queries):
+            break
+
+        expanded = await expand_queries(query.text, n=2)
+        if not expanded:
+            continue
+
+        # 语义漂移过滤
+        expanded = await _filter_by_embedding_similarity(query.text, expanded)
+
+        for eq in expanded:
+            mqe_expansion_count += 1
+            vector_results, bm25_results = await hybrid_recall(eq, top_k=top_k_per_query)
+
+            if vector_results and bm25_results:
+                fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k_per_query)
+            elif vector_results:
+                fused = vector_results[:top_k_per_query]
+            elif bm25_results:
+                fused = bm25_results[:top_k_per_query]
+            else:
+                continue
+
+            if fused:
+                query_types_with_hits.add(query.query_type)
+
+            evidence_items = _dict_to_evidence(fused, query.query_type, retrieved_via="mqe")
+            all_candidates = _merge_evidence(all_candidates, evidence_items)
+
+            if len(all_candidates) >= candidate_limit:
+                break
+
+    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
+    if status == "sufficient":
+        elapsed = time.monotonic() - start
+        trace["total_ms"] = round(elapsed * 1000, 1)
+        trace["timing"]["retrieval_ms"] = trace["total_ms"]
+        trace["mqe_expansions"] = mqe_expansion_count
+        trace["retrieval_level"] = "mqe"
+        trace["candidate_count"] = len(all_candidates[:candidate_limit])
+        trace["retrieval_status"] = "candidate"
+        return RetrievalBundle(
+            status="candidate",
+            level_used="mqe",
+            queries=queries,
+            candidates=all_candidates[:candidate_limit],
+            trace=trace,
+        )
+
+    # ── Level 3: HyDE（每次评估最多 1 次）──
+    trace["levels_attempted"].append("hyde")
+    level_used = "hyde"
+
+    # 选择最有价值的查询做 HyDE（优先 case 类型）
+    hyde_query = next((q for q in queries if q.query_type == "case"), queries[0])
+    try:
+        hyde_results = await hyde_retrieve(hyde_query.text, top_k=top_k_per_query)
+        if hyde_results:
+            query_types_with_hits.add(hyde_query.query_type)
+            evidence_items = _dict_to_evidence(hyde_results, hyde_query.query_type, retrieved_via="hyde")
+            all_candidates = _merge_evidence(all_candidates, evidence_items)
+    except Exception as e:
+        logger.warning(f"HyDE 检索失败: {e}")
+
+    # 最终评估
+    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
+    elapsed = time.monotonic() - start
+    trace["total_ms"] = round(elapsed * 1000, 1)
+    trace["timing"]["retrieval_ms"] = trace["total_ms"]
+    trace["mqe_expansions"] = mqe_expansion_count
+    trace["hyde_calls"] = 1
+    trace["retrieval_level"] = "hyde"
+    trace["candidate_count"] = len(all_candidates[:candidate_limit])
+    trace["retrieval_status"] = "candidate" if status == "sufficient" else status
+
+    return RetrievalBundle(
+        status="candidate" if status == "sufficient" else status,
+        level_used=level_used,
+        queries=queries,
+        candidates=all_candidates[:candidate_limit],
+        trace=trace,
+    )

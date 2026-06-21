@@ -1,0 +1,831 @@
+﻿diff --git a/backend/app/services/agents/knowledge_agent.py b/backend/app/services/agents/knowledge_agent.py
+index aab6437..dc3c93f 100644
+--- a/backend/app/services/agents/knowledge_agent.py
++++ b/backend/app/services/agents/knowledge_agent.py
+@@ -1,121 +1,333 @@
+ # -*- coding: utf-8 -*-
+-"""鍖诲鐭ヨ瘑鏍稿鏅鸿兘浣?鈥?鍩轰簬 RAG 妫€绱㈠寮轰笌涓€鑷存€ц瘎浼扮殑鍖诲鍚堢悊鎬ц瘎浼?""
++"""鍖诲鐭ヨ瘑鏍稿鏅鸿兘浣?鈥?鍩轰簬 RAG 鍒嗙骇妫€绱€佷袱闃舵閲嶆帓涓庝竴鑷存€ц瘎浼?+
++閲嶆瀯鍚庣殑娴佺▼锛?+1. 缁撴瀯鍖栫梾渚嬩簨瀹炴彁鍙栵紙extract_clinical_facts锛?+2. 涓夌被鏌ヨ鏋勫缓锛坆uild_queries锛歝ase / diagnosis / treatment锛?+3. 鍒嗙骇妫€绱紙tiered_retrieve锛歀evel1鈫?鈫? 绾ц仈锛?+4. 涓ら樁娈甸噸鎺掑簭锛坱wo_stage_rerank锛氫笓鐢?reranker + LLM 绮炬帓锛?+5. LLM 涓€鑷存€у垽鏂?+ 寮曠敤缁戝畾
++6. 鎷掔瓟閫昏緫 + 璇勫垎鏄犲皠
++"""
+ 
+ import json
+ import re
++import time
+ import logging
++from typing import Optional
++
+ from app.services.qwen_client import call_qwen_chat
+-from app.services.rag.retriever import retrieve_medical_evidence, retrieve_with_mqe, hybrid_retrieve, format_evidence_for_verification
++from app.services.rag.types import (
++    RetrievalQuery,
++    ClinicalFacts,
++    EvidenceItem,
++    RetrievalBundle,
++    Citation,
++    KnowledgeAssessment,
++)
++from app.services.rag.retriever import tiered_retrieve
++from app.services.rag.reranker import two_stage_rerank
++
++logger = logging.getLogger(__name__)
++
++# 鈹€鈹€ System Prompt锛堜竴鑷存€ц瘎浼帮級鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+-# 鈹€鈹€ System Prompt 鈹€鈹€
+-SYSTEM_PROMPT = """浣犳槸涓€鍚嶅尰瀛︾煡璇嗘牳瀵逛笓瀹躲€備綘鐨勪换鍔℃槸瀵规瘮鍖荤敓鐨勮瘖鏂拰娌荤枟鏂规涓庢绱㈠埌鐨勪复搴婃寚鍗楄瘉鎹紝璇勪及鍏朵竴鑷存€с€?+CONSISTENCY_SYSTEM_PROMPT = """浣犳槸涓€鍚嶅尰瀛︾煡璇嗘牳瀵逛笓瀹躲€備綘鐨勪换鍔℃槸瀵规瘮鍖荤敓鐨勮瘖鏂拰娌荤枟鏂规涓庢绱㈠埌鐨勪复搴婃寚鍗楄瘉鎹紝璇勪及鍏朵竴鑷存€с€? 
+-璇勪及鏍囧噯锛?+璇勪及缁村害锛? 1. 璇婃柇涓€鑷存€э細鍖荤敓鐨勮瘖鏂槸鍚︿笌鍖诲璇佹嵁鏀寔鐨勮瘖鏂柟鍚戜竴鑷? 2. 娌荤枟鍚堢悊鎬э細娌荤枟鏂规鏄惁绗﹀悎涓村簥鎸囧崡鎺ㄨ崘鐨勬爣鍑嗘不鐤楁柟妗? 3. 绂佸繉鐥囨鏌ワ細娌荤枟鏂规涓槸鍚﹀瓨鍦ㄥ尰瀛﹁瘉鎹槑纭寚鍑虹殑绂佸繉鎴栦笉褰撲箣澶? 4. 閬楁紡妫€鏌ワ細鏄惁閬楁紡浜嗗尰瀛﹁瘉鎹缓璁殑蹇呰妫€鏌ユ垨璇勪及
+ 
+-杈撳嚭鏍煎紡锛堜弗鏍糐SON锛夛細
++杈撳嚭鏍煎紡锛堜弗鏍?JSON锛夛細
+ {
+-  "consistency": true/false,  // 璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁鏄惁涓€鑷?-  "confidence": 0.85,         // 缃俊搴?0-1锛岃〃绀哄垽鏂殑纭畾绋嬪害
+-  "evidence": "鐢ㄤ簬鏍稿鐨勬牳蹇冨尰瀛﹁瘉鎹唴瀹规憳瑕侊紝鍖呮嫭鐩稿叧鎸囧崡鐨勫叧閿帹鑽愬唴瀹?
++  "consistency": "supports" | "contradicts" | "mixed" | "undetermined",
++  "confidence": 0.0-1.0,
++  "analysis": "200瀛椾互鍐呯殑鍒嗘瀽鏂囨湰锛屾杩颁竴鑷存€у拰鍏抽敭鍙戠幇",
++  "key_findings": ["鍙戠幇1", "鍙戠幇2"]
+ }
+ 
+-娉ㄦ剰锛?-- consistency 涓?true 琛ㄧず璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁鍩烘湰涓€鑷?-- consistency 涓?false 琛ㄧず瀛樺湪鏄庢樉涓嶄竴鑷存垨涓嶅綋涔嬪
+-- confidence 琛ㄧず浣犲鍒ゆ柇鐨勭‘瀹氱▼搴︼紝璇佹嵁瓒婂厖鍒嗐€佸垽鏂秺鏄庣‘鍒?confidence 瓒婇珮
+-- evidence 瀛楁搴旂畝娲佹鎷敤浜庤瘎浼扮殑鏍稿績鍖诲璇佹嵁瑕佺偣
+-- 杈撳嚭绾疛SON锛屼笉瑕佸寘鍚换浣昺arkdown鏍煎紡鎴栭澶栬鏄?""
+-
+-# 鈹€鈹€ Few-shot 绀轰緥 鈹€鈹€
+-FEWSHOT_USER_1 = """銆愭偅鑰呬俊鎭€?-濮撳悕: 寮爔x, 骞撮緞: 65, 鎬у埆: male
+-涓昏瘔: 鍜冲椊銆佸挸鐥?鍛紝鐥颁腑甯﹁3澶?-鐥呭彶: 鍚哥儫鍙?0骞达紝姣忓ぉ20鏀?-
+-銆愰棶璇婂璇濊褰曘€?-鍖荤敓: 鍜冲椊澶氶暱鏃堕棿浜嗭紵
+-鎮ｈ€? 鏈変袱鍛ㄤ簡锛屾渶杩?澶╃棸閲岃繕鏈夎銆?-鍖荤敓: 鏈夎兏鐥涙垨鍛煎惛鍥伴毦鍚楋紵
+-鎮ｈ€? 鏈夌偣鑳搁椃锛屼絾涓嶅お鐤笺€?-鍖荤敓: 鍚哥儫鍚楋紵
+-鎮ｈ€? 鍚镐簡40骞翠簡锛屼竴澶╀竴鍖呫€?-
+-銆愬尰鐢熻瘖鏂€?-鑲虹檶锛堢枒浼间腑澶瀷鑲虹檶锛?-
+-銆愭不鐤楁柟妗堛€?-1. 鑳搁儴CT澧炲己鎵弿
+-2. 鏀皵绠￠暅妫€鏌?娲绘
+-3. 鏍规嵁鐥呯悊缁撴灉鍒跺畾鍚庣画娌荤枟鏂规锛堟墜鏈?鍖栫枟/鏀剧枟锛?-
+-銆愭绱㈠埌鐨勫尰瀛﹁瘉鎹€?-1. NCCN闈炲皬缁嗚優鑲虹檶鎸囧崡2025锛氬浜庣枒浼艰偤鐧屾偅鑰咃紝鎺ㄨ崘杩涜鑳搁儴CT澧炲己鎵弿浠ヨ瘎浼拌偪鐦や綅缃拰鍒嗘湡銆傚浜庝腑澶瀷鐥呭彉锛屾敮姘旂闀滄鏌ユ槸鑾峰彇鐥呯悊璇婃柇鐨勯閫夋柟娉曘€?-2. CSCO鑲虹檶璇婄枟鎸囧崡2025锛氱棸涓甫琛€銆侀暱鏈熷惛鐑熷彶鏄偤鐧岀殑楂樺嵄鍥犵礌銆傛帹鑽愬鍙枒鐥呯伓杩涜缁勭粐鐥呯悊瀛︾‘璇婂悗鍐嶅埗瀹氭不鐤楁柟妗堛€?-3. 涓村簥鎸囧崡锛氳偤鐧岃瘖鏂渶瑕佺梾鐞嗙‘璇婏紝褰卞儚瀛︽鏌ュ彧鑳戒綔涓鸿緟鍔╄瘖鏂緷鎹€傛不鐤楀墠搴旀槑纭梾鐞嗙被鍨嬪拰鍒嗘湡銆?""
+-
+-FEWSHOT_ASSISTANT_1 = """{
+-  "consistency": true,
+-  "confidence": 0.92,
+-  "evidence": "NCCN鍜孋SCO鎸囧崡鍧囨帹鑽愶細1锛夊鐤戜技鑲虹檶鎮ｈ€呰繘琛岃兏閮–T澧炲己鎵弿璇勪及锛?锛変腑澶瀷鐥呭彉棣栭€夋敮姘旂闀滄椿妫€鑾峰彇鐥呯悊璇婃柇锛?锛夊己璋冪梾鐞嗙‘璇婃槸鍒跺畾娌荤枟鏂规鐨勫墠鎻愩€傚尰鐢熺殑璇婃柇鎬濊矾绗﹀悎鎸囧崡鎺ㄨ崘鐨勮瘖鏂祦绋嬨€?
+-}"""
+-
+-FEWSHOT_USER_2 = """銆愭偅鑰呬俊鎭€?-濮撳悕: 鏉巟x, 骞撮緞: 45, 鎬у埆: female
+-涓昏瘔: 涓婅吂鐥?鍛紝鍙嶉吀銆佺儳蹇?-鐥呭彶: 鏃㈠線浣撳仴锛屾棤鐗规畩鐥呭彶
+-
+-銆愰棶璇婂璇濊褰曘€?-鍖荤敓: 鑵圭棝鍏蜂綋浣嶇疆鍦ㄥ摢锛?-鎮ｈ€? 灏卞湪蹇冨彛绐濊繖锛屾湁鏃跺€欏弽閰告按銆?-鍖荤敓: 鍚冮キ鍚庡姞閲嶈繕鏄┖鑵规椂閲嶏紵
+-鎮ｈ€? 鍚冨畬楗洿鏄庢樉銆?-鍖荤敓: 鏈夋伓蹇冨憰鍚愬悧锛?-鎮ｈ€? 娌℃湁銆?-
+-銆愬尰鐢熻瘖鏂€?-鎬ユ€ц儍鐐?-
+-銆愭不鐤楁柟妗堛€?-1. 濂ョ編鎷夊攽 20mg bid
+-2. 閾濈⒊閰搁晛鐗?1g tid
+-3. 澶氭綐绔嬮叜 10mg tid锛堜績杩涜儍鍔ㄥ姏锛?-
+-銆愭绱㈠埌鐨勫尰瀛﹁瘉鎹€?-1. CSCO鑳冪檶璇婄枟鎸囧崡2025锛氬浜庢柊鍙戜笂鑵圭棝鐨?5宀佷互涓婃偅鑰咃紝搴旇鎯曡儍鐧屽彲鑳斤紝寤鸿鑳冮暅妫€鏌ユ帓闄ゆ伓鎬х梾鍙樸€傚崟绾寜鑳冪値娌荤枟鍙兘寤惰璇婃柇銆?-2. 涓浗鑳冮绠″弽娴佺梾涓撳鍏辫瘑锛氬弽閰搞€佺儳蹇冦€侀鍚庡姞閲嶇殑涓婅吂鐥涙槸GERD鐨勫吀鍨嬭〃鐜帮紝PPI娌荤枟鏈夋晥锛屼絾闇€鎺掗櫎鍣ㄨ川鎬х梾鍙樸€?-3. 涓村簥鎸囧崡锛?5宀佷互涓婃柊鍙戞秷鍖栦笉鑹棁鐘舵偅鑰咃紝寤鸿鑳冮暅妫€鏌ヤ互鎺掗櫎鑳冪檶绛夊櫒璐ㄦ€х梾鍙橈紝灏ゅ叾瀵逛簬鏈夋姤璀︾棁鐘讹紙浣撻噸涓嬮檷銆佽传琛€銆佸悶鍜藉洶闅剧瓑锛夌殑鎮ｈ€呫€?""
+-
+-FEWSHOT_ASSISTANT_2 = """{
+-  "consistency": false,
+-  "confidence": 0.85,
+-  "evidence": "CSCO鑳冪檶璇婄枟鎸囧崡鏄庣‘鎸囧嚭锛?5宀佷互涓婃柊鍙戜笂鑵圭棝鎮ｈ€呭簲璀︽儠鑳冪檶鍙兘锛屽缓璁儍闀滄鏌ユ帓闄ゆ伓鎬х梾鍙樸€傝鎮ｈ€?5宀侊紝鍑虹幇鏂板彂涓婅吂鐥涚棁鐘讹紝鍖荤敓鐩存帴璇婃柇涓烘€ユ€ц儍鐐庡苟寮€濮嬭嵂鐗╂不鐤楋紝鏈缓璁儍闀滄鏌ユ帓闄ゅ櫒璐ㄦ€х梾鍙橈紝瀛樺湪婕忚瘖椋庨櫓锛屼笉绗﹀悎鎸囧崡鎺ㄨ崘鐨勮瘖鐤楁祦绋嬨€?
+-}"""
+-
+-
+-# 鈹€鈹€ Helper Functions 鈹€鈹€
++璇存槑锛?+- supports锛氳瘖鏂拰娌荤枟鏂规涓庡尰瀛﹁瘉鎹熀鏈竴鑷?+- contradicts锛氬瓨鍦ㄦ槑鏄句笉涓€鑷存垨涓嶅綋涔嬪
++- mixed锛氶儴鍒嗕竴鑷淬€侀儴鍒嗕笉涓€鑷?+- undetermined锛氳瘉鎹笉瓒充互鍋氬嚭鍒ゆ柇
++- confidence 琛ㄧず鍒ゆ柇鐨勭‘瀹氱▼搴?+- 杈撳嚭绾?JSON锛屼笉瑕佸寘鍚?markdown 鏍煎紡鎴栭澶栬鏄?""
++
++
++# 鈹€鈹€ 缁撴瀯鍖栫梾渚嬩簨瀹炴彁鍙?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def extract_clinical_facts(
++    conversation_text: str,
++    patient_info: str,
++    doctor_diagnosis: str,
++    treatment_plan: str,
++) -> ClinicalFacts:
++    """浠庤瘎浼拌緭鍏ヤ腑鎻愬彇缁撴瀯鍖栫梾渚嬩簨瀹?+
++    浣跨敤姝ｅ垯鍜岀畝鍗曡鍒欎粠鎮ｈ€呬俊鎭€佸璇濊褰曘€佽瘖鏂拰娌荤枟鏂规涓?+    鎻愬彇缁撴瀯鍖栧瓧娈碉紝鐢ㄤ簬鏋勫缓涓夌被鐙珛鏌ヨ銆?+    """
++    # 鈹€鈹€ 骞撮緞鍜屾€у埆 鈹€鈹€
++    age: Optional[int] = None
++    gender: Optional[str] = None
++
++    age_match = re.search(r"骞撮緞[:\s锛歖*(\d+)", patient_info)
++    if age_match:
++        age = int(age_match.group(1))
++    else:
++        age_match = re.search(r"(\d+)\s*宀?, patient_info + " " + conversation_text)
++        if age_match:
++            age = int(age_match.group(1))
++
++    gender_match = re.search(r"鎬у埆[:\s锛歖*(male|female|鐢穦濂?", patient_info, re.IGNORECASE)
++    if gender_match:
++        raw = gender_match.group(1)
++        gender = "鐢锋€? if raw in ("male", "鐢?) else "濂虫€?
++    else:
++        if re.search(r"[鐢蜂粬]", patient_info):
++            gender = "鐢锋€?
++        elif re.search(r"[濂冲ス]", patient_info):
++            gender = "濂虫€?
++
++    # 鈹€鈹€ 涓昏瘔 鈹€鈹€
++    chief_complaint = ""
++    cc_match = re.search(r"涓昏瘔[:\s锛歖*(.+?)(?:\n|$)", patient_info)
++    if cc_match:
++        chief_complaint = cc_match.group(1).strip()
++    else:
++        # 浠庡璇濅腑鎻愬彇鎮ｈ€呴娆″彂瑷€
++        patient_msgs = re.findall(r"鎮ｈ€匸:\s锛歖*(.+?)(?:\n|$)", conversation_text)
++        if patient_msgs:
++            chief_complaint = patient_msgs[0].strip()
++
++    # 鈹€鈹€ 鐥囩姸 鈹€鈹€
++    symptoms: list[str] = []
++    # 浠?patient_info 鐨勭棁鐘跺瓧娈垫彁鍙?+    symptoms_match = re.search(r"鐥囩姸[:\s锛歖*(.+?)(?:\n|$)", patient_info)
++    if symptoms_match:
++        raw_symptoms = re.split(r"[銆侊紝,锛?/]", symptoms_match.group(1))
++        symptoms = [s.strip() for s in raw_symptoms if s.strip() and len(s.strip()) >= 2]
++    # 浠庡璇濅腑鎮ｈ€呮彁鍙婄殑鐥囩姸琛ュ厖
++    symptom_keywords = [
++        "鍜冲椊", "鍙戠儹", "澶寸棝", "澶存檿", "鑳搁椃", "鑳哥棝", "蹇冩偢",
++        "鑵圭棝", "鑵硅儉", "鎭跺績", "鍛曞悙", "鑵规郴", "渚跨",
++        "涔忓姏", "娑堢槮", "姘磋偪", "鍛煎惛鍥伴毦", "姘斾績",
++        "灏块", "灏挎€?, "灏跨棝", "琛€灏?,
++        "澶辩湢", "鐒﹁檻", "鎶戦儊", "楹绘湪", "鎶芥悙",
++        "鍑鸿", "鐤肩棝", "鑲胯儉", "鐦欑棐", "鐨柟",
++    ]
++    for kw in symptom_keywords:
++        if kw in conversation_text and kw not in symptoms:
++            symptoms.append(kw)
++
++    # 鈹€鈹€ 鏃堕棿绾?鈹€鈹€
++    timeline: list[str] = []
++    time_patterns = re.findall(r"(\d+[澶╁懆鏈堝勾]|\d+\s*[澶╁懆鏈堝勾]|浠奫澶╂棩]|鏄╗澶╂棩]|\d+灏?鏃跺墠)", conversation_text)
++    timeline = list(dict.fromkeys(time_patterns))  # 鍘婚噸淇濆簭
++
++    # 鈹€鈹€ 鍗遍櫓淇″彿 鈹€鈹€
++    red_flags: list[str] = []
++    red_flag_keywords = [
++        "鍜", "琛€灏?, "渚胯", "鍛曡", "鎰忚瘑闅滅", "鏄忚糠",
++        "鍓х儓澶寸棝", "绐佸彂", "杩涜鎬у姞閲?, "浣撻噸涓嬮檷", "娑堢槮",
++        "楂樼儹涓嶉€€", "鍛煎惛鍥伴毦", "浼戝厠",
++    ]
++    for kw in red_flag_keywords:
++        if kw in conversation_text or kw in patient_info:
++            red_flags.append(kw)
++
++    # 鈹€鈹€ 鍚堝苟鐥?鈹€鈹€
++    comorbidities: list[str] = []
++    comorbidity_keywords = [
++        "楂樿鍘?, "绯栧翱鐥?, "鍐犲績鐥?, "鎴块ⅳ", "鎱㈤樆鑲?, "COPD",
++        "涔欒倽", "涓欒倽", "鑲濈‖鍖?, "鑲惧姛鑳戒笉鍏?, "鐢蹭孩", "鐢插噺",
++        "鍝枠", "鑴戞", "蹇冭“", "璐",
++    ]
++    combined_text = conversation_text + " " + patient_info
++    for kw in comorbidity_keywords:
++        if kw in combined_text:
++            comorbidities.append(kw)
++    # 浠庣梾鍙插瓧娈垫彁鍙?+    history_match = re.search(r"鐥呭彶[:\s锛歖*(.+?)(?:\n|$)", patient_info)
++    if history_match:
++        hist_text = history_match.group(1)
++        for kw in comorbidity_keywords:
++            if kw in hist_text and kw not in comorbidities:
++                comorbidities.append(kw)
++
++    # 鈹€鈹€ 鐢ㄨ嵂 鈹€鈹€
++    medications: list[str] = []
++    med_patterns = [
++        "闃垮徃鍖规灄", "鍗庢硶鏋?, "姘悺鏍奸浄", "鍒╀紣娌欑彮",
++        "浜岀敳鍙岃儘", "鑳板矝绱?, "姘ㄦ隘鍦板钩", "缂矙鍧?, "缇庢墭娲涘皵",
++        "濂ョ編鎷夊攽", "闃挎墭浼愪粬姹€", "杈涗紣浠栨眬",
++        "澶村", "闃胯帿瑗挎灄", "宸︽哀姘熸矙鏄?, "鐢茬鍞?,
++        "鍦板绫虫澗", "娉煎凹鏉?, "甯冩礇鑺?, "瀵逛箼閰版皑鍩洪厷",
++    ]
++    for med in med_patterns:
++        if med in combined_text:
++            medications.append(med)
++
++    # 鈹€鈹€ 杩囨晱 鈹€鈹€
++    allergies: list[str] = []
++    allergy_match = re.search(r"杩囨晱[鍙瞉?[:\s锛歖*(.+?)(?:\n|$)", combined_text)
++    if allergy_match:
++        raw_allergies = re.split(r"[銆侊紝,锛?/]", allergy_match.group(1))
++        allergies = [a.strip() for a in raw_allergies if a.strip() and a.strip() not in ("鏃?, "鍚﹁", "鏃犵壒娈?)]
++    if re.search(r"(鏃犺繃鏁弢鍚﹁杩囨晱|鏃犺嵂鐗╄繃鏁?", combined_text):
++        allergies = []
++
++    # 鈹€鈹€ 鍖荤敓璇婃柇鍒楄〃 鈹€鈹€
++    doctor_diagnoses: list[str] = []
++    if doctor_diagnosis and doctor_diagnosis.strip() and not doctor_diagnosis.startswith("锛?):
++        raw_dx = re.split(r"[銆侊紝,;\n]", doctor_diagnosis)
++        doctor_diagnoses = [d.strip() for d in raw_dx if d.strip()]
++
++    # 鈹€鈹€ 娌荤枟椤圭洰鍒楄〃 鈹€鈹€
++    treatment_items: list[str] = []
++    if treatment_plan and treatment_plan.strip() and not treatment_plan.startswith("锛?):
++        raw_tx = re.split(r"[\n锛?]", treatment_plan)
++        treatment_items = [t.strip() for t in raw_tx if t.strip()]
++
++    return ClinicalFacts(
++        age=age,
++        gender=gender,
++        chief_complaint=chief_complaint,
++        symptoms=symptoms,
++        timeline=timeline,
++        red_flags=red_flags,
++        comorbidities=comorbidities,
++        medications=medications,
++        allergies=allergies,
++        doctor_diagnoses=doctor_diagnoses,
++        treatment_items=treatment_items,
++    )
++
++
++# 鈹€鈹€ 涓夌被鏌ヨ鏋勫缓 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def build_queries(facts: ClinicalFacts) -> list[RetrievalQuery]:
++    """鏋勫缓涓夌被鐙珛鏌ヨ锛屾秷闄ょ‘璁ゅ亸璇?""
++    queries = [
++        RetrievalQuery(
++            query_type="case",
++            text=_build_case_query(facts),
++            source="clinical_facts",
++        )
++    ]
++    if facts.doctor_diagnoses:
++        queries.append(
++            RetrievalQuery(
++                query_type="diagnosis",
++                text=_build_diagnosis_query(facts),
++                source="clinical_facts",
++            )
++        )
++    if facts.treatment_items:
++        queries.append(
++            RetrievalQuery(
++                query_type="treatment",
++                text=_build_treatment_query(facts),
++                source="clinical_facts",
++            )
++        )
++    return queries
++
++
++def _patient_demographic(facts: ClinicalFacts) -> str:
++    """鏋勫缓鎮ｈ€呬汉鍙ｅ鎻忚堪鐗囨"""
++    parts = []
++    if facts.age is not None and facts.gender:
++        parts.append(f"{facts.age}宀亄facts.gender}")
++    elif facts.age is not None:
++        parts.append(f"{facts.age}宀?)
++    elif facts.gender:
++        parts.append(facts.gender)
++    return "".join(parts)
++
++
++def _build_case_query(facts: ClinicalFacts) -> str:
++    """鐥呬緥鏌ヨ锛氫粎鍖呭惈鐥呬緥浜嬪疄锛屼笉鍖呭惈鍖荤敓璇婃柇"""
++    parts = []
++    demo = _patient_demographic(facts)
++    if demo:
++        parts.append(demo)
++    if facts.chief_complaint:
++        parts.append(f"涓昏瘔锛歿facts.chief_complaint}")
++    if facts.symptoms:
++        parts.append(f"鐥囩姸锛歿'銆?.join(facts.symptoms[:8])}")
++    if facts.timeline:
++        parts.append(f"鐥呯▼锛歿'锛?.join(facts.timeline[:3])}")
++    if facts.comorbidities:
++        parts.append(f"鏃㈠線鍙诧細{'銆?.join(facts.comorbidities[:5])}")
++    if facts.red_flags:
++        parts.append(f"鎶ヨ鐥囩姸锛歿'銆?.join(facts.red_flags[:3])}")
++    return "锛?.join(parts) if parts else "鐥呬緥淇℃伅鏌ヨ"
++
++
++def _build_diagnosis_query(facts: ClinicalFacts) -> str:
++    """璇婃柇鏌ヨ锛氱梾渚嬬壒寰?+ 鍖荤敓璇婃柇 + 閴村埆璇婃柇"""
++    parts = []
++    demo = _patient_demographic(facts)
++    if demo:
++        parts.append(demo)
++    if facts.chief_complaint:
++        parts.append(facts.chief_complaint)
++    elif facts.symptoms:
++        parts.append("銆?.join(facts.symptoms[:5]))
++    if facts.doctor_diagnoses:
++        parts.append(f"璇婃柇锛歿'銆?.join(facts.doctor_diagnoses)}")
++    parts.append("閴村埆璇婃柇瑕佺偣")
++    return "锛?.join(parts) if parts else "璇婃柇閴村埆鏌ヨ"
++
++
++def _build_treatment_query(facts: ClinicalFacts) -> str:
++    """娌荤枟鏌ヨ锛氱柧鐥?+ 鍒嗘湡 + 鍚堝苟鐥?+ 鑽墿 + 鍓傞噺 + 鐤楃▼"""
++    parts = []
++    if facts.doctor_diagnoses:
++        parts.append("銆?.join(facts.doctor_diagnoses))
++    demo = _patient_demographic(facts)
++    if demo:
++        parts.append(demo)
++    if facts.comorbidities:
++        parts.append(f"鍚堝苟{'銆?.join(facts.comorbidities[:3])}")
++    parts.append("娌荤枟鏂规")
++    if facts.treatment_items:
++        # 鎻愬彇娌荤枟鍏抽敭璇嶏紙鍘绘帀搴忓彿鍜屽墏閲忕粏鑺傦級
++        tx_keywords = []
++        for item in facts.treatment_items[:5]:
++            clean = re.sub(r"^\d+[.銆?\s]+", "", item).strip()
++            if clean:
++                tx_keywords.append(clean[:30])
++        if tx_keywords:
++            parts.append("銆?.join(tx_keywords))
++    parts.append("鑽墿鍓傞噺 鐤楃▼ 绂佸繉璇?)
++    return "锛?.join(parts) if parts else "娌荤枟鏂规鏌ヨ"
++
++
++# 鈹€鈹€ JSON 瑙ｆ瀽锛堜笁灞傜瓥鐣ワ級鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+ def _extract_json(text: str) -> dict:
+-    """浠?LLM 杩斿洖鐨勬枃鏈腑鎻愬彇 JSON"""
++    """浠?LLM 杩斿洖鐨勬枃鏈腑鎻愬彇 JSON锛堜笁灞傝В鏋愮瓥鐣ワ級"""
+     if not text or not text.strip():
+         raise ValueError("LLM 杩斿洖鍐呭涓虹┖")
+-    
++
+     # 1. 灏濊瘯鐩存帴瑙ｆ瀽
+     try:
+         return json.loads(text.strip())
+     except (json.JSONDecodeError, ValueError):
+         pass
+-    
++
+     # 2. 灏濊瘯绉婚櫎 markdown 浠ｇ爜鍧楀悗瑙ｆ瀽
+     cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+     try:
+         return json.loads(cleaned)
+     except (json.JSONDecodeError, ValueError):
+         pass
+-    
++
+     # 3. 灏濊瘯姝ｅ垯鎻愬彇绗竴涓?JSON 瀵硅薄
+     try:
+         match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+@@ -123,73 +335,75 @@ def _extract_json(text: str) -> dict:
+             return json.loads(match.group(1))
+     except (json.JSONDecodeError, AttributeError):
+         pass
+-    
++
+     raise ValueError(f"鏃犳硶瑙ｆ瀽 JSON: {text[:200]}...")
+ 
+ 
+-def _calculate_score(consistency: bool, confidence: float) -> int:
+-    """
+-    鍩轰簬涓€鑷存€у拰缃俊搴﹁绠楄瘎鍒?-    
+-    璇勫垎瑙勫垯锛?-    - 涓€鑷存椂锛歋core = confidence * 100锛堢疆淇″害瓒婇珮鍒嗚秺楂橈級
+-    - 涓嶄竴鑷存椂锛歋core = (1 - confidence) * 100锛堢疆淇″害瓒婇珮鍒嗚秺浣庯級
+-    """
+-    confidence = max(0.0, min(1.0, confidence))
+-    if consistency:
+-        score = confidence * 100
+-    else:
+-        score = (1 - confidence) * 100
+-    return int(round(max(0.0, min(100.0, score))))
++# 鈹€鈹€ 璇勫垎鏄犲皠 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++def _map_consistency_to_score(stance: str, confidence: float) -> int:
++    """灏嗕竴鑷存€у拰缃俊搴︽槧灏勪负 0-100 鍒?""
++    base_scores = {
++        "supports": 90,
++        "mixed": 65,
++        "contradicts": 40,
++        "undetermined": 50,
++    }
++    base = base_scores.get(stance, 50)
++    return int(base * confidence + base * (1 - confidence) * 0.5)
++
+ 
++# 鈹€鈹€ 鍒嗘瀽鏂囨湰鐢熸垚 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+ def _generate_analysis(
+-    consistency: bool,
+-    confidence: float,
+-    evidence: str,
++    consistency_result: dict,
++    facts: ClinicalFacts,
+     doctor_diagnosis: str,
+-    treatment_plan: str
++    treatment_plan: str,
++    retrieval_status: str,
++    evidence_stance: str,
++    citations: list,
++    needs_review: bool,
++    review_reason: Optional[str],
+ ) -> str:
+-    """鐢熸垚璇︾粏鐨勫垎鏋愭枃鏈紙150-300瀛楋級"""
+-    
+-    # 涓€鑷存€у垽鏂弿杩?-    if consistency:
+-        consistency_desc = "璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁鍩烘湰涓€鑷?
+-        quality_desc = "鍖诲鐭ヨ瘑杩愮敤鍚堢悊"
+-    else:
+-        consistency_desc = "璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁瀛樺湪涓嶄竴鑷?
+-        quality_desc = "瀛樺湪鏀硅繘绌洪棿"
+-    
+-    # 缃俊搴︽弿杩?-    if confidence >= 0.8:
+-        confidence_desc = "鍒ゆ柇缃俊搴﹂珮"
+-    elif confidence >= 0.6:
+-        confidence_desc = "鍒ゆ柇缃俊搴︿腑绛?
+-    else:
+-        confidence_desc = "鍒ゆ柇缃俊搴﹁緝浣庯紝寤鸿杩涗竴姝ユ牳瀹?
+-    
+-    # 鏋勫缓鍒嗘瀽鏂囨湰
+-    analysis_parts = [
+-        f"鍖诲鐭ヨ瘑鏍稿缁撴灉锛歿consistency_desc}锛寋quality_desc}銆?,
+-        f"璇勪及缃俊搴︿负{confidence*100:.0f}%锛寋confidence_desc}銆?,
+-        f"鏍稿績鍖诲璇佹嵁锛歿evidence}",
++    """鐢熸垚 150-300 瀛楃殑鍒嗘瀽鏂囨湰"""
++    if needs_review:
++        analysis = f"鍖诲鐭ヨ瘑鏍稿鏃犳硶瀹屾垚鑷姩璇勪及銆傚師鍥狅細{review_reason}銆?
++        analysis += "寤鸿浜哄伐澶嶆牳璇婃柇鍜屾不鐤楁柟妗堢殑鍚堢悊鎬с€?
++        if facts.doctor_diagnoses:
++            analysis += f" 鍖荤敓璇婃柇锛歿'銆?.join(facts.doctor_diagnoses[:3])}銆?
++        return analysis[:300]
++
++    stance_desc = {
++        "supports": "璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁鍩烘湰涓€鑷?,
++        "contradicts": "璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁瀛樺湪涓嶄竴鑷?,
++        "mixed": "璇婃柇鍜屾不鐤楁柟妗堜笌鍖诲璇佹嵁閮ㄥ垎涓€鑷?,
++        "undetermined": "璇佹嵁涓嶈冻浠ョ‘瀹氫竴鑷存€?,
++    }
++    desc = stance_desc.get(evidence_stance, "涓€鑷存€ф湭纭畾")
++
++    confidence = consistency_result.get("confidence", 0.5)
++    analysis_text = consistency_result.get("analysis", "")
++    key_findings = consistency_result.get("key_findings", [])
++
++    parts = [
++        f"鍖诲鐭ヨ瘑鏍稿缁撴灉锛歿desc}銆?,
++        f"璇勪及缃俊搴︿负{confidence * 100:.0f}%銆?,
+     ]
+-    
+-    # 娣诲姞璇婃柇鍜屾不鐤楁柟妗堟杩?-    if doctor_diagnosis:
+-        analysis_parts.append(f"鍖荤敓璇婃柇锛歿doctor_diagnosis[:50]}{'...' if len(doctor_diagnosis) > 50 else ''}")
+-    
+-    analysis = " ".join(analysis_parts)
+-    
+-    # 纭繚闀垮害鍦?150-300 瀛椾箣闂?+    if analysis_text:
++        parts.append(analysis_text)
++    if key_findings:
++        parts.append(f"鍏抽敭鍙戠幇锛歿'锛?.join(key_findings[:3])}")
++    if citations:
++        parts.append(f"鍏卞紩鐢▄len(citations)}鏉″尰瀛﹁瘉鎹敮鎸佽瘎浼扮粨璁恒€?)
++
++    analysis = " ".join(parts)
+     if len(analysis) < 150:
+-        # 琛ュ厖璇存槑
+         analysis += " 寤鸿鍖荤敓鍦ㄥ悗缁瘖鐤椾腑鎸佺画鍏虫敞鎸囧崡鏇存柊锛岀‘淇濊瘖鐤楁柟妗堢鍚堟渶鏂扮殑寰瘉鍖诲璇佹嵁銆?
+-    
+-    return analysis[:300] if len(analysis) > 300 else analysis
++    return analysis[:300]
+ 
+ 
+-# 鈹€鈹€ Main Function 鈹€鈹€
++# 鈹€鈹€ 涓诲嚱鏁?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+ async def run_knowledge_check(
+     conversation_text: str,
+@@ -198,116 +412,252 @@ async def run_knowledge_check(
+     treatment_plan: str,
+     enable_hyde: bool = True,
+ ) -> dict:
+-    """
+-    鍩轰簬 RAG 妫€绱㈠寮轰笌涓€鑷存€ц瘎浼扮殑鍖诲鐭ヨ瘑鏍稿
+-    
+-    璇勪及娴佺▼锛?-    1. RAG 妫€绱細浠庡尰瀛︾煡璇嗗簱妫€绱㈢浉鍏充复搴婃寚鍗楄瘉鎹?-    2. 涓€鑷存€ц瘎浼帮細LLM 璇勪及璇婃柇/娌荤枟鏂规涓庡尰瀛﹁瘉鎹殑涓€鑷存€?-    3. 浠ｇ爜璁＄畻锛氬熀浜庝竴鑷存€у拰缃俊搴﹁绠楁渶缁堣瘎鍒?-    4. 鐢熸垚鍒嗘瀽锛氫唬鐮佺敓鎴愯缁嗙殑鍒嗘瀽鏂囨湰
+-    
++    """鍩轰簬 RAG 鍒嗙骇妫€绱笌涓€鑷存€ц瘎浼扮殑鍖诲鐭ヨ瘑鏍稿
++
+     Args:
+         conversation_text: 闂瘖瀵硅瘽璁板綍
+         patient_info: 鎮ｈ€呭熀鏈俊鎭?         doctor_diagnosis: 鍖荤敓鎻愪氦鐨勮瘖鏂?         treatment_plan: 鍖荤敓鎻愪氦鐨勬不鐤楁柟妗?-    
++        enable_hyde: 淇濈暀鍙傛暟锛堝垎绾ф绱㈠唴閮ㄨ嚜鍔ㄦ帶鍒?HyDE锛?+
+     Returns:
+-        dict: {"raw_response": json.dumps({"score": int, "analysis": str, "details": {...}})}
++        dict 鍖呭惈 raw_response锛圝SON 瀛楃涓诧級鍙婃柊澧炲瓧娈?     """
+-    
+-    # 鈹€鈹€ Step 1: RAG 娣峰悎妫€绱㈠寮猴紙BM25 + 鍚戦噺 + RRF + Cross-Encoder 閲嶆帓搴忥級鈹€鈹€
+-    evidence_text = ""
+-    rag_success = False
+     try:
+-        # 鍩轰簬璇婃柇鍜屾不鐤楁柟妗堟绱㈠尰瀛﹁瘉鎹紙MQE + 娣峰悎妫€绱?+ 閲嶆帓搴忥級
+-        query = f"{doctor_diagnosis} {treatment_plan}".strip()
+-        if query:
+-            evidences = await retrieve_with_mqe(
+-                query, top_k=5, enable_mqe=True,
+-                enable_hybrid=True, enable_rerank=True,
+-                enable_hyde=enable_hyde,
++        # 鈹€鈹€ Step 1: 鎻愬彇缁撴瀯鍖栫梾渚嬩簨瀹?鈹€鈹€
++        facts = extract_clinical_facts(
++            conversation_text, patient_info, doctor_diagnosis, treatment_plan
++        )
++        logger.info(
++            f"鐥呬緥浜嬪疄鎻愬彇瀹屾垚锛氬勾榫?{facts.age}, 鎬у埆={facts.gender}, "
++            f"鐥囩姸={len(facts.symptoms)}涓? 璇婃柇={len(facts.doctor_diagnoses)}涓? "
++            f"娌荤枟椤?{len(facts.treatment_items)}涓?
++        )
++
++        # 鈹€鈹€ Step 2: 鏋勫缓涓夌被鏌ヨ 鈹€鈹€
++        queries = build_queries(facts)
++        logger.info(f"鏌ヨ鏋勫缓瀹屾垚锛歿len(queries)}鏉℃煡璇?({', '.join(q.query_type for q in queries)})")
++
++        # 鈹€鈹€ Step 3: 鍒嗙骇妫€绱?鈹€鈹€
++        bundle = await tiered_retrieve(
++            queries=queries,
++            top_k_per_query=10,
++            candidate_limit=20,
++        )
++        logger.info(
++            f"鍒嗙骇妫€绱㈠畬鎴愶細level={bundle.level_used}, status={bundle.status}, "
++            f"鍊欓€?{len(bundle.candidates)}鏉?
++        )
++
++        # 鈹€鈹€ Step 4: 涓ら樁娈甸噸鎺掑簭 鈹€鈹€
++        reranked: list[EvidenceItem] = []
++        rerank_degraded = False
++        rerank_start = time.monotonic()
++        if bundle.candidates:
++            rerank_query = " | ".join(q.text for q in queries)
++            # 璁板綍 rerank 杈撳叆鏁伴噺鍒?trace
++            bundle.trace["rerank_input_count"] = len(bundle.candidates)
++            bundle.trace["llm_rerank_count"] = min(len(bundle.candidates), 5)
++            reranked, rerank_degraded = await two_stage_rerank(
++                query=rerank_query,
++                documents=bundle.candidates,
++                top_k=5,
+             )
+-            evidence_text = format_evidence_for_verification(evidences)
+-            rag_success = True
+-    except Exception as e:
+-        logging.error(f"RAG 娣峰悎妫€绱㈠け璐? {e}")
+-        evidence_text = "鏈绱㈠埌鍖诲璇佹嵁"
+-    
+-    # 鈹€鈹€ Step 2: LLM 涓€鑷存€ц瘎浼?鈹€鈹€
+-    try:
+-        # 鏋勫缓鐢ㄦ埛杈撳叆鍐呭
+-        user_content_parts = [
+-            f"銆愭偅鑰呬俊鎭€慭n{patient_info}\n",
+-            f"銆愰棶璇婂璇濊褰曘€慭n{conversation_text}\n",
+-            f"銆愬尰鐢熻瘖鏂€慭n{doctor_diagnosis}\n",
+-            f"銆愭不鐤楁柟妗堛€慭n{treatment_plan}\n",
+-        ]
+-        
+-        if evidence_text:
+-            user_content_parts.append(f"銆愭绱㈠埌鐨勫尰瀛﹁瘉鎹€慭n{evidence_text}")
+-        
+-        user_content = "\n".join(user_content_parts)
+-        
+-        messages = [
+-            {"role": "system", "content": SYSTEM_PROMPT},
+-            {"role": "user", "content": FEWSHOT_USER_1},
+-            {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
+-            {"role": "user", "content": FEWSHOT_USER_2},
+-            {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
+-            {"role": "user", "content": user_content},
+-        ]
+-        
+-        result = await call_qwen_chat(messages, temperature=0.2)
+-        
+-        # 瑙ｆ瀽 LLM 杈撳嚭
+-        consistency_data = _extract_json(result)
+-        
+-        consistency = consistency_data.get("consistency", False)
+-        confidence = float(consistency_data.get("confidence", 0.5))
+-        evidence = consistency_data.get("evidence", "鏈彁渚涜瘉鎹憳瑕?)
+-        
++            rerank_elapsed = (time.monotonic() - rerank_start) * 1000
++            bundle.trace["timing"]["rerank_ms"] = round(rerank_elapsed, 1)
++            logger.info(f"涓ら樁娈甸噸鎺掑畬鎴愶細{len(bundle.candidates)}鏉?鈫?{len(reranked)}鏉?(degraded={rerank_degraded})")
++        else:
++            logger.info("鏃犲€欓€夎瘉鎹紝璺宠繃閲嶆帓搴?)
++
++        # 鈹€鈹€ Step 5: 涓€鑷存€у垽鏂紙LLM锛夆攢鈹€
++        consistency_result = await _llm_consistency_check(
++            reranked, doctor_diagnosis, treatment_plan, patient_info, conversation_text
++        )
++        evidence_stance = consistency_result.get("consistency", "undetermined")
++        confidence = float(consistency_result.get("confidence", 0.5))
++        logger.info(f"涓€鑷存€у垽鏂細stance={evidence_stance}, confidence={confidence:.2f}")
++
++        # 鈹€鈹€ Step 6: 鏋勫缓寮曠敤鍒楄〃 鈹€鈹€
++        citations: list[Citation] = []
++        for i, evidence in enumerate(reranked):
++            citation_id = f"rag-v2:{evidence.source}:{evidence.page or 0}:{i}"
++            citations.append(Citation(
++                citation_id=citation_id,
++                claim=evidence.text[:200],
++                source=evidence.source,
++                page=evidence.page,
++                heading_path=evidence.heading_path,
++                text_snippet=evidence.text[:500],
++                rerank_score=evidence.rerank_score,
++            ))
++        logger.info(f"寮曠敤鍒楄〃鏋勫缓瀹屾垚锛歿len(citations)}鏉″紩鐢?)
++
++        # 鈹€鈹€ Step 7: 纭畾 retrieval_status 鍜?evidence_stance 鈹€鈹€
++        retrieval_status = bundle.status
++        if retrieval_status == "candidate":
++            retrieval_status = "sufficient"
++
++        # 鈹€鈹€ Step 8: 鎷掔瓟閫昏緫 鈹€鈹€
++        needs_review = False
++        review_reason: Optional[str] = None
++        score: Optional[int] = None
++
++        if retrieval_status in ("insufficient", "unavailable", "error"):
++            needs_review = True
++            review_reason = f"妫€绱㈢姸鎬? {retrieval_status}"
++        elif evidence_stance == "mixed" and confidence < 0.5:
++            needs_review = True
++            review_reason = f"璇佹嵁绔嬪満娣峰悎涓旂疆淇″害浣?{confidence:.2f})"
++        elif evidence_stance == "undetermined":
++            needs_review = True
++            review_reason = "璇佹嵁绔嬪満鏃犳硶纭畾"
++
++        if not needs_review:
++            score = _map_consistency_to_score(evidence_stance, confidence)
++
++        if needs_review:
++            logger.info(f"瑙﹀彂鎷掔瓟閫昏緫锛歳eason={review_reason}")
++
++        # 鈹€鈹€ Step 9: 鐢熸垚鍒嗘瀽鏂囨湰 鈹€鈹€
++        analysis_text = _generate_analysis(
++            consistency_result=consistency_result,
++            facts=facts,
++            doctor_diagnosis=doctor_diagnosis,
++            treatment_plan=treatment_plan,
++            retrieval_status=retrieval_status,
++            evidence_stance=evidence_stance,
++            citations=citations,
++            needs_review=needs_review,
++            review_reason=review_reason,
++        )
++
++        # 鈹€鈹€ Step 10: 鏋勯€犺繑鍥炵粨鏋?鈹€鈹€
++        # raw_response 淇濇寔涓?evaluation_service.py 鐨勫吋瀹规€?+        raw_payload = {
++            "score": score if score is not None else 50,  # 鎷掔瓟鏃剁粰榛樿鍒嗭紝鍏煎鏃ф祦绋?+            "analysis": analysis_text,
++        }
++
++        result = {
++            "raw_response": json.dumps(raw_payload, ensure_ascii=False),
++            # 鏂板瀛楁锛堜緵 Task 7 浣跨敤锛?+            "score": score,
++            "analysis": analysis_text,
++            "retrieval_status": retrieval_status,
++            "evidence_stance": evidence_stance,
++            "citations": [c.model_dump() for c in citations],
++            "human_review_needed": needs_review,
++            "review_reason": review_reason,
++            "confidence": confidence,
++            "rag_trace": bundle.trace,
++            "degraded": bundle.degraded or rerank_degraded,
++        }
++
++        return result
++
+     except Exception as e:
+-        logging.error(f"涓€鑷存€ц瘎浼?LLM 璋冪敤澶辫触: {e}")
+-        # 閿欒闄嶇骇锛氳繑鍥為粯璁や腑绛夊垎鏁?+        logger.error(f"鐭ヨ瘑鏍稿娴佺▼寮傚父: {e}", exc_info=True)
++        # 鍏ㄥ眬闄嶇骇锛氫笉宕╂簝锛岃繑鍥炲畨鍏ㄩ粯璁ゅ€?+        fallback_payload = {
++            "score": 50,
++            "analysis": "鍖诲鐭ヨ瘑鏍稿杩囩▼涓亣鍒版妧鏈棶棰橈紝鏃犳硶瀹屾垚璇勪及銆傞粯璁ょ粰浜堜腑绛夊垎鏁帮紝寤鸿浜哄伐澶嶆牳銆?,
++        }
+         return {
+-            "raw_response": json.dumps({
+-                "score": 50,
+-                "analysis": "鍖诲鐭ヨ瘑鏍稿杩囩▼涓亣鍒版妧鏈棶棰橈紝鏃犳硶瀹屾垚璇勪及銆傞粯璁ょ粰浜堜腑绛夊垎鏁帮紝寤鸿浜哄伐澶嶆牳銆?,
+-                "details": {
+-                    "consistency": None,
+-                    "confidence": 0.5,
+-                    "error": str(e),
+-                    "rag_success": rag_success,
+-                }
+-            }, ensure_ascii=False)
++            "raw_response": json.dumps(fallback_payload, ensure_ascii=False),
++            "score": 50,
++            "analysis": fallback_payload["analysis"],
++            "retrieval_status": "error",
++            "evidence_stance": "undetermined",
++            "citations": [],
++            "human_review_needed": True,
++            "review_reason": f"绯荤粺寮傚父: {str(e)}",
++            "confidence": 0.5,
++            "rag_trace": {},
++            "degraded": True,
+         }
+-    
+-    # 鈹€鈹€ Step 3: 浠ｇ爜璁＄畻璇勫垎 鈹€鈹€
+-    final_score = _calculate_score(consistency, confidence)
+-    
+-    # 鈹€鈹€ Step 4: 鐢熸垚鍒嗘瀽鏂囨湰 鈹€鈹€
+-    analysis = _generate_analysis(
+-        consistency=consistency,
+-        confidence=confidence,
+-        evidence=evidence,
+-        doctor_diagnosis=doctor_diagnosis,
+-        treatment_plan=treatment_plan,
++
++
++# 鈹€鈹€ LLM 涓€鑷存€ф鏌?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
++
++async def _llm_consistency_check(
++    reranked: list[EvidenceItem],
++    doctor_diagnosis: str,
++    treatment_plan: str,
++    patient_info: str,
++    conversation_text: str,
++) -> dict:
++    """璋冪敤 LLM 鍒嗘瀽閲嶆帓鍚庣殑璇佹嵁涓庡尰鐢熻瘖鏂?娌荤枟鏂规鐨勪竴鑷存€?+
++    Returns:
++        dict 鍚?consistency, confidence, analysis, key_findings
++    """
++    if not reranked:
++        logger.info("鏃犻噸鎺掕瘉鎹紝璺宠繃 LLM 涓€鑷存€ф鏌?)
++        return {
++            "consistency": "undetermined",
++            "confidence": 0.3,
++            "analysis": "鏈绱㈠埌瓒冲鐨勫尰瀛﹁瘉鎹繘琛屼竴鑷存€ц瘎浼?,
++            "key_findings": [],
++        }
++
++    # 鏋勫缓璇佹嵁鏂囨湰
++    evidence_parts = []
++    for i, ev in enumerate(reranked, 1):
++        snippet = ev.text[:600]
++        source_info = f"锛堟潵婧? {ev.source}"
++        if ev.page:
++            source_info += f", 绗瑊ev.page}椤?
++        if ev.organization:
++            source_info += f", {ev.organization}"
++        source_info += "锛?
++        evidence_parts.append(f"璇佹嵁{i}{source_info}锛歕n{snippet}")
++    evidence_text = "\n\n".join(evidence_parts)
++
++    user_content = (
++        f"銆愭偅鑰呬俊鎭€慭n{patient_info}\n\n"
++        f"銆愰棶璇婂璇濇憳瑕併€慭n{conversation_text[:1000]}\n\n"
++        f"銆愬尰鐢熻瘖鏂€慭n{doctor_diagnosis}\n\n"
++        f"銆愭不鐤楁柟妗堛€慭n{treatment_plan}\n\n"
++        f"銆愭绱㈠埌鐨勫尰瀛﹁瘉鎹紙鍏眥len(reranked)}鏉★級銆慭n{evidence_text}"
+     )
+-    
+-    # 鏋勫缓杩斿洖缁撴灉
+-    result = {
+-        "score": final_score,
+-        "analysis": analysis,
+-        "details": {
+-            "consistency": consistency,
+-            "confidence": round(confidence, 2),
+-            "evidence_summary": evidence,
+-            "rag_success": rag_success,
+-            "mqe_enabled": True,
+-            "hyde_enabled": enable_hyde,
++
++    messages = [
++        {"role": "system", "content": CONSISTENCY_SYSTEM_PROMPT},
++        {"role": "user", "content": user_content},
++    ]
++
++    try:
++        response = await call_qwen_chat(messages, temperature=0.2)
++        result = _extract_json(response)
++
++        # 鏍￠獙 consistency 瀛楁鍊?+        valid_stances = {"supports", "contradicts", "mixed", "undetermined"}
++        stance = result.get("consistency", "undetermined")
++        if stance not in valid_stances:
++            # 鍏煎鏃ф牸寮?true/false
++            if stance is True or stance == "true":
++                stance = "supports"
++            elif stance is False or stance == "false":
++                stance = "contradicts"
++            else:
++                stance = "undetermined"
++
++        confidence = float(result.get("confidence", 0.5))
++        confidence = max(0.0, min(1.0, confidence))
++
++        return {
++            "consistency": stance,
++            "confidence": confidence,
++            "analysis": str(result.get("analysis", "")),
++            "key_findings": result.get("key_findings", []),
++        }
++
++    except Exception as e:
++        logger.warning(f"LLM 涓€鑷存€ф鏌ュけ璐? {e}")
++        return {
++            "consistency": "undetermined",
++            "confidence": 0.3,
++            "analysis": f"涓€鑷存€ц瘎浼板け璐? {str(e)}",
++            "key_findings": [],
+         }
+-    }
+-    
+-    return {"raw_response": json.dumps(result, ensure_ascii=False)}

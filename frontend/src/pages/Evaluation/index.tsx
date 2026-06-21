@@ -5,7 +5,7 @@ import { useParams } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { getEvaluation, createEvaluation } from '../../api/evaluation';
 import { getConsultationDetail } from '../../api/consultation';
-import type { Evaluation, ConsultationDetail } from '../../types';
+import type { Evaluation, ConsultationDetail, Citation } from '../../types';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -180,9 +180,11 @@ const EvaluationPage: React.FC = () => {
     );
   }
 
+  const isNeedsReview = evaluation.evaluation_status === 'needs_review';
+
   const radarData = [
     { subject: '病史采集', score: evaluation.inquiry_score, fullMark: 100 },
-    { subject: '医学知识', score: evaluation.knowledge_score, fullMark: 100 },
+    { subject: '医学知识', score: isNeedsReview ? 0 : (evaluation.knowledge_score ?? 0), fullMark: 100 },
     { subject: '人文关怀', score: evaluation.humanistic_score, fullMark: 100 },
     { subject: '诊断结果', score: evaluation.diagnosis_score, fullMark: 100 },
     { subject: '治疗方案', score: evaluation.treatment_score, fullMark: 100 },
@@ -192,7 +194,7 @@ const EvaluationPage: React.FC = () => {
     { key: 'inquiry', label: '病史采集', score: evaluation.inquiry_score, analysis: evaluation.inquiry_analysis, icon: <ReadOutlined /> },
     { key: 'diagnosis', label: '诊断结果', score: evaluation.diagnosis_score, analysis: evaluation.diagnosis_analysis, icon: <CheckCircleOutlined /> },
     { key: 'treatment', label: '治疗方案', score: evaluation.treatment_score, analysis: evaluation.treatment_analysis, icon: <MedicineBoxOutlined /> },
-    { key: 'knowledge', label: '医学知识', score: evaluation.knowledge_score, analysis: evaluation.knowledge_analysis, icon: <ExperimentOutlined /> },
+    { key: 'knowledge', label: '医学知识', score: evaluation.knowledge_score, analysis: evaluation.knowledge_analysis, icon: <ExperimentOutlined />, isReview: isNeedsReview },
     { key: 'humanistic', label: '人文关怀', score: evaluation.humanistic_score, analysis: evaluation.humanistic_analysis, icon: <HeartOutlined /> },
   ];
 
@@ -236,14 +238,23 @@ const EvaluationPage: React.FC = () => {
           <Card>
             <Row gutter={24} align="middle">
               <Col span={8} style={{ textAlign: 'center' }}>
-                <Progress 
-                  type="dashboard" 
-                  percent={evaluation.total_score} 
-                  size={160} 
-                  strokeColor={scoreColor(evaluation.total_score)} 
-                  format={(p) => <span style={{ fontSize: 36, fontWeight: 700 }}>{p}</span>} 
-                />
-                <div style={{ marginTop: 8, fontSize: 18, fontWeight: 600 }}>综合评分</div>
+                {isNeedsReview ? (
+                  <div>
+                    <Tag color="orange" style={{ fontSize: 20, padding: '8px 24px' }}>证据不足</Tag>
+                    <div style={{ marginTop: 8, fontSize: 18, fontWeight: 600 }}>综合评分（待复核）</div>
+                  </div>
+                ) : (
+                  <>
+                    <Progress 
+                      type="dashboard" 
+                      percent={evaluation.total_score ?? 0} 
+                      size={160} 
+                      strokeColor={scoreColor(evaluation.total_score ?? 0)} 
+                      format={(p) => <span style={{ fontSize: 36, fontWeight: 700 }}>{p}</span>} 
+                    />
+                    <div style={{ marginTop: 8, fontSize: 18, fontWeight: 600 }}>综合评分</div>
+                  </>
+                )}
               </Col>
               <Col span={16} style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -270,13 +281,15 @@ const EvaluationPage: React.FC = () => {
       {/* 五维度分数概览卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {dimensionItems.map(item => {
-          const level = scoreLevel(item.score);
+          const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : scoreLevel(item.score ?? 0);
           return (
             <Col xs={12} sm={8} lg={Math.floor(24 / 5)} key={item.key} style={{ minWidth: 140 }}>
               <Card size="small" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, color: '#555', marginBottom: 4 }}>{item.icon}</div>
                 <div style={{ fontSize: 13, color: '#888' }}>{item.label}</div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: level.color }}>{item.score}</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: level.color }}>
+                  {item.isReview ? <Tag color="orange">待复核</Tag> : (item.score ?? '-')}
+                </div>
                 <Tag color={level.color} style={{ borderRadius: 10 }}>{level.text}</Tag>
               </Card>
             </Col>
@@ -289,19 +302,23 @@ const EvaluationPage: React.FC = () => {
         <Collapse
           accordion
           items={dimensionItems.map(item => {
-            const level = scoreLevel(item.score);
+            const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : scoreLevel(item.score ?? 0);
             return {
               key: item.key,
               label: (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {item.icon}
                   <span style={{ fontWeight: 500 }}>{item.label}</span>
-                  <Badge
-                    count={item.score}
-                    showZero
-                    style={{ backgroundColor: level.color, fontWeight: 600, fontSize: 13 }}
-                    overflowCount={100}
-                  />
+                  {item.isReview ? (
+                    <Tag color="orange">待复核</Tag>
+                  ) : (
+                    <Badge
+                      count={item.score ?? 0}
+                      showZero
+                      style={{ backgroundColor: level.color, fontWeight: 600, fontSize: 13 }}
+                      overflowCount={100}
+                    />
+                  )}
                 </span>
               ),
               children: (
@@ -313,6 +330,70 @@ const EvaluationPage: React.FC = () => {
           })}
         />
       </Card>
+
+      {/* 证据详情 - 仅在有需要复核或引用数据时显示 */}
+      {(isNeedsReview || evaluation.citation_data?.length) && (
+        <Card
+          title={<span><ExperimentOutlined style={{ color: '#1677ff', marginRight: 8 }} />医学证据详情</span>}
+          style={{ marginBottom: 16 }}
+        >
+          <Row gutter={16} style={{ marginBottom: 12 }}>
+            <Col span={8}>
+              <Text type="secondary">检索状态：</Text>
+              <Tag color={
+                evaluation.retrieval_status === 'sufficient' ? 'green' :
+                evaluation.retrieval_status === 'insufficient' ? 'orange' :
+                evaluation.retrieval_status === 'error' ? 'red' : 'default'
+              }>{evaluation.retrieval_status}</Tag>
+            </Col>
+            <Col span={8}>
+              <Text type="secondary">证据立场：</Text>
+              <Tag color={
+                evaluation.evidence_stance === 'supports' ? 'green' :
+                evaluation.evidence_stance === 'contradicts' ? 'red' :
+                evaluation.evidence_stance === 'mixed' ? 'orange' : 'default'
+              }>{evaluation.evidence_stance}</Tag>
+            </Col>
+            <Col span={8}>
+              <Text type="secondary">人工复核：</Text>
+              <Tag color={evaluation.human_review_needed ? 'orange' : 'green'}>
+                {evaluation.human_review_needed ? '需要' : '不需要'}
+              </Tag>
+            </Col>
+          </Row>
+          {evaluation.review_reason && (
+            <div style={{ padding: '8px 14px', background: '#fff7e6', borderRadius: 4, marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <WarningOutlined style={{ color: '#faad14', marginRight: 4 }} />复核原因：
+              </Text>
+              <Text>{evaluation.review_reason}</Text>
+            </div>
+          )}
+          {evaluation.citation_data && evaluation.citation_data.length > 0 && (
+            <div>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>引用文献（{evaluation.citation_data.length} 条）：</Text>
+              {evaluation.citation_data.map((cite: Citation, idx: number) => (
+                <div key={idx} style={{
+                  borderLeft: '3px solid #1677ff', padding: '8px 12px', marginBottom: 8,
+                  background: '#fafafa', borderRadius: 4,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text strong style={{ fontSize: 13 }}>{cite.source}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {cite.page ? `第 ${cite.page} 页` : ''}
+                      {cite.rerank_score != null ? ` | 相关度 ${(cite.rerank_score * 100).toFixed(0)}%` : ''}
+                    </Text>
+                  </div>
+                  {cite.heading_path && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>{cite.heading_path}</Text>}
+                  <Paragraph style={{ fontSize: 13, margin: '4px 0 0', lineHeight: 1.6, color: '#555' }} ellipsis={{ rows: 3 }}>
+                    {cite.text_snippet}
+                  </Paragraph>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* 综合评价 */}
       <Card

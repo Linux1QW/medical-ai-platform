@@ -1,121 +1,333 @@
 # -*- coding: utf-8 -*-
-"""医学知识核对智能体 — 基于 RAG 检索增强与一致性评估的医学合理性评估"""
+"""医学知识核对智能体 — 基于 RAG 分级检索、两阶段重排与一致性评估
+
+重构后的流程：
+1. 结构化病例事实提取（extract_clinical_facts）
+2. 三类查询构建（build_queries：case / diagnosis / treatment）
+3. 分级检索（tiered_retrieve：Level1→2→3 级联）
+4. 两阶段重排序（two_stage_rerank：专用 reranker + LLM 精排）
+5. LLM 一致性判断 + 引用绑定
+6. 拒答逻辑 + 评分映射
+"""
 
 import json
 import re
+import time
 import logging
+from typing import Optional
+
 from app.services.qwen_client import call_qwen_chat
-from app.services.rag.retriever import retrieve_medical_evidence, retrieve_with_mqe, hybrid_retrieve, format_evidence_for_verification
+from app.services.rag.types import (
+    RetrievalQuery,
+    ClinicalFacts,
+    EvidenceItem,
+    RetrievalBundle,
+    Citation,
+    KnowledgeAssessment,
+)
+from app.services.rag.retriever import tiered_retrieve
+from app.services.rag.reranker import two_stage_rerank
 
-# ── System Prompt ──
-SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是对比医生的诊断和治疗方案与检索到的临床指南证据，评估其一致性。
+logger = logging.getLogger(__name__)
 
-评估标准：
+# ── System Prompt（一致性评估）──────────────────────────────────────────────────
+
+CONSISTENCY_SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是对比医生的诊断和治疗方案与检索到的临床指南证据，评估其一致性。
+
+评估维度：
 1. 诊断一致性：医生的诊断是否与医学证据支持的诊断方向一致
 2. 治疗合理性：治疗方案是否符合临床指南推荐的标准治疗方案
 3. 禁忌症检查：治疗方案中是否存在医学证据明确指出的禁忌或不当之处
 4. 遗漏检查：是否遗漏了医学证据建议的必要检查或评估
 
-输出格式（严格JSON）：
+输出格式（严格 JSON）：
 {
-  "consistency": true/false,  // 诊断和治疗方案与医学证据是否一致
-  "confidence": 0.85,         // 置信度 0-1，表示判断的确定程度
-  "evidence": "用于核对的核心医学证据内容摘要，包括相关指南的关键推荐内容"
+  "consistency": "supports" | "contradicts" | "mixed" | "undetermined",
+  "confidence": 0.0-1.0,
+  "analysis": "200字以内的分析文本，概述一致性和关键发现",
+  "key_findings": ["发现1", "发现2"]
 }
 
-注意：
-- consistency 为 true 表示诊断和治疗方案与医学证据基本一致
-- consistency 为 false 表示存在明显不一致或不当之处
-- confidence 表示你对判断的确定程度，证据越充分、判断越明确则 confidence 越高
-- evidence 字段应简洁概括用于评估的核心医学证据要点
-- 输出纯JSON，不要包含任何markdown格式或额外说明"""
-
-# ── Few-shot 示例 ──
-FEWSHOT_USER_1 = """【患者信息】
-姓名: 张xx, 年龄: 65, 性别: male
-主诉: 咳嗽、咳痰2周，痰中带血3天
-病史: 吸烟史40年，每天20支
-
-【问诊对话记录】
-医生: 咳嗽多长时间了？
-患者: 有两周了，最近3天痰里还有血。
-医生: 有胸痛或呼吸困难吗？
-患者: 有点胸闷，但不太疼。
-医生: 吸烟吗？
-患者: 吸了40年了，一天一包。
-
-【医生诊断】
-肺癌（疑似中央型肺癌）
-
-【治疗方案】
-1. 胸部CT增强扫描
-2. 支气管镜检查+活检
-3. 根据病理结果制定后续治疗方案（手术/化疗/放疗）
-
-【检索到的医学证据】
-1. NCCN非小细胞肺癌指南2025：对于疑似肺癌患者，推荐进行胸部CT增强扫描以评估肿瘤位置和分期。对于中央型病变，支气管镜检查是获取病理诊断的首选方法。
-2. CSCO肺癌诊疗指南2025：痰中带血、长期吸烟史是肺癌的高危因素。推荐对可疑病灶进行组织病理学确诊后再制定治疗方案。
-3. 临床指南：肺癌诊断需要病理确诊，影像学检查只能作为辅助诊断依据。治疗前应明确病理类型和分期。"""
-
-FEWSHOT_ASSISTANT_1 = """{
-  "consistency": true,
-  "confidence": 0.92,
-  "evidence": "NCCN和CSCO指南均推荐：1）对疑似肺癌患者进行胸部CT增强扫描评估；2）中央型病变首选支气管镜活检获取病理诊断；3）强调病理确诊是制定治疗方案的前提。医生的诊断思路符合指南推荐的诊断流程。"
-}"""
-
-FEWSHOT_USER_2 = """【患者信息】
-姓名: 李xx, 年龄: 45, 性别: female
-主诉: 上腹痛1周，反酸、烧心
-病史: 既往体健，无特殊病史
-
-【问诊对话记录】
-医生: 腹痛具体位置在哪？
-患者: 就在心口窝这，有时候反酸水。
-医生: 吃饭后加重还是空腹时重？
-患者: 吃完饭更明显。
-医生: 有恶心呕吐吗？
-患者: 没有。
-
-【医生诊断】
-急性胃炎
-
-【治疗方案】
-1. 奥美拉唑 20mg bid
-2. 铝碳酸镁片 1g tid
-3. 多潘立酮 10mg tid（促进胃动力）
-
-【检索到的医学证据】
-1. CSCO胃癌诊疗指南2025：对于新发上腹痛的45岁以上患者，应警惕胃癌可能，建议胃镜检查排除恶性病变。单纯按胃炎治疗可能延误诊断。
-2. 中国胃食管反流病专家共识：反酸、烧心、餐后加重的上腹痛是GERD的典型表现，PPI治疗有效，但需排除器质性病变。
-3. 临床指南：45岁以上新发消化不良症状患者，建议胃镜检查以排除胃癌等器质性病变，尤其对于有报警症状（体重下降、贫血、吞咽困难等）的患者。"""
-
-FEWSHOT_ASSISTANT_2 = """{
-  "consistency": false,
-  "confidence": 0.85,
-  "evidence": "CSCO胃癌诊疗指南明确指出：45岁以上新发上腹痛患者应警惕胃癌可能，建议胃镜检查排除恶性病变。该患者45岁，出现新发上腹痛症状，医生直接诊断为急性胃炎并开始药物治疗，未建议胃镜检查排除器质性病变，存在漏诊风险，不符合指南推荐的诊疗流程。"
-}"""
+说明：
+- supports：诊断和治疗方案与医学证据基本一致
+- contradicts：存在明显不一致或不当之处
+- mixed：部分一致、部分不一致
+- undetermined：证据不足以做出判断
+- confidence 表示判断的确定程度
+- 输出纯 JSON，不要包含 markdown 格式或额外说明"""
 
 
-# ── Helper Functions ──
+# ── 结构化病例事实提取 ──────────────────────────────────────────────────────────
+
+def extract_clinical_facts(
+    conversation_text: str,
+    patient_info: str,
+    doctor_diagnosis: str,
+    treatment_plan: str,
+) -> ClinicalFacts:
+    """从评估输入中提取结构化病例事实
+
+    使用正则和简单规则从患者信息、对话记录、诊断和治疗方案中
+    提取结构化字段，用于构建三类独立查询。
+    """
+    # ── 年龄和性别 ──
+    age: Optional[int] = None
+    gender: Optional[str] = None
+
+    age_match = re.search(r"年龄[:\s：]*(\d+)", patient_info)
+    if age_match:
+        age = int(age_match.group(1))
+    else:
+        age_match = re.search(r"(\d+)\s*岁", patient_info + " " + conversation_text)
+        if age_match:
+            age = int(age_match.group(1))
+
+    gender_match = re.search(r"性别[:\s：]*(male|female|男|女)", patient_info, re.IGNORECASE)
+    if gender_match:
+        raw = gender_match.group(1)
+        gender = "男性" if raw in ("male", "男") else "女性"
+    else:
+        if re.search(r"[男他]", patient_info):
+            gender = "男性"
+        elif re.search(r"[女她]", patient_info):
+            gender = "女性"
+
+    # ── 主诉 ──
+    chief_complaint = ""
+    cc_match = re.search(r"主诉[:\s：]*(.+?)(?:\n|$)", patient_info)
+    if cc_match:
+        chief_complaint = cc_match.group(1).strip()
+    else:
+        # 从对话中提取患者首次发言
+        patient_msgs = re.findall(r"患者[:\s：]*(.+?)(?:\n|$)", conversation_text)
+        if patient_msgs:
+            chief_complaint = patient_msgs[0].strip()
+
+    # ── 症状 ──
+    symptoms: list[str] = []
+    # 从 patient_info 的症状字段提取
+    symptoms_match = re.search(r"症状[:\s：]*(.+?)(?:\n|$)", patient_info)
+    if symptoms_match:
+        raw_symptoms = re.split(r"[、，,；;/]", symptoms_match.group(1))
+        symptoms = [s.strip() for s in raw_symptoms if s.strip() and len(s.strip()) >= 2]
+    # 从对话中患者提及的症状补充
+    symptom_keywords = [
+        "咳嗽", "发热", "头痛", "头晕", "胸闷", "胸痛", "心悸",
+        "腹痛", "腹胀", "恶心", "呕吐", "腹泻", "便秘",
+        "乏力", "消瘦", "水肿", "呼吸困难", "气促",
+        "尿频", "尿急", "尿痛", "血尿",
+        "失眠", "焦虑", "抑郁", "麻木", "抽搐",
+        "出血", "疼痛", "肿胀", "瘙痒", "皮疹",
+    ]
+    for kw in symptom_keywords:
+        if kw in conversation_text and kw not in symptoms:
+            symptoms.append(kw)
+
+    # ── 时间线 ──
+    timeline: list[str] = []
+    time_patterns = re.findall(r"(\d+[天周月年]|\d+\s*[天周月年]|今[天日]|昨[天日]|\d+小?时前)", conversation_text)
+    timeline = list(dict.fromkeys(time_patterns))  # 去重保序
+
+    # ── 危险信号 ──
+    red_flags: list[str] = []
+    red_flag_keywords = [
+        "咯血", "血尿", "便血", "呕血", "意识障碍", "昏迷",
+        "剧烈头痛", "突发", "进行性加重", "体重下降", "消瘦",
+        "高热不退", "呼吸困难", "休克",
+    ]
+    for kw in red_flag_keywords:
+        if kw in conversation_text or kw in patient_info:
+            red_flags.append(kw)
+
+    # ── 合并症 ──
+    comorbidities: list[str] = []
+    comorbidity_keywords = [
+        "高血压", "糖尿病", "冠心病", "房颤", "慢阻肺", "COPD",
+        "乙肝", "丙肝", "肝硬化", "肾功能不全", "甲亢", "甲减",
+        "哮喘", "脑梗", "心衰", "贫血",
+    ]
+    combined_text = conversation_text + " " + patient_info
+    for kw in comorbidity_keywords:
+        if kw in combined_text:
+            comorbidities.append(kw)
+    # 从病史字段提取
+    history_match = re.search(r"病史[:\s：]*(.+?)(?:\n|$)", patient_info)
+    if history_match:
+        hist_text = history_match.group(1)
+        for kw in comorbidity_keywords:
+            if kw in hist_text and kw not in comorbidities:
+                comorbidities.append(kw)
+
+    # ── 用药 ──
+    medications: list[str] = []
+    med_patterns = [
+        "阿司匹林", "华法林", "氯吡格雷", "利伐沙班",
+        "二甲双胍", "胰岛素", "氨氯地平", "缬沙坦", "美托洛尔",
+        "奥美拉唑", "阿托伐他汀", "辛伐他汀",
+        "头孢", "阿莫西林", "左氧氟沙星", "甲硝唑",
+        "地塞米松", "泼尼松", "布洛芬", "对乙酰氨基酚",
+    ]
+    for med in med_patterns:
+        if med in combined_text:
+            medications.append(med)
+
+    # ── 过敏 ──
+    allergies: list[str] = []
+    allergy_match = re.search(r"过敏[史]?[:\s：]*(.+?)(?:\n|$)", combined_text)
+    if allergy_match:
+        raw_allergies = re.split(r"[、，,；;/]", allergy_match.group(1))
+        allergies = [a.strip() for a in raw_allergies if a.strip() and a.strip() not in ("无", "否认", "无特殊")]
+    if re.search(r"(无过敏|否认过敏|无药物过敏)", combined_text):
+        allergies = []
+
+    # ── 医生诊断列表 ──
+    doctor_diagnoses: list[str] = []
+    if doctor_diagnosis and doctor_diagnosis.strip() and not doctor_diagnosis.startswith("（"):
+        raw_dx = re.split(r"[、，,;\n]", doctor_diagnosis)
+        doctor_diagnoses = [d.strip() for d in raw_dx if d.strip()]
+
+    # ── 治疗项目列表 ──
+    treatment_items: list[str] = []
+    if treatment_plan and treatment_plan.strip() and not treatment_plan.startswith("（"):
+        raw_tx = re.split(r"[\n；;]", treatment_plan)
+        treatment_items = [t.strip() for t in raw_tx if t.strip()]
+
+    return ClinicalFacts(
+        age=age,
+        gender=gender,
+        chief_complaint=chief_complaint,
+        symptoms=symptoms,
+        timeline=timeline,
+        red_flags=red_flags,
+        comorbidities=comorbidities,
+        medications=medications,
+        allergies=allergies,
+        doctor_diagnoses=doctor_diagnoses,
+        treatment_items=treatment_items,
+    )
+
+
+# ── 三类查询构建 ─────────────────────────────────────────────────────────────
+
+def build_queries(facts: ClinicalFacts) -> list[RetrievalQuery]:
+    """构建三类独立查询，消除确认偏误"""
+    queries = [
+        RetrievalQuery(
+            query_type="case",
+            text=_build_case_query(facts),
+            source="clinical_facts",
+        )
+    ]
+    if facts.doctor_diagnoses:
+        queries.append(
+            RetrievalQuery(
+                query_type="diagnosis",
+                text=_build_diagnosis_query(facts),
+                source="clinical_facts",
+            )
+        )
+    if facts.treatment_items:
+        queries.append(
+            RetrievalQuery(
+                query_type="treatment",
+                text=_build_treatment_query(facts),
+                source="clinical_facts",
+            )
+        )
+    return queries
+
+
+def _patient_demographic(facts: ClinicalFacts) -> str:
+    """构建患者人口学描述片段"""
+    parts = []
+    if facts.age is not None and facts.gender:
+        parts.append(f"{facts.age}岁{facts.gender}")
+    elif facts.age is not None:
+        parts.append(f"{facts.age}岁")
+    elif facts.gender:
+        parts.append(facts.gender)
+    return "".join(parts)
+
+
+def _build_case_query(facts: ClinicalFacts) -> str:
+    """病例查询：仅包含病例事实，不包含医生诊断"""
+    parts = []
+    demo = _patient_demographic(facts)
+    if demo:
+        parts.append(demo)
+    if facts.chief_complaint:
+        parts.append(f"主诉：{facts.chief_complaint}")
+    if facts.symptoms:
+        parts.append(f"症状：{'、'.join(facts.symptoms[:8])}")
+    if facts.timeline:
+        parts.append(f"病程：{'，'.join(facts.timeline[:3])}")
+    if facts.comorbidities:
+        parts.append(f"既往史：{'、'.join(facts.comorbidities[:5])}")
+    if facts.red_flags:
+        parts.append(f"报警症状：{'、'.join(facts.red_flags[:3])}")
+    return "，".join(parts) if parts else "病例信息查询"
+
+
+def _build_diagnosis_query(facts: ClinicalFacts) -> str:
+    """诊断查询：病例特征 + 医生诊断 + 鉴别诊断"""
+    parts = []
+    demo = _patient_demographic(facts)
+    if demo:
+        parts.append(demo)
+    if facts.chief_complaint:
+        parts.append(facts.chief_complaint)
+    elif facts.symptoms:
+        parts.append("、".join(facts.symptoms[:5]))
+    if facts.doctor_diagnoses:
+        parts.append(f"诊断：{'、'.join(facts.doctor_diagnoses)}")
+    parts.append("鉴别诊断要点")
+    return "，".join(parts) if parts else "诊断鉴别查询"
+
+
+def _build_treatment_query(facts: ClinicalFacts) -> str:
+    """治疗查询：疾病 + 分期 + 合并症 + 药物 + 剂量 + 疗程"""
+    parts = []
+    if facts.doctor_diagnoses:
+        parts.append("、".join(facts.doctor_diagnoses))
+    demo = _patient_demographic(facts)
+    if demo:
+        parts.append(demo)
+    if facts.comorbidities:
+        parts.append(f"合并{'、'.join(facts.comorbidities[:3])}")
+    parts.append("治疗方案")
+    if facts.treatment_items:
+        # 提取治疗关键词（去掉序号和剂量细节）
+        tx_keywords = []
+        for item in facts.treatment_items[:5]:
+            clean = re.sub(r"^\d+[.、)\s]+", "", item).strip()
+            if clean:
+                tx_keywords.append(clean[:30])
+        if tx_keywords:
+            parts.append("、".join(tx_keywords))
+    parts.append("药物剂量 疗程 禁忌证")
+    return "，".join(parts) if parts else "治疗方案查询"
+
+
+# ── JSON 解析（三层策略）─────────────────────────────────────────────────────
 
 def _extract_json(text: str) -> dict:
-    """从 LLM 返回的文本中提取 JSON"""
+    """从 LLM 返回的文本中提取 JSON（三层解析策略）"""
     if not text or not text.strip():
         raise ValueError("LLM 返回内容为空")
-    
+
     # 1. 尝试直接解析
     try:
         return json.loads(text.strip())
     except (json.JSONDecodeError, ValueError):
         pass
-    
+
     # 2. 尝试移除 markdown 代码块后解析
     cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
     try:
         return json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
         pass
-    
+
     # 3. 尝试正则提取第一个 JSON 对象
     try:
         match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
@@ -123,73 +335,75 @@ def _extract_json(text: str) -> dict:
             return json.loads(match.group(1))
     except (json.JSONDecodeError, AttributeError):
         pass
-    
+
     raise ValueError(f"无法解析 JSON: {text[:200]}...")
 
 
-def _calculate_score(consistency: bool, confidence: float) -> int:
-    """
-    基于一致性和置信度计算评分
-    
-    评分规则：
-    - 一致时：Score = confidence * 100（置信度越高分越高）
-    - 不一致时：Score = (1 - confidence) * 100（置信度越高分越低）
-    """
-    confidence = max(0.0, min(1.0, confidence))
-    if consistency:
-        score = confidence * 100
-    else:
-        score = (1 - confidence) * 100
-    return int(round(max(0.0, min(100.0, score))))
+# ── 评分映射 ─────────────────────────────────────────────────────────────────
 
+def _map_consistency_to_score(stance: str, confidence: float) -> int:
+    """将一致性和置信度映射为 0-100 分"""
+    base_scores = {
+        "supports": 90,
+        "mixed": 65,
+        "contradicts": 40,
+        "undetermined": 50,
+    }
+    base = base_scores.get(stance, 50)
+    return int(base * confidence + base * (1 - confidence) * 0.5)
+
+
+# ── 分析文本生成 ──────────────────────────────────────────────────────────────
 
 def _generate_analysis(
-    consistency: bool,
-    confidence: float,
-    evidence: str,
+    consistency_result: dict,
+    facts: ClinicalFacts,
     doctor_diagnosis: str,
-    treatment_plan: str
+    treatment_plan: str,
+    retrieval_status: str,
+    evidence_stance: str,
+    citations: list,
+    needs_review: bool,
+    review_reason: Optional[str],
 ) -> str:
-    """生成详细的分析文本（150-300字）"""
-    
-    # 一致性判断描述
-    if consistency:
-        consistency_desc = "诊断和治疗方案与医学证据基本一致"
-        quality_desc = "医学知识运用合理"
-    else:
-        consistency_desc = "诊断和治疗方案与医学证据存在不一致"
-        quality_desc = "存在改进空间"
-    
-    # 置信度描述
-    if confidence >= 0.8:
-        confidence_desc = "判断置信度高"
-    elif confidence >= 0.6:
-        confidence_desc = "判断置信度中等"
-    else:
-        confidence_desc = "判断置信度较低，建议进一步核实"
-    
-    # 构建分析文本
-    analysis_parts = [
-        f"医学知识核对结果：{consistency_desc}，{quality_desc}。",
-        f"评估置信度为{confidence*100:.0f}%，{confidence_desc}。",
-        f"核心医学证据：{evidence}",
+    """生成 150-300 字的分析文本"""
+    if needs_review:
+        analysis = f"医学知识核对无法完成自动评估。原因：{review_reason}。"
+        analysis += "建议人工复核诊断和治疗方案的合理性。"
+        if facts.doctor_diagnoses:
+            analysis += f" 医生诊断：{'、'.join(facts.doctor_diagnoses[:3])}。"
+        return analysis[:300]
+
+    stance_desc = {
+        "supports": "诊断和治疗方案与医学证据基本一致",
+        "contradicts": "诊断和治疗方案与医学证据存在不一致",
+        "mixed": "诊断和治疗方案与医学证据部分一致",
+        "undetermined": "证据不足以确定一致性",
+    }
+    desc = stance_desc.get(evidence_stance, "一致性未确定")
+
+    confidence = consistency_result.get("confidence", 0.5)
+    analysis_text = consistency_result.get("analysis", "")
+    key_findings = consistency_result.get("key_findings", [])
+
+    parts = [
+        f"医学知识核对结果：{desc}。",
+        f"评估置信度为{confidence * 100:.0f}%。",
     ]
-    
-    # 添加诊断和治疗方案概述
-    if doctor_diagnosis:
-        analysis_parts.append(f"医生诊断：{doctor_diagnosis[:50]}{'...' if len(doctor_diagnosis) > 50 else ''}")
-    
-    analysis = " ".join(analysis_parts)
-    
-    # 确保长度在 150-300 字之间
+    if analysis_text:
+        parts.append(analysis_text)
+    if key_findings:
+        parts.append(f"关键发现：{'；'.join(key_findings[:3])}")
+    if citations:
+        parts.append(f"共引用{len(citations)}条医学证据支持评估结论。")
+
+    analysis = " ".join(parts)
     if len(analysis) < 150:
-        # 补充说明
         analysis += " 建议医生在后续诊疗中持续关注指南更新，确保诊疗方案符合最新的循证医学证据。"
-    
-    return analysis[:300] if len(analysis) > 300 else analysis
+    return analysis[:300]
 
 
-# ── Main Function ──
+# ── 主函数 ────────────────────────────────────────────────────────────────────
 
 async def run_knowledge_check(
     conversation_text: str,
@@ -198,116 +412,252 @@ async def run_knowledge_check(
     treatment_plan: str,
     enable_hyde: bool = True,
 ) -> dict:
-    """
-    基于 RAG 检索增强与一致性评估的医学知识核对
-    
-    评估流程：
-    1. RAG 检索：从医学知识库检索相关临床指南证据
-    2. 一致性评估：LLM 评估诊断/治疗方案与医学证据的一致性
-    3. 代码计算：基于一致性和置信度计算最终评分
-    4. 生成分析：代码生成详细的分析文本
-    
+    """基于 RAG 分级检索与一致性评估的医学知识核对
+
     Args:
         conversation_text: 问诊对话记录
         patient_info: 患者基本信息
         doctor_diagnosis: 医生提交的诊断
         treatment_plan: 医生提交的治疗方案
-    
+        enable_hyde: 保留参数（分级检索内部自动控制 HyDE）
+
     Returns:
-        dict: {"raw_response": json.dumps({"score": int, "analysis": str, "details": {...}})}
+        dict 包含 raw_response（JSON 字符串）及新增字段
     """
-    
-    # ── Step 1: RAG 混合检索增强（BM25 + 向量 + RRF + Cross-Encoder 重排序）──
-    evidence_text = ""
-    rag_success = False
     try:
-        # 基于诊断和治疗方案检索医学证据（MQE + 混合检索 + 重排序）
-        query = f"{doctor_diagnosis} {treatment_plan}".strip()
-        if query:
-            evidences = await retrieve_with_mqe(
-                query, top_k=5, enable_mqe=True,
-                enable_hybrid=True, enable_rerank=True,
-                enable_hyde=enable_hyde,
+        # ── Step 1: 提取结构化病例事实 ──
+        facts = extract_clinical_facts(
+            conversation_text, patient_info, doctor_diagnosis, treatment_plan
+        )
+        logger.info(
+            f"病例事实提取完成：年龄={facts.age}, 性别={facts.gender}, "
+            f"症状={len(facts.symptoms)}个, 诊断={len(facts.doctor_diagnoses)}个, "
+            f"治疗项={len(facts.treatment_items)}个"
+        )
+
+        # ── Step 2: 构建三类查询 ──
+        queries = build_queries(facts)
+        logger.info(f"查询构建完成：{len(queries)}条查询 ({', '.join(q.query_type for q in queries)})")
+
+        # ── Step 3: 分级检索 ──
+        bundle = await tiered_retrieve(
+            queries=queries,
+            top_k_per_query=10,
+            candidate_limit=20,
+        )
+        logger.info(
+            f"分级检索完成：level={bundle.level_used}, status={bundle.status}, "
+            f"候选={len(bundle.candidates)}条"
+        )
+
+        # ── Step 4: 两阶段重排序 ──
+        reranked: list[EvidenceItem] = []
+        rerank_degraded = False
+        rerank_start = time.monotonic()
+        if bundle.candidates:
+            rerank_query = " | ".join(q.text for q in queries)
+            # 记录 rerank 输入数量到 trace
+            bundle.trace["rerank_input_count"] = len(bundle.candidates)
+            bundle.trace["llm_rerank_count"] = min(len(bundle.candidates), 5)
+            reranked, rerank_degraded = await two_stage_rerank(
+                query=rerank_query,
+                documents=bundle.candidates,
+                top_k=5,
             )
-            evidence_text = format_evidence_for_verification(evidences)
-            rag_success = True
+            rerank_elapsed = (time.monotonic() - rerank_start) * 1000
+            bundle.trace["timing"]["rerank_ms"] = round(rerank_elapsed, 1)
+            logger.info(f"两阶段重排完成：{len(bundle.candidates)}条 → {len(reranked)}条 (degraded={rerank_degraded})")
+        else:
+            logger.info("无候选证据，跳过重排序")
+
+        # ── Step 5: 一致性判断（LLM）──
+        consistency_result = await _llm_consistency_check(
+            reranked, doctor_diagnosis, treatment_plan, patient_info, conversation_text
+        )
+        evidence_stance = consistency_result.get("consistency", "undetermined")
+        confidence = float(consistency_result.get("confidence", 0.5))
+        logger.info(f"一致性判断：stance={evidence_stance}, confidence={confidence:.2f}")
+
+        # ── Step 6: 构建引用列表 ──
+        citations: list[Citation] = []
+        for i, evidence in enumerate(reranked):
+            citation_id = f"rag-v2:{evidence.source}:{evidence.page or 0}:{i}"
+            citations.append(Citation(
+                citation_id=citation_id,
+                claim=evidence.text[:200],
+                source=evidence.source,
+                page=evidence.page,
+                heading_path=evidence.heading_path,
+                text_snippet=evidence.text[:500],
+                rerank_score=evidence.rerank_score,
+            ))
+        logger.info(f"引用列表构建完成：{len(citations)}条引用")
+
+        # ── Step 7: 确定 retrieval_status 和 evidence_stance ──
+        retrieval_status = bundle.status
+        if retrieval_status == "candidate":
+            retrieval_status = "sufficient"
+
+        # ── Step 8: 拒答逻辑 ──
+        needs_review = False
+        review_reason: Optional[str] = None
+        score: Optional[int] = None
+
+        if retrieval_status in ("insufficient", "unavailable", "error"):
+            needs_review = True
+            review_reason = f"检索状态: {retrieval_status}"
+        elif evidence_stance == "mixed" and confidence < 0.5:
+            needs_review = True
+            review_reason = f"证据立场混合且置信度低({confidence:.2f})"
+        elif evidence_stance == "undetermined":
+            needs_review = True
+            review_reason = "证据立场无法确定"
+
+        if not needs_review:
+            score = _map_consistency_to_score(evidence_stance, confidence)
+
+        if needs_review:
+            logger.info(f"触发拒答逻辑：reason={review_reason}")
+
+        # ── Step 9: 生成分析文本 ──
+        analysis_text = _generate_analysis(
+            consistency_result=consistency_result,
+            facts=facts,
+            doctor_diagnosis=doctor_diagnosis,
+            treatment_plan=treatment_plan,
+            retrieval_status=retrieval_status,
+            evidence_stance=evidence_stance,
+            citations=citations,
+            needs_review=needs_review,
+            review_reason=review_reason,
+        )
+
+        # ── Step 10: 构造返回结果 ──
+        # raw_response 保持与 evaluation_service.py 的兼容性
+        raw_payload = {
+            "score": score if score is not None else 50,  # 拒答时给默认分，兼容旧流程
+            "analysis": analysis_text,
+        }
+
+        result = {
+            "raw_response": json.dumps(raw_payload, ensure_ascii=False),
+            # 新增字段（供 Task 7 使用）
+            "score": score,
+            "analysis": analysis_text,
+            "retrieval_status": retrieval_status,
+            "evidence_stance": evidence_stance,
+            "citations": [c.model_dump() for c in citations],
+            "human_review_needed": needs_review,
+            "review_reason": review_reason,
+            "confidence": confidence,
+            "rag_trace": bundle.trace,
+            "degraded": bundle.degraded or rerank_degraded,
+        }
+
+        return result
+
     except Exception as e:
-        logging.error(f"RAG 混合检索失败: {e}")
-        evidence_text = "未检索到医学证据"
-    
-    # ── Step 2: LLM 一致性评估 ──
-    try:
-        # 构建用户输入内容
-        user_content_parts = [
-            f"【患者信息】\n{patient_info}\n",
-            f"【问诊对话记录】\n{conversation_text}\n",
-            f"【医生诊断】\n{doctor_diagnosis}\n",
-            f"【治疗方案】\n{treatment_plan}\n",
-        ]
-        
-        if evidence_text:
-            user_content_parts.append(f"【检索到的医学证据】\n{evidence_text}")
-        
-        user_content = "\n".join(user_content_parts)
-        
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": FEWSHOT_USER_1},
-            {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
-            {"role": "user", "content": FEWSHOT_USER_2},
-            {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
-            {"role": "user", "content": user_content},
-        ]
-        
-        result = await call_qwen_chat(messages, temperature=0.2)
-        
-        # 解析 LLM 输出
-        consistency_data = _extract_json(result)
-        
-        consistency = consistency_data.get("consistency", False)
-        confidence = float(consistency_data.get("confidence", 0.5))
-        evidence = consistency_data.get("evidence", "未提供证据摘要")
-        
-    except Exception as e:
-        logging.error(f"一致性评估 LLM 调用失败: {e}")
-        # 错误降级：返回默认中等分数
+        logger.error(f"知识核对流程异常: {e}", exc_info=True)
+        # 全局降级：不崩溃，返回安全默认值
+        fallback_payload = {
+            "score": 50,
+            "analysis": "医学知识核对过程中遇到技术问题，无法完成评估。默认给予中等分数，建议人工复核。",
+        }
         return {
-            "raw_response": json.dumps({
-                "score": 50,
-                "analysis": "医学知识核对过程中遇到技术问题，无法完成评估。默认给予中等分数，建议人工复核。",
-                "details": {
-                    "consistency": None,
-                    "confidence": 0.5,
-                    "error": str(e),
-                    "rag_success": rag_success,
-                }
-            }, ensure_ascii=False)
+            "raw_response": json.dumps(fallback_payload, ensure_ascii=False),
+            "score": 50,
+            "analysis": fallback_payload["analysis"],
+            "retrieval_status": "error",
+            "evidence_stance": "undetermined",
+            "citations": [],
+            "human_review_needed": True,
+            "review_reason": f"系统异常: {str(e)}",
+            "confidence": 0.5,
+            "rag_trace": {},
+            "degraded": True,
         }
-    
-    # ── Step 3: 代码计算评分 ──
-    final_score = _calculate_score(consistency, confidence)
-    
-    # ── Step 4: 生成分析文本 ──
-    analysis = _generate_analysis(
-        consistency=consistency,
-        confidence=confidence,
-        evidence=evidence,
-        doctor_diagnosis=doctor_diagnosis,
-        treatment_plan=treatment_plan,
+
+
+# ── LLM 一致性检查 ────────────────────────────────────────────────────────────
+
+async def _llm_consistency_check(
+    reranked: list[EvidenceItem],
+    doctor_diagnosis: str,
+    treatment_plan: str,
+    patient_info: str,
+    conversation_text: str,
+) -> dict:
+    """调用 LLM 分析重排后的证据与医生诊断/治疗方案的一致性
+
+    Returns:
+        dict 含 consistency, confidence, analysis, key_findings
+    """
+    if not reranked:
+        logger.info("无重排证据，跳过 LLM 一致性检查")
+        return {
+            "consistency": "undetermined",
+            "confidence": 0.3,
+            "analysis": "未检索到足够的医学证据进行一致性评估",
+            "key_findings": [],
+        }
+
+    # 构建证据文本
+    evidence_parts = []
+    for i, ev in enumerate(reranked, 1):
+        snippet = ev.text[:600]
+        source_info = f"（来源: {ev.source}"
+        if ev.page:
+            source_info += f", 第{ev.page}页"
+        if ev.organization:
+            source_info += f", {ev.organization}"
+        source_info += "）"
+        evidence_parts.append(f"证据{i}{source_info}：\n{snippet}")
+    evidence_text = "\n\n".join(evidence_parts)
+
+    user_content = (
+        f"【患者信息】\n{patient_info}\n\n"
+        f"【问诊对话摘要】\n{conversation_text[:1000]}\n\n"
+        f"【医生诊断】\n{doctor_diagnosis}\n\n"
+        f"【治疗方案】\n{treatment_plan}\n\n"
+        f"【检索到的医学证据（共{len(reranked)}条）】\n{evidence_text}"
     )
-    
-    # 构建返回结果
-    result = {
-        "score": final_score,
-        "analysis": analysis,
-        "details": {
-            "consistency": consistency,
-            "confidence": round(confidence, 2),
-            "evidence_summary": evidence,
-            "rag_success": rag_success,
-            "mqe_enabled": True,
-            "hyde_enabled": enable_hyde,
+
+    messages = [
+        {"role": "system", "content": CONSISTENCY_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        response = await call_qwen_chat(messages, temperature=0.2)
+        result = _extract_json(response)
+
+        # 校验 consistency 字段值
+        valid_stances = {"supports", "contradicts", "mixed", "undetermined"}
+        stance = result.get("consistency", "undetermined")
+        if stance not in valid_stances:
+            # 兼容旧格式 true/false
+            if stance is True or stance == "true":
+                stance = "supports"
+            elif stance is False or stance == "false":
+                stance = "contradicts"
+            else:
+                stance = "undetermined"
+
+        confidence = float(result.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, confidence))
+
+        return {
+            "consistency": stance,
+            "confidence": confidence,
+            "analysis": str(result.get("analysis", "")),
+            "key_findings": result.get("key_findings", []),
         }
-    }
-    
-    return {"raw_response": json.dumps(result, ensure_ascii=False)}
+
+    except Exception as e:
+        logger.warning(f"LLM 一致性检查失败: {e}")
+        return {
+            "consistency": "undetermined",
+            "confidence": 0.3,
+            "analysis": f"一致性评估失败: {str(e)}",
+            "key_findings": [],
+        }

@@ -9,6 +9,7 @@ import chromadb
 from chromadb.config import Settings
 
 from app.services.rag.embeddings import get_embedding, EMBEDDING_DIM
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,13 @@ PERSIST_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent / "data" / "medical_kb"
 )
 
-COLLECTION_NAME = "medical_guidelines"
+COLLECTION_NAME = "medical_guidelines"  # 保留用于向后兼容
+
+
+def _get_collection_name() -> str:
+    """根据活跃索引版本返回 collection 名称"""
+    version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
+    return f"medical_guidelines_{version}"
 
 
 class MedicalKnowledgeStore:
@@ -34,11 +41,12 @@ class MedicalKnowledgeStore:
             path=str(PERSIST_DIR),
             settings=Settings(anonymized_telemetry=False),
         )
+        collection_name = _get_collection_name()
         self.collection = self.client.get_or_create_collection(
-            name=COLLECTION_NAME,
+            name=collection_name,
             metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
         )
-        logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR}")
+        logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR} (collection={collection_name})")
 
     def add_documents(
         self,
@@ -136,6 +144,18 @@ class MedicalKnowledgeStore:
                         "source": metadata.get("source", "未知"),
                         "page": metadata.get("page", 0),
                         "score": round(score, 4),
+                        "heading_path": metadata.get("heading_path", ""),
+                        "content_type": metadata.get("content_type", ""),
+                        "organization": metadata.get("organization"),
+                        "year": metadata.get("year"),
+                        "version": metadata.get("version"),
+                        "document_type": metadata.get("document_type"),
+                        "departments": metadata.get("departments"),
+                        "disease_tags": metadata.get("disease_tags"),
+                        "population": metadata.get("population"),
+                        "recommendation_level": metadata.get("recommendation_level"),
+                        "evidence_level": metadata.get("evidence_level"),
+                        "metadata_source": metadata.get("metadata_source"),
                     }
                 )
 
@@ -200,3 +220,30 @@ def get_medical_store() -> MedicalKnowledgeStore:
         _medical_store = MedicalKnowledgeStore()
         _medical_store._init_client()
     return _medical_store
+
+
+def list_index_versions() -> list[str]:
+    """列出所有存在的索引版本"""
+    store = get_medical_store()
+    if store.client is None:
+        store._init_client()
+    collections = store.client.list_collections()
+    versions = []
+    for col in collections:
+        if col.name.startswith("medical_guidelines_"):
+            version = col.name.replace("medical_guidelines_", "")
+            versions.append(version)
+    return versions
+
+
+def get_collection_count(collection_name: str = None) -> int:
+    """获取指定 collection 的文档数"""
+    store = get_medical_store()
+    if store.client is None:
+        store._init_client()
+    name = collection_name or _get_collection_name()
+    try:
+        col = store.client.get_collection(name)
+        return col.count()
+    except Exception:
+        return 0

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, Float, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, Boolean, Text, JSON, DateTime, ForeignKey
 
 from app.models.base import Base
 
@@ -20,7 +20,7 @@ class Evaluation(Base):
     inquiry_analysis = Column(Text, default="", comment="病史采集分析详情")
 
     # 维度2: 医学知识（医学知识核对智能体）
-    knowledge_score = Column(Float, default=0, comment="医学知识评分")
+    knowledge_score = Column(Float, nullable=True, default=None, comment="医学知识评分")
     knowledge_analysis = Column(Text, default="", comment="知识核对详情")
 
     # 维度3: 沟通交流（人文关怀评估智能体）
@@ -36,10 +36,19 @@ class Evaluation(Base):
     treatment_analysis = Column(Text, default="", comment="治疗方案评估详情")
 
     # 综合评分
-    total_score = Column(Float, default=0, comment="综合评分")
+    total_score = Column(Float, nullable=True, default=None, comment="综合评分")
     overall_summary = Column(Text, default="", comment="综合评估摘要")
 
     # 建议指导
     improvement_suggestions = Column(Text, default="", comment="改进建议")
+
+    # RAG 审计字段
+    citation_data = Column(JSON, nullable=True, comment="引用数据")
+    retrieval_status = Column(String(20), nullable=False, default='not_run', comment="检索状态")
+    evidence_stance = Column(String(20), nullable=False, default='undetermined', comment="证据立场")
+    human_review_needed = Column(Boolean, nullable=False, default=False, comment="是否需要人工复核")
+    review_reason = Column(Text, nullable=True, comment="复核原因")
+    rag_trace_data = Column(JSON, nullable=True, comment="RAG 追踪数据")
+    evaluation_status = Column(String(20), nullable=False, default='completed', comment="评估状态")
 
     created_at = Column(DateTime, default=datetime.utcnow)

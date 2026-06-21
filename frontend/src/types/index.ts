@@ -62,12 +62,22 @@ export interface ConsultationDetail extends Consultation {
   messages: Message[];
 }
 
+export interface Citation {
+  citation_id: string;
+  claim: string;
+  source: string;
+  page?: number | null;
+  heading_path: string;
+  text_snippet: string;
+  rerank_score?: number | null;
+}
+
 export interface Evaluation {
   id: number;
   consultation_id: number;
   inquiry_score: number;
   inquiry_analysis: string;
-  knowledge_score: number;
+  knowledge_score?: number | null;
   knowledge_analysis: string;
   humanistic_score: number;
   humanistic_analysis: string;
@@ -75,10 +85,16 @@ export interface Evaluation {
   diagnosis_analysis: string;
   treatment_score: number;
   treatment_analysis: string;
-  total_score: number;
+  total_score?: number | null;
   overall_summary: string;
   improvement_suggestions: string;
   created_at: string;
+  citation_data?: Citation[] | null;
+  retrieval_status: string;
+  evidence_stance: string;
+  human_review_needed: boolean;
+  review_reason?: string | null;
+  evaluation_status: string;
 }
 
 export interface UserStatItem {

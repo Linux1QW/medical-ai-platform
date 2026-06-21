@@ -43,11 +43,17 @@ class Settings(BaseSettings):
     QWEN_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     QWEN_MODEL: str = "qwen3.7-max"
 
+    # Rerank 模型
+    RERANK_MODEL: str = "gte-rerank"
+
     # LLM 并发控制
     # 全局同时允许的最大 LLM API 调用数（防止触发 API 限流 429）
     LLM_MAX_CONCURRENT: int = 10
     # 等待信号量超时（秒），超时后抛出异常避免无限排队
     LLM_SEMAPHORE_TIMEOUT: int = 60
+
+    # RAG 索引版本
+    ACTIVE_INDEX_VERSION: str = "rag-v1"    # 当前活跃版本
 
     class Config:
         env_file = ".env"

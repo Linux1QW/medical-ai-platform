@@ -6,6 +6,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import sys
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from app.services.rag.embeddings import get_embeddings
 from app.services.rag.medical_store import get_medical_store
+from app.services.rag.metadata_config import get_enriched_metadata, DocumentMetadata
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -414,6 +416,63 @@ def chunk_text(
     return all_chunks_with_meta
 
 
+# ── 推荐等级/证据等级提取 ──────────────────────────────────────────────────────────
+
+# 推荐等级正则
+_RECOMMENDATION_LEVEL_RE = re.compile(
+    r'((?:I+|IV|V?I{1,3}|[一二三四五])级推荐|[ABC]级推荐|强推荐|弱推荐|条件性推荐)',
+    re.IGNORECASE
+)
+
+# 证据等级正则
+_EVIDENCE_LEVEL_RE = re.compile(
+    r'(?:证据等级|证据级别|证据水平)[：:\s]*([1-5][ABC]?|[ABC])',
+    re.IGNORECASE
+)
+
+
+def _extract_recommendation_level(text: str) -> str:
+    """从 chunk 文本中提取推荐等级"""
+    match = _RECOMMENDATION_LEVEL_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _extract_evidence_level(text: str) -> str:
+    """从 chunk 文本中提取证据等级"""
+    match = _EVIDENCE_LEVEL_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _build_embedding_text(chunk_text: str, doc_meta: DocumentMetadata, heading_path: str = "",
+                          recommendation_level: str = "", evidence_level: str = "") -> str:
+    """构建增强 embedding 文本，将元数据注入文本前缀
+
+    格式：
+    来源机构：CSCO
+    指南：非小细胞肺癌诊疗指南
+    版本：2025版
+    章节：第三章 > 3.1 外科治疗
+    推荐等级：I级推荐
+    证据等级：1A
+    正文：……
+    """
+    parts = []
+    if doc_meta.organization:
+        parts.append(f"来源机构：{doc_meta.organization}")
+    if doc_meta.title:
+        parts.append(f"指南：{doc_meta.title}")
+    if doc_meta.version:
+        parts.append(f"版本：{doc_meta.version}")
+    if heading_path:
+        parts.append(f"章节：{heading_path}")
+    if recommendation_level:
+        parts.append(f"推荐等级：{recommendation_level}")
+    if evidence_level:
+        parts.append(f"证据等级：{evidence_level}")
+    parts.append(f"正文：{chunk_text}")
+    return "\n".join(parts)
+
+
 # ── 表格抽取辅助函数 ──────────────────────────────────────────────────────────────
 
 def _rects_overlap(block_bbox: tuple, table_bbox: tuple, threshold: float = 0.1) -> bool:
@@ -569,6 +628,17 @@ def generate_doc_id(source: str, page: int, chunk_idx: int, content: str) -> str
     return f"{source}_p{page}_c{chunk_idx}_{content_hash}"
 
 
+def generate_stable_chunk_id(source: str, page: int, heading_path: str, chunk_seq: int, text: str) -> str:
+    """生成稳定的 chunk ID
+
+    格式: {file_hash_8}:{page}:{heading_hash_4}:{seq}
+    确保相同内容的 chunk 在不同构建中产生相同的 ID。
+    """
+    file_hash = hashlib.md5(source.encode()).hexdigest()[:8]
+    heading_hash = hashlib.md5(heading_path.encode()).hexdigest()[:4] if heading_path else "0000"
+    return f"{file_hash}:p{page}:h{heading_hash}:c{chunk_seq}"
+
+
 def _extract_chunks_from_page(page_info: Dict) -> List[Dict]:
     """将单页 page_info 转换为 chunk 列表，区分正文和表格两种类型。
 
@@ -640,23 +710,58 @@ async def build_medical_index():
 
     logger.info(f"共提取 {len(all_chunks)} 个文本块")
 
-    # 4. 批量生成 embedding
-    texts = [chunk["text"] for chunk in all_chunks]
+    # 4. 批量生成 embedding（使用增强 embedding 文本）
     logger.info("开始生成文本向量...")
 
     try:
-        embeddings = await get_embeddings(texts)
+        embedding_texts = []
+        for chunk in all_chunks:
+            source_filename = chunk["source"]
+            doc_meta = get_enriched_metadata(source_filename)
+            rec_level = _extract_recommendation_level(chunk["text"])
+            ev_level = _extract_evidence_level(chunk["text"])
+            enhanced_text = _build_embedding_text(
+                chunk["text"], doc_meta,
+                heading_path=chunk.get("heading_path", ""),
+                recommendation_level=rec_level,
+                evidence_level=ev_level,
+            )
+            embedding_texts.append(enhanced_text)
+
+        embeddings = await get_embeddings(embedding_texts)
         logger.info(f"向量生成完成: {len(embeddings)} 条")
     except Exception as e:
         logger.error(f"向量生成失败: {e}")
         return
 
-    # 5. 准备 ChromaDB 数据
+    # 5. 准备 ChromaDB 数据（增强 metadata）
     ids = [chunk["id"] for chunk in all_chunks]
     documents = [chunk["text"] for chunk in all_chunks]
-    metadatas = [
-        {"source": chunk["source"], "page": chunk["page"], "heading_path": chunk.get("heading_path", ""), "content_type": chunk.get("content_type", "text")} for chunk in all_chunks
-    ]
+    metadatas = []
+    for chunk in all_chunks:
+        source_filename = chunk["source"]
+        doc_meta = get_enriched_metadata(source_filename)
+        rec_level = _extract_recommendation_level(chunk["text"])
+        ev_level = _extract_evidence_level(chunk["text"])
+        enhanced_meta = {
+            "source": chunk["source"],
+            "page": chunk["page"],
+            "heading_path": chunk.get("heading_path", ""),
+            "content_type": chunk.get("content_type", "text"),
+            # 增强字段
+            "organization": doc_meta.organization or "",
+            "year": doc_meta.year or 0,
+            "version": doc_meta.version or "",
+            "document_type": doc_meta.document_type,
+            "title": doc_meta.title,
+            "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
+            "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
+            "population": json.dumps(doc_meta.population, ensure_ascii=False),
+            "recommendation_level": rec_level,
+            "evidence_level": ev_level,
+            "index_version": "rag-v2",
+        }
+        metadatas.append(enhanced_meta)
 
     # 6. 存入 ChromaDB
     store = get_medical_store()
@@ -728,24 +833,49 @@ async def index_single_pdf(
         logger.warning(f"'{source_name}' 未提取到任何文本块")
         return {"source": source_name, "status": "added", "chunks": 0}
 
-    # 生成向量
-    texts = [c["text"] for c in chunks]
-    embeddings = await get_embeddings(texts)
+    # 生成增强 embedding 文本
+    doc_meta = get_enriched_metadata(source_name)
+    embedding_texts = []
+    for c in chunks:
+        rec_level = _extract_recommendation_level(c["text"])
+        ev_level = _extract_evidence_level(c["text"])
+        enhanced_text = _build_embedding_text(
+            c["text"], doc_meta,
+            heading_path=c.get("heading_path", ""),
+            recommendation_level=rec_level,
+            evidence_level=ev_level,
+        )
+        embedding_texts.append(enhanced_text)
+    embeddings = await get_embeddings(embedding_texts)
 
-    # 写入 ChromaDB
+    # 构建增强 metadata 并写入 ChromaDB
+    enhanced_metadatas = []
+    for c in chunks:
+        rec_level = _extract_recommendation_level(c["text"])
+        ev_level = _extract_evidence_level(c["text"])
+        enhanced_metadatas.append({
+            "source": c["source"],
+            "page": c["page"],
+            "heading_path": c.get("heading_path", ""),
+            "content_type": c.get("content_type", "text"),
+            "organization": doc_meta.organization or "",
+            "year": doc_meta.year or 0,
+            "version": doc_meta.version or "",
+            "document_type": doc_meta.document_type,
+            "title": doc_meta.title,
+            "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
+            "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
+            "population": json.dumps(doc_meta.population, ensure_ascii=False),
+            "recommendation_level": rec_level,
+            "evidence_level": ev_level,
+            "index_version": "rag-v2",
+        })
+
     store.add_documents(
         ids=[c["id"] for c in chunks],
-        documents=texts,
+        documents=[c["text"] for c in chunks],
         embeddings=embeddings,
-        metadatas=[
-            {
-                "source": c["source"],
-                "page": c["page"],
-                "heading_path": c.get("heading_path", ""),
-                "content_type": c.get("content_type", "text"),
-            }
-            for c in chunks
-        ],
+        metadatas=enhanced_metadatas,
     )
     status = "replaced" if force_replace and existing_count > 0 else "added"
     logger.info(f"'{source_name}' 增量索引完成，共 {len(chunks)} 块，status={status}")
@@ -764,3 +894,47 @@ async def get_indexed_sources() -> List[dict]:
 
 if __name__ == "__main__":
     asyncio.run(build_medical_index())
+
+
+async def switch_index_version(new_version: str) -> dict:
+    """切换活跃索引版本
+
+    Args:
+        new_version: 新版本标识（如 "rag-v2"）
+
+    Returns:
+        {"previous": str, "current": str, "doc_count": int}
+    """
+    from app.core.config import settings
+
+    previous = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
+
+    # 验证新版本 collection 存在
+    store = get_medical_store()
+    if store.client is None:
+        store._init_client()
+
+    new_collection_name = f"medical_guidelines_{new_version}"
+    try:
+        col = store.client.get_collection(new_collection_name)
+        doc_count = col.count()
+    except Exception:
+        return {"error": f"Collection '{new_collection_name}' 不存在"}
+
+    # 更新配置（运行时更新，不修改 .env 文件）
+    settings.ACTIVE_INDEX_VERSION = new_version
+
+    # 重建 BM25 索引以匹配新版本
+    from app.services.rag.bm25_search import rebuild_bm25_index
+    rebuild_bm25_index()
+
+    # 更新 medical_store 的 collection 引用
+    store.collection = col
+
+    logger.info(f"索引版本切换: {previous} → {new_version} (文档数: {doc_count})")
+
+    return {
+        "previous": previous,
+        "current": new_version,
+        "doc_count": doc_count,
+    }

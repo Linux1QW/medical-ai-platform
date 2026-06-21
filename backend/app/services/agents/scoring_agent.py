@@ -201,7 +201,7 @@ async def run_scoring(
             total_score,
         )
     
-    # ── Step 3: 构建返回结果 ──
+    # ── Step 3: 构建返回结果（不设置默认值，由上层决定 total_score 是否为 None）──
     result = {
         "total_score": total_score,
         "summary": summary,
@@ -213,4 +213,4 @@ async def run_scoring(
         },
     }
     
-    return {"raw_response": json.dumps(result, ensure_ascii=False)}
+    return {"raw_response": json.dumps(result, ensure_ascii=False), "total_score": total_score, "summary": summary}

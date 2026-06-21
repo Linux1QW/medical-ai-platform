@@ -37,7 +37,7 @@ const DashboardPage: React.FC = () => {
 
   // 处理趋势数据
   const trendData = consultations
-    .filter(c => c.status === 'evaluated' && c.total_score !== undefined)
+    .filter(c => c.status === 'evaluated' && c.total_score !== undefined && c.total_score !== null)
     .filter(c => dayjs(c.started_at).isAfter(dayjs().subtract(days, 'days')))
     .map(c => ({
       id: c.id,

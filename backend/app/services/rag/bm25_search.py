@@ -198,23 +198,32 @@ def get_bm25_index() -> BM25Index:
 
 
 def _try_load_documents():
-    """尝试从 ChromaDB 医学知识库加载文档构建 BM25 索引"""
+    """尝试从当前活跃版本的 ChromaDB collection 加载文档构建 BM25 索引"""
     global _bm25_index
     try:
-        from app.services.rag.medical_store import get_medical_store
+        from app.services.rag.medical_store import get_medical_store, _get_collection_name
 
         store = get_medical_store()
-        if store.collection is None or store.collection.count() == 0:
-            logger.warning("医学知识库为空，BM25 索引不可用")
+        if store.client is None:
+            store._init_client()
+
+        collection_name = _get_collection_name()
+        try:
+            collection = store.client.get_collection(collection_name)
+        except Exception:
+            logger.warning(f"BM25 索引: collection '{collection_name}' 不存在")
             return
 
-        # 从 ChromaDB 获取所有文档（用于构建 BM25 索引）
-        count = store.collection.count()
-        # 分批获取，每批 1000 条
+        if collection.count() == 0:
+            logger.warning(f"BM25 索引: collection '{collection_name}' 为空")
+            return
+
+        # 从 collection 获取所有文档
+        count = collection.count()
         all_docs = []
         batch_size = 1000
         for offset in range(0, count, batch_size):
-            result = store.collection.get(
+            result = collection.get(
                 limit=batch_size,
                 offset=offset,
                 include=["documents", "metadatas"],
@@ -228,20 +237,32 @@ def _try_load_documents():
                         "text": doc_text,
                         "source": metadata.get("source", "未知"),
                         "page": metadata.get("page", 0),
+                        "heading_path": metadata.get("heading_path", ""),
+                        "content_type": metadata.get("content_type", ""),
+                        "organization": metadata.get("organization"),
+                        "year": metadata.get("year"),
+                        "version": metadata.get("version"),
+                        "document_type": metadata.get("document_type"),
+                        "departments": metadata.get("departments"),
+                        "disease_tags": metadata.get("disease_tags"),
+                        "population": metadata.get("population"),
+                        "recommendation_level": metadata.get("recommendation_level"),
+                        "evidence_level": metadata.get("evidence_level"),
+                        "metadata_source": metadata.get("metadata_source"),
                     })
 
         if all_docs:
             _bm25_index.build(all_docs, text_field="text")
-            logger.info(f"BM25 索引已从 ChromaDB 加载 {len(all_docs)} 个文档")
+            logger.info(f"BM25 索引已从 collection '{collection_name}' 加载 {len(all_docs)} 个文档")
         else:
-            logger.warning("ChromaDB 中无文档，BM25 索引为空")
+            logger.warning(f"Collection '{collection_name}' 中无文档，BM25 索引为空")
 
     except Exception as e:
         logger.warning(f"BM25 索引构建失败: {e}")
 
 
 def rebuild_bm25_index():
-    """强制重建 BM25 索引（在索引数据更新后调用）"""
+    """强制重建 BM25 索引（在索引版本切换或数据更新后调用）"""
     global _bm25_index
     _bm25_index = BM25Index()
     _try_load_documents()

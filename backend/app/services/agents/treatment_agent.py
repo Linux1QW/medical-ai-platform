@@ -2,7 +2,6 @@
 """治疗方案评估智能体 — 评估医生提交的治疗方案的合理性与规范性"""
 
 from app.services.qwen_client import call_qwen_chat
-from app.services.rag.retriever import retrieve_similar_cases, format_reference_for_treatment
 
 SYSTEM_PROMPT = """你是一名资深临床治疗方案评估专家。你的任务是对照临床指南，评估医生提交的治疗方案。
 
@@ -130,14 +129,7 @@ FEWSHOT_ASSISTANT_2 = """{
 async def run_treatment_evaluation(
     conversation_text: str, patient_info: str, doctor_diagnosis: str, treatment_plan: str
 ) -> dict:
-    # RAG：检索相似病例的标准处方作为评估参照
-    similar_cases = await retrieve_similar_cases(patient_info, top_k=3)
-    reference_text = format_reference_for_treatment(similar_cases)
-
-    user_content_parts = []
-    if reference_text:
-        user_content_parts.append(f"【相似病例参照（来自门诊数据库）】\n{reference_text}\n")
-    user_content_parts.append(
+    user_content = (
         f"【患者标准信息】\n{patient_info}\n\n"
         f"【问诊对话记录】\n{conversation_text}\n\n"
         f"【医生提交的诊断结果】\n{doctor_diagnosis}\n\n"
@@ -151,7 +143,7 @@ async def run_treatment_evaluation(
         {"role": "assistant", "content": FEWSHOT_ASSISTANT_1},
         {"role": "user", "content": FEWSHOT_USER_2},
         {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
-        {"role": "user", "content": "\n".join(user_content_parts)},
+        {"role": "user", "content": user_content},
     ]
     result = await call_qwen_chat(messages, temperature=0.2)
     return {"raw_response": result}

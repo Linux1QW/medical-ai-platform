@@ -7,9 +7,10 @@
 import asyncio
 import hashlib
 import logging
+import re
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import fitz  # PyMuPDF
 
@@ -33,94 +34,140 @@ PDF_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "data"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 
-# 标题识别正则模式（中文医学文档常见格式）
-HEADING_PATTERNS = [
-    r'^第[一二三四五六七八九十百零\d]+[章节部分]',     # 第一章、第2节、第3部分
-    r'^[一二三四五六七八九十]+[、.]',              # 一、二.
-    r'^[（\(][一二三四五六七八九十\d]+[）\)]',      # （一）、(1)
-    r'^\d+[.、]\d*\s*',                           # 1. 1.1 2、
-    r'^【.+?】',                                   # 【诊断】【治疗】
-    r'^[A-Z]\.[\s\u4e00-\u9fff]',              # A. B. 后跟中文
+# ── 标题层级识别配置（层级数字越小越高）──
+HEADING_LEVELS: List[Tuple[int, re.Pattern]] = [
+    # level 1: 章级
+    (1, re.compile(
+        r'^(第[一二三四五六七八九十百零\d]+[章部分篇]'
+        r'|[一二三四五六七八九十]+、'
+        r'|\d+\.\s*[\u4e00-\u9fff])',
+        re.MULTILINE
+    )),
+    # level 2: 节级
+    (2, re.compile(
+        r'^(\d+\.\d+[\s\u4e00-\u9fff]'
+        r'|[（\(][一二三四五六七八九十\d]+[）\)]'
+        r'|【[^】]{2,20}】)',
+        re.MULTILINE
+    )),
+    # level 3: 段落小标题
+    (3, re.compile(
+        r'^(\d+\.\d+\.\d+[\s\u4e00-\u9fff]'
+        r'|[A-Z]\.[\s\u4e00-\u9fff])',
+        re.MULTILINE
+    )),
 ]
 
-# 编译正则表达式
-import re
-HEADING_REGEX = re.compile('|'.join(HEADING_PATTERNS), re.MULTILINE)
+# 合并所有标题正则（用于 _get_heading_level）
+HEADING_REGEX = re.compile(
+    '|'.join(pat.pattern for _, pat in HEADING_LEVELS), re.MULTILINE
+)
 
 # 句末标点（中文和英文）
 SENTENCE_END_PUNCT = r'[。！？；.!?,]'
 
 
-def _is_heading(line: str) -> bool:
-    """判断一行是否为标题行
-    
-    Args:
-        line: 待检测的文本行
-        
-    Returns:
-        是否为标题行
-    """
+def _get_heading_level(line: str) -> int:
+    """返回标题行的层级（1=章级, 2=节级, 3=段落级, 0=非标题）"""
     stripped = line.strip()
     if not stripped:
-        return False
-    return bool(HEADING_REGEX.match(stripped))
+        return 0
+    for level, pattern in HEADING_LEVELS:
+        if pattern.match(stripped):
+            return level
+    return 0
 
 
-def _split_by_headings(text: str) -> List[tuple]:
-    """按章节标题分割文本
-    
-    Args:
-        text: 原始文本
-        
+def _clean_source_name(source: str) -> str:
+    """从文件名提取可读的来源标题（去掉路径和扩展名）"""
+    name = Path(source).stem
+    # 去掉常见前缀序号，如 "1.", "10."
+    name = re.sub(r'^\d+[.\s]*', '', name).strip()
+    return name or source
+
+
+def _split_by_headings(text: str) -> List[Tuple[str, str, List[str]]]:
+    """按章节标题分割文本，同时追踪标题层级路径
+
     Returns:
-        列表，每项为 (标题, 内容) 元组，标题可为空字符串表示文首无标题部分
+        列表，每项为 (当前标题, 内容, 祖先标题路径) 三元组
+        - 当前标题：本节的直接标题（可为空）
+        - 内容：本节文本
+        - 祖先路径：从文档顶层到本节父级的标题列表（包含当前标题）
     """
     lines = text.split('\n')
-    sections = []
+    sections: List[Tuple[str, str, List[str]]] = []
+
+    # 标题栈： [(level, heading_text), ...]
+    heading_stack: List[Tuple[int, str]] = []
     current_heading = ''
-    current_content_lines = []
-    
+    current_content_lines: List[str] = []
+
+    def flush():
+        if current_content_lines or current_heading:
+            ancestor_path = [h for _, h in heading_stack]
+            sections.append((
+                current_heading,
+                '\n'.join(current_content_lines),
+                ancestor_path,
+            ))
+
     for line in lines:
-        if _is_heading(line):
-            # 保存之前的章节
-            if current_content_lines or current_heading:
-                sections.append((current_heading, '\n'.join(current_content_lines)))
+        level = _get_heading_level(line)
+        if level > 0:
+            flush()
+            # 弹出所有层级 >= 当前层级的条目
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
             current_heading = line.strip()
+            heading_stack.append((level, current_heading))
             current_content_lines = []
         else:
             current_content_lines.append(line)
-    
-    # 保存最后一个章节
-    if current_content_lines or current_heading:
-        sections.append((current_heading, '\n'.join(current_content_lines)))
-    
+
+    flush()
     return sections
 
 
 def _split_by_paragraphs(text: str) -> List[str]:
-    """按段落分割文本（双换行或连续空行）
-    
-    Args:
-        text: 文本内容
-        
-    Returns:
-        段落列表
-    """
-    # 使用正则分割：连续空行（>=2个换行符或包含空行的换行）
+    """按段落分割文本（双换行或连续空行）"""
     paragraphs = re.split(r'\n\s*\n', text)
-    # 过滤空段落并清理空白
     return [p.strip() for p in paragraphs if p.strip()]
 
 
-def _split_by_sentences(text: str) -> List[str]:
-    """按句子边界分割文本
-    
-    Args:
-        text: 文本内容
-        
-    Returns:
-        句子列表
+def _build_context_prefix(
+    source_title: str,
+    heading: str,
+    ancestor_path: List[str],
+) -> str:
+    """构建 Contextual Retrieval 上下文前缀
+
+    将文档标题 + 标题层级路径拼接为上下文摘要前缀，注入每个 chunk 开头。
+
+    示例输出：
+        「来源：非小细胞肺癌诊疗指南 > 第三章 治疗原则 > 3.1 外科治疗」
     """
+    parts = [source_title] if source_title else []
+    # 去掉 ancestor_path 里与 heading 重复的最后一项
+    ancestors = [a for a in ancestor_path if a and a != heading]
+    parts.extend(ancestors)
+    if heading:
+        parts.append(heading)
+    if not parts:
+        return ""
+    return "「来源：" + " > ".join(parts) + "」"
+
+
+def _build_heading_path(heading: str, ancestor_path: List[str]) -> str:
+    """构建标题路径字符串（用于 metadata 存储）"""
+    parts = [a for a in ancestor_path if a and a != heading]
+    if heading:
+        parts.append(heading)
+    return " > ".join(parts) if parts else ""
+
+
+def _split_by_sentences(text: str) -> List[str]:
+    """按句子边界分割文本"""
     if len(text) <= CHUNK_SIZE:
         return [text]
     
@@ -270,50 +317,39 @@ def _apply_overlap(chunks: List[str], overlap: int) -> List[str]:
     return result
 
 
-def _process_section(heading: str, content: str, chunk_size: int) -> List[str]:
-    """处理单个章节，返回分块后的内容
-    
-    Args:
-        heading: 章节标题
-        content: 章节内容
-        chunk_size: 目标块大小
-        
-    Returns:
-        分块后的文本列表
-    """
+def _process_section(
+    heading: str,
+    content: str,
+    chunk_size: int,
+    context_prefix: str = "",
+) -> List[str]:
+    """处理单个章节，返回注入了上下文前缀的分块列表"""
     if not content.strip():
         return []
 
-    # 按段落分割
     paragraphs = _split_by_paragraphs(content)
-
-    # 对每个段落，如果过长则进一步按句子分割
     units = []
     for para in paragraphs:
         if len(para) <= chunk_size:
             units.append(para)
         else:
-            # 按句子分割
             sentences = _split_by_sentences(para)
             for sent in sentences:
                 if len(sent) <= chunk_size:
                     units.append(sent)
                 else:
-                    # 硬切割兜底
                     units.extend(_hard_split(sent, chunk_size))
 
-
-    # 合并单元
     chunks = _merge_units(units, chunk_size)
 
-    # 如果有标题，添加到每个块的前面作为上下文
-    if heading:
-        # 检查是否已经有任何标题前缀，避免重复添加
-        # 如果 heading 本身已经包含【】格式，直接使用它作为前缀
-        if heading.startswith("【") and heading.endswith("】"):
-            prefix = heading
-        else:
-            prefix = f"【{heading}】"
+    if context_prefix:
+        chunks = [
+            f"{context_prefix}\n{chunk}" if not chunk.startswith("「来源：")
+            else chunk
+            for chunk in chunks
+        ]
+    elif heading:
+        prefix = heading if heading.startswith("【") else f"【{heading}】"
         chunks = [
             chunk if chunk.startswith("【") else f"{prefix}\n{chunk}"
             for chunk in chunks
@@ -322,65 +358,129 @@ def _process_section(heading: str, content: str, chunk_size: int) -> List[str]:
     return chunks
 
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
-    """将文本按语义感知策略分块
-    
-    分块优先级策略（从粗到细）：
-    1. 按章节标题分割：识别标题行，将文本拆分为若干"节"
-    2. 按段落分割：对每个"节"，按双换行符分割为段落
-    3. 按句子分割：对超长段落，按中文句末标点分割
-    4. 硬切割兜底：对极长无标点的文本段，退化为字符级分割
-    
+def chunk_text(
+    text: str,
+    chunk_size: int = 500,
+    overlap: int = 100,
+    source_title: str = "",
+) -> List[Dict]:
+    """将文本按语义感知策略分块，并注入 Contextual Retrieval 上下文前缀
+
+    分块优先级：章节标题 > 段落 > 句子 > 硬切割
+    每个 chunk 开头注入：「来源：{source_title} > {heading_path}」
+
     Args:
         text: 原始文本
         chunk_size: 目标块大小（字符数）
         overlap: 相邻块重叠字符数
-        
+        source_title: 文档来源标题
+
     Returns:
-        文本块列表
+        字典列表，每项包含：
+        - "text": 含上下文前缀的块内容
+        - "heading_path": 标题层级路径（用于 metadata）
     """
     if not text or not text.strip():
         return []
-    
-    # 清理文本：移除多余空白，但保留段落分隔
+
     text = text.strip()
-    
-    # 如果文本很短，直接返回
     if len(text) <= chunk_size:
-        return [text]
-    
-    # 按章节标题分割
+        prefix = _build_context_prefix(source_title, "", [])
+        return [{"text": f"{prefix}\n{text}" if prefix else text, "heading_path": ""}]
+
     sections = _split_by_headings(text)
-    
-    all_chunks = []
-    for heading, content in sections:
-        section_chunks = _process_section(heading, content, chunk_size)
-        all_chunks.extend(section_chunks)
-    
-    # 如果没有识别到章节，整个文本作为一个章节处理
-    if not all_chunks:
-        all_chunks = _process_section('', text, chunk_size)
-    
-    # 应用重叠
-    if overlap > 0 and len(all_chunks) > 1:
-        all_chunks = _apply_overlap(all_chunks, overlap)
-    
-    # 过滤空块
-    all_chunks = [c.strip() for c in all_chunks if c.strip()]
-    
-    logger.debug(f"语义分块完成: 原文本 {len(text)} 字符 -> {len(all_chunks)} 个块")
-    
-    return all_chunks
+    all_chunks_with_meta: List[Dict] = []
+    for heading, content, ancestor_path in sections:
+        ctx_prefix = _build_context_prefix(source_title, heading, ancestor_path)
+        heading_path = _build_heading_path(heading, ancestor_path)
+        for chunk in _process_section(heading, content, chunk_size, context_prefix=ctx_prefix):
+            all_chunks_with_meta.append({"text": chunk, "heading_path": heading_path})
+
+    if not all_chunks_with_meta:
+        ctx_prefix = _build_context_prefix(source_title, "", [])
+        for chunk in _process_section("", text, chunk_size, context_prefix=ctx_prefix):
+            all_chunks_with_meta.append({"text": chunk, "heading_path": ""})
+
+    texts = [item["text"] for item in all_chunks_with_meta]
+    if overlap > 0 and len(texts) > 1:
+        texts = _apply_overlap(texts, overlap)
+        for i, item in enumerate(all_chunks_with_meta):
+            item["text"] = texts[i]
+
+    all_chunks_with_meta = [item for item in all_chunks_with_meta if item["text"].strip()]
+    logger.debug(
+        f"语义分块完成 [{source_title}]: {len(text)} 字 -> {len(all_chunks_with_meta)} 块"
+    )
+    return all_chunks_with_meta
+
+
+# ── 表格抽取辅助函数 ──────────────────────────────────────────────────────────────
+
+def _rects_overlap(block_bbox: tuple, table_bbox: tuple, threshold: float = 0.1) -> bool:
+    """检查文本块是否与表格区域重叠（重叠面积超过块自身面积 10% 则认为重叠）"""
+    bx0, by0, bx1, by1 = block_bbox
+    tx0, ty0, tx1, ty1 = table_bbox
+    # 无交集快返
+    if bx1 <= tx0 or tx1 <= bx0 or by1 <= ty0 or ty1 <= by0:
+        return False
+    ix = max(0.0, min(bx1, tx1) - max(bx0, tx0))
+    iy = max(0.0, min(by1, ty1) - max(by0, ty0))
+    intersection = ix * iy
+    block_area = max((bx1 - bx0) * (by1 - by0), 1e-6)
+    return intersection / block_area > threshold
+
+
+def _table_to_text(rows: List, table_idx: int) -> str:
+    """将 PyMuPDF 表格单元格数据转换为 Markdown 表格格式文本
+
+    输入 rows 为 table.extract() 返回的二维列表，输出示例：
+        【表格1】
+        | 分期 | 表现 | 治疗方案 |
+        | --- | --- | --- |
+        | I期 | ... | ... |
+    """
+    if not rows:
+        return ""
+
+    # 清洗单元格，将 None 转为空字符串，内部换行处理
+    cleaned: List[List[str]] = []
+    for row in rows:
+        cleaned.append([
+            str(cell).replace("\n", " ").strip() if cell is not None else ""
+            for cell in row
+        ])
+
+    if not cleaned:
+        return ""
+
+    # 对齐列数
+    max_cols = max(len(r) for r in cleaned)
+    normalized = [r + [""] * (max_cols - len(r)) for r in cleaned]
+
+    header = normalized[0]
+    data_rows = normalized[1:]
+
+    lines = [f"【表格{table_idx}】"]
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join(["---"] * max_cols) + " |")
+    for row in data_rows:
+        if any(cell.strip() for cell in row):  # 跳过全空行
+            lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(lines)
 
 
 def extract_text_from_pdf(pdf_path: Path) -> List[Dict]:
-    """提取 PDF 文本，返回 [{"text": ..., "page": ..., "source": ...}, ...]
+    """提取 PDF 文本，表格单独抄取并标记 content_type
 
-    Args:
-        pdf_path: PDF 文件路径
+    流程：
+    1. 每页先检测表格区域（fitz.find_tables）
+    2. 提取非表格区域的正文文本
+    3. 表格转化为 Markdown 格式单独返回，避免被错误切碎
+    4. 表格检测失败时自动降级为全页文本模式
 
     Returns:
-        包含文本、页码和来源的列表
+        [{"text": ..., "page": ..., "source": ..., "content_type": "text"|"table"}, ...]
     """
     pages = []
     try:
@@ -389,18 +489,63 @@ def extract_text_from_pdf(pdf_path: Path) -> List[Dict]:
 
         for page_num in range(len(doc)):
             page = doc[page_num]
-            text = page.get_text().strip()
-            if text:
-                pages.append(
-                    {
-                        "text": text,
-                        "page": page_num + 1,  # 页码从 1 开始
-                        "source": source_name,
-                    }
+            page_real_num = page_num + 1
+
+            # 1. 尝试检测表格
+            table_items: List[Dict] = []
+            table_bboxes: List[tuple] = []
+            try:
+                table_finder = page.find_tables()
+                for t_idx, table in enumerate(table_finder.tables, 1):
+                    rows = table.extract()
+                    table_text = _table_to_text(rows, t_idx)
+                    if table_text:
+                        table_items.append({
+                            "text": table_text,
+                            "page": page_real_num,
+                            "source": source_name,
+                            "content_type": "table",
+                        })
+                        table_bboxes.append(table.bbox)
+            except Exception as e:
+                logger.debug(
+                    f"[{source_name}] 第{page_real_num}页表格检测失败，降级为全页文本: {e}"
                 )
 
+            # 2. 提取非表格区域的正文
+            if table_bboxes:
+                text_blocks = page.get_text("blocks")  # (x0,y0,x1,y1,text,...)
+                non_table_parts = []
+                for block in text_blocks:
+                    if len(block) < 5:
+                        continue
+                    block_bbox = block[:4]
+                    if not any(_rects_overlap(block_bbox, tb) for tb in table_bboxes):
+                        block_text = block[4].strip()
+                        if block_text:
+                            non_table_parts.append(block_text)
+                text = "\n".join(non_table_parts).strip()
+            else:
+                text = page.get_text().strip()
+
+            # 3. 添加正文页
+            if text:
+                pages.append({
+                    "text": text,
+                    "page": page_real_num,
+                    "source": source_name,
+                    "content_type": "text",
+                })
+
+            # 4. 添加表格块
+            pages.extend(table_items)
+
         doc.close()
-        logger.info(f"已提取 {source_name}: {len(pages)} 页")
+        text_cnt = sum(1 for p in pages if p.get("content_type") == "text")
+        table_cnt = sum(1 for p in pages if p.get("content_type") == "table")
+        logger.info(
+            f"已提取 {source_name}: {text_cnt} 页正文，{table_cnt} 个表格块"
+        )
         return pages
 
     except Exception as e:
@@ -422,6 +567,29 @@ def generate_doc_id(source: str, page: int, chunk_idx: int, content: str) -> str
     """
     content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:8]
     return f"{source}_p{page}_c{chunk_idx}_{content_hash}"
+
+
+def _extract_chunks_from_page(page_info: Dict) -> List[Dict]:
+    """将单页 page_info 转换为 chunk 列表，区分正文和表格两种类型。
+
+    - 正文（content_type='text'）：走 chunk_text 语义分块 + 重叠策略
+    - 表格（content_type='table'）：不切分，整体作为一块，注入表格来源前缀
+    """
+    source_title = _clean_source_name(page_info["source"])
+    page_num = page_info["page"]
+    content_type = page_info.get("content_type", "text")
+
+    if content_type == "table":
+        # 表格不切分，注入㌀来源：xxx > 第N页 表格、前缀
+        prefix = f"《来源：{source_title} > 第{page_num}页 表格》"
+        text = page_info["text"]
+        if not text.startswith("《来源："):
+            text = f"{prefix}\n{text}"
+        return [{"text": text, "heading_path": f"第{page_num}页 表格"}]
+    else:
+        return chunk_text(
+            page_info["text"], CHUNK_SIZE, CHUNK_OVERLAP, source_title=source_title
+        )
 
 
 async def build_medical_index():
@@ -447,22 +615,22 @@ async def build_medical_index():
     for pdf_path in pdf_files:
         pages = extract_text_from_pdf(pdf_path)
         for page_info in pages:
-            page_text = page_info["text"]
-            source = page_info["source"]
-            page_num = page_info["page"]
-
-            # 分块
-            chunks = chunk_text(page_text, CHUNK_SIZE, CHUNK_OVERLAP)
-            for idx, chunk_text_content in enumerate(chunks):
+            # 使用共享分块入口，自动区分正文和表格
+            chunk_items = _extract_chunks_from_page(page_info)
+            for idx, item in enumerate(chunk_items):
+                chunk_content = item["text"]
+                heading_path = item.get("heading_path", "")
                 doc_id = generate_doc_id(
-                    source, page_num, idx, chunk_text_content
+                    page_info["source"], page_info["page"], idx, chunk_content
                 )
                 all_chunks.append(
                     {
                         "id": doc_id,
-                        "text": chunk_text_content,
-                        "source": source,
-                        "page": page_num,
+                        "text": chunk_content,
+                        "source": page_info["source"],
+                        "page": page_info["page"],
+                        "heading_path": heading_path,
+                        "content_type": page_info.get("content_type", "text"),
                     }
                 )
 
@@ -487,7 +655,7 @@ async def build_medical_index():
     ids = [chunk["id"] for chunk in all_chunks]
     documents = [chunk["text"] for chunk in all_chunks]
     metadatas = [
-        {"source": chunk["source"], "page": chunk["page"]} for chunk in all_chunks
+        {"source": chunk["source"], "page": chunk["page"], "heading_path": chunk.get("heading_path", ""), "content_type": chunk.get("content_type", "text")} for chunk in all_chunks
     ]
 
     # 6. 存入 ChromaDB
@@ -503,6 +671,95 @@ async def build_medical_index():
     except Exception as e:
         logger.error(f"保存到 ChromaDB 失败: {e}")
         return
+
+
+# ── 增量更新接口 ────────────────────────────────────────────────────────────────────
+async def index_single_pdf(
+    pdf_path: Path,
+    force_replace: bool = False,
+) -> dict:
+    """对单个 PDF 进行增量索引。
+
+    Args:
+        pdf_path: PDF 文件路径
+        force_replace: True 则先删除该来源的已有索引再重建；
+                       False 且已有索引时直接跳过。
+
+    Returns:
+        {"source": 文件名, "status": "added"/"skipped"/"replaced", "chunks": 块数}
+    """
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
+
+    source_name = pdf_path.name
+    store = get_medical_store()
+
+    # 检查是否已有索引
+    existing_count = store.get_source_doc_count(source_name)
+    if existing_count > 0:
+        if not force_replace:
+            logger.info(f"跳过已索引文件 '{source_name}'（{existing_count} 条块）")
+            return {"source": source_name, "status": "skipped", "chunks": existing_count}
+        else:
+            deleted = store.delete_by_source(source_name)
+            logger.info(f"已删除 '{source_name}' 旧索引 {deleted} 条")
+
+    # 提取并分块
+    pages = extract_text_from_pdf(pdf_path)
+    chunks = []
+    for page_info in pages:
+        chunk_items = _extract_chunks_from_page(page_info)
+        for idx, item in enumerate(chunk_items):
+            doc_id = generate_doc_id(
+                page_info["source"], page_info["page"], idx, item["text"]
+            )
+            chunks.append(
+                {
+                    "id": doc_id,
+                    "text": item["text"],
+                    "source": page_info["source"],
+                    "page": page_info["page"],
+                    "heading_path": item.get("heading_path", ""),
+                    "content_type": page_info.get("content_type", "text"),
+                }
+            )
+
+    if not chunks:
+        logger.warning(f"'{source_name}' 未提取到任何文本块")
+        return {"source": source_name, "status": "added", "chunks": 0}
+
+    # 生成向量
+    texts = [c["text"] for c in chunks]
+    embeddings = await get_embeddings(texts)
+
+    # 写入 ChromaDB
+    store.add_documents(
+        ids=[c["id"] for c in chunks],
+        documents=texts,
+        embeddings=embeddings,
+        metadatas=[
+            {
+                "source": c["source"],
+                "page": c["page"],
+                "heading_path": c.get("heading_path", ""),
+                "content_type": c.get("content_type", "text"),
+            }
+            for c in chunks
+        ],
+    )
+    status = "replaced" if force_replace and existing_count > 0 else "added"
+    logger.info(f"'{source_name}' 增量索引完成，共 {len(chunks)} 块，status={status}")
+    return {"source": source_name, "status": status, "chunks": len(chunks)}
+
+
+async def get_indexed_sources() -> List[dict]:
+    """获取已建索的来源列表，含每个来源的文档块数量"""
+    store = get_medical_store()
+    sources = store.get_all_sources()
+    result = []
+    for src in sources:
+        result.append({"source": src, "chunks": store.get_source_doc_count(src)})
+    return result
 
 
 if __name__ == "__main__":

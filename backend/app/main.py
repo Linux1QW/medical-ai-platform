@@ -15,6 +15,7 @@ from app.api.v1 import router as api_v1_router
 from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
+from app.services.qwen_client import get_llm_metrics
 import app.models  # noqa: F401
 
 logging.basicConfig(
@@ -127,4 +128,8 @@ app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": settings.VERSION}
+    return {
+        "status": "ok",
+        "version": settings.VERSION,
+        "llm": get_llm_metrics(),
+    }

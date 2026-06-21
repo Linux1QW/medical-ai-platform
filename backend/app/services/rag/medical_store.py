@@ -127,11 +127,11 @@ class MedicalKnowledgeStore:
                     if results["distances"]
                     else 0.0
                 )
-                # 余弦距离转相似度分数 (1 - distance)
                 score = 1.0 - float(distance)
 
                 evidences.append(
                     {
+                        "doc_id": doc_id,
                         "text": doc_text,
                         "source": metadata.get("source", "未知"),
                         "page": metadata.get("page", 0),
@@ -147,6 +147,46 @@ class MedicalKnowledgeStore:
         if self.collection is None:
             return 0
         return self.collection.count()
+
+    def get_all_sources(self) -> List[str]:
+        """返回知识库中所有已索引的来源文件名（去重列表）"""
+        if self.collection is None:
+            self._init_client()
+        if self.collection.count() == 0:
+            return []
+        result = self.collection.get(include=["metadatas"])
+        sources = set()
+        for meta in result.get("metadatas") or []:
+            src = meta.get("source", "")
+            if src:
+                sources.add(src)
+        return sorted(sources)
+
+    def get_source_doc_count(self, source: str) -> int:
+        """返回指定来源的文档块数量"""
+        if self.collection is None:
+            self._init_client()
+        result = self.collection.get(
+            where={"source": source},
+            include=[],
+        )
+        return len(result.get("ids") or [])
+
+    def delete_by_source(self, source: str) -> int:
+        """删除指定来源的全部文档块，返回删除条数"""
+        if self.collection is None:
+            self._init_client()
+        # 先查出 IDs，ChromaDB 的 delete(where=...) 并非所有版本都稳定，
+        # 以 ID 列表删除最为可靠
+        result = self.collection.get(
+            where={"source": source},
+            include=[],
+        )
+        ids = result.get("ids") or []
+        if ids:
+            self.collection.delete(ids=ids)
+            logger.info(f"已删除来源 '{source}' 的 {len(ids)} 条文档")
+        return len(ids)
 
 
 # 全局单例

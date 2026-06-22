@@ -180,10 +180,24 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
         
         await manager.send_progress(consultation_id, 95, "正在保存评估结果...")
 
-        # 拒答时 total_score 也置为 None
+        # 拒答时 total_score 也置为 None，并替换摘要避免分数矛盾
         total_score_value = scoring_data.get("total_score")
+        summary = scoring_data.get("summary", scoring_result["raw_response"])
         if human_review_needed:
             total_score_value = None
+            # 使用预定义拒答摘要，避免摘要中出现与数据库 null 矛盾的总分描述
+            inquiry_score_value = inquiry_data.get("score", 0)
+            humanistic_score_value = humanistic_data.get("score", 0)
+            diagnosis_score_value = diagnosis_data.get("score", 0)
+            treatment_score_value = treatment_data.get("score", 0)
+            summary = (
+                "知识维度评估证据不足（检索状态：{}，证据立场：{}），总分待人工复核。"
+                "其余维度评估：问诊技巧 {}分，人文关怀 {}分，诊断能力 {}分，治疗方案 {}分。"
+            ).format(
+                retrieval_status, evidence_stance,
+                inquiry_score_value, humanistic_score_value,
+                diagnosis_score_value, treatment_score_value,
+            )
 
         evaluation = Evaluation(
             consultation_id=consultation_id,
@@ -198,7 +212,7 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
             treatment_score=treatment_data.get("score"),
             treatment_analysis=treatment_data.get("analysis", treatment_result["raw_response"]),
             total_score=total_score_value,
-            overall_summary=scoring_data.get("summary", scoring_result["raw_response"]),
+            overall_summary=summary,
             improvement_suggestions=suggestion_data.get(
                 "suggestions", suggestion_result["raw_response"]
             ),

@@ -20,9 +20,10 @@ const LoginPage: React.FC = () => {
       saveAuth(data.access_token, data.user);
       message.success('登录成功');
       navigate('/dashboard');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string; detail?: string } } };
       const msg =
-        err?.response?.data?.message || err?.response?.data?.detail || '登录失败，请重试';
+        axiosErr?.response?.data?.message || axiosErr?.response?.data?.detail || '登录失败，请重试';
       form.setFields([
         { name: 'password', errors: [msg] },
       ]);

@@ -1,10 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Card, Table, Tag, Typography, Button, Space, Input, Form, Select, DatePicker, Row, Col } from 'antd';
 import { EyeOutlined, FileTextOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import dayjs from 'dayjs';
-import { getAllConsultations } from '../../api/consultation';
+import dayjs, { type Dayjs } from 'dayjs';
+import { getAllConsultations, type ConsultationQueryParams } from '../../api/consultation';
 import type { Consultation } from '../../types';
+
+interface FilterFormValues {
+  username?: string;
+  personality?: string;
+  timeRange?: [Dayjs, Dayjs];
+}
 
 const { Title } = Typography;
 
@@ -27,25 +33,35 @@ const AdminConsultationsPage: React.FC = () => {
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchList = (values: any = {}) => {
+  const fetchList = useCallback((values: FilterFormValues = {}) => {
     setLoading(true);
-    const params: any = { ...values };
-    if (values.timeRange) {
-      params.start_time = values.timeRange[0].startOf('day').toISOString();
-      params.end_time = values.timeRange[1].endOf('day').toISOString();
-      delete params.timeRange;
+    const { timeRange, ...rest } = values;
+    const params: ConsultationQueryParams = { ...rest };
+    if (timeRange) {
+      params.start_time = timeRange[0].startOf('day').toISOString();
+      params.end_time = timeRange[1].endOf('day').toISOString();
     }
     getAllConsultations(params)
       .then(setConsultations)
       .catch(() => {})
       .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    fetchList();
   }, []);
 
-  const onFinish = (values: any) => {
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      try {
+        const data = await getAllConsultations();
+        setConsultations(data);
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const onFinish = (values: FilterFormValues) => {
     fetchList(values);
   };
 

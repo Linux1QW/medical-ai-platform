@@ -727,9 +727,27 @@ def _merge_evidence(
             else:
                 seen[key] = item.model_copy()
 
-    # 按 rrf_score 降序排列
+    # 合并后重新计算 RRF 分数，确保所有文档都有可比的排序分数
     results = list(seen.values())
-    results.sort(key=lambda x: x.rrf_score or 0, reverse=True)
+    # 先按已有分数做初步排序（rrf_score 优先，vector_score / bm25_score 兜底）
+    def _preliminary_sort_key(item: "EvidenceItem") -> float:
+        if item.rrf_score is not None:
+            return item.rrf_score
+        if item.vector_score is not None:
+            return item.vector_score
+        if item.bm25_score is not None:
+            return item.bm25_score / 10.0  # BM25 分数通常较大，粗略归一化
+        return 0.0
+
+    results.sort(key=_preliminary_sort_key, reverse=True)
+
+    # 为缺少 rrf_score 的文档补算一个基于排名的 RRF 分数，统一量纲
+    for i, item in enumerate(results):
+        if item.rrf_score is None:
+            item.rrf_score = round(1.0 / (RRF_K + i + 1), 6)
+
+    # 最终按统一后的 rrf_score 排序
+    results.sort(key=lambda x: x.rrf_score, reverse=True)
     return results
 
 

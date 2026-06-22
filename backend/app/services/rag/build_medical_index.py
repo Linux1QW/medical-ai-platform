@@ -669,128 +669,131 @@ async def build_medical_index(target_version: str = "rag-v2"):
         target_version: 目标索引版本（如 "rag-v2"），临时覆盖 ACTIVE_INDEX_VERSION
     """
     from app.core.config import settings
-    from app.services.rag.medical_store import _reset_collection_cache
+    from app.services.rag.medical_store import _reset_collection_cache, set_build_mode
 
     # 保存原始版本，临时覆盖
     original_version = settings.ACTIVE_INDEX_VERSION
     settings.ACTIVE_INDEX_VERSION = target_version
+    set_build_mode(True)
     _reset_collection_cache()  # 清除缓存，确保使用新版本 collection
 
-    logger.info(f"开始构建医学知识库索引，PDF 目录: {PDF_DIR}，目标版本: {target_version}")
-
-    # 1. 验证 PDF 目录
-    if not PDF_DIR.exists():
-        logger.error(f"PDF 目录不存在: {PDF_DIR}")
-        return
-
-    # 2. 扫描 PDF 文件
-    pdf_files = list(PDF_DIR.glob("*.pdf"))
-    if not pdf_files:
-        logger.warning(f"未找到 PDF 文件: {PDF_DIR}")
-        return
-
-    logger.info(f"发现 {len(pdf_files)} 个 PDF 文件")
-
-    # 3. 提取所有文本块
-    all_chunks = []  # [{"id": ..., "text": ..., "source": ..., "page": ...}]
-
-    for pdf_path in pdf_files:
-        pages = extract_text_from_pdf(pdf_path)
-        for page_info in pages:
-            # 使用共享分块入口，自动区分正文和表格
-            chunk_items = _extract_chunks_from_page(page_info)
-            for idx, item in enumerate(chunk_items):
-                chunk_content = item["text"]
-                heading_path = item.get("heading_path", "")
-                doc_id = generate_doc_id(
-                    page_info["source"], page_info["page"], idx, chunk_content
-                )
-                all_chunks.append(
-                    {
-                        "id": doc_id,
-                        "text": chunk_content,
-                        "source": page_info["source"],
-                        "page": page_info["page"],
-                        "heading_path": heading_path,
-                        "content_type": page_info.get("content_type", "text"),
-                    }
-                )
-
-    if not all_chunks:
-        logger.warning("未提取到任何文本块")
-        return
-
-    logger.info(f"共提取 {len(all_chunks)} 个文本块")
-
-    # 4. 批量生成 embedding（使用增强 embedding 文本）
-    logger.info("开始生成文本向量...")
-
     try:
-        embedding_texts = []
+        logger.info(f"开始构建医学知识库索引，PDF 目录: {PDF_DIR}，目标版本: {target_version}")
+
+        # 1. 验证 PDF 目录
+        if not PDF_DIR.exists():
+            logger.error(f"PDF 目录不存在: {PDF_DIR}")
+            return
+
+        # 2. 扫描 PDF 文件
+        pdf_files = list(PDF_DIR.glob("*.pdf"))
+        if not pdf_files:
+            logger.warning(f"未找到 PDF 文件: {PDF_DIR}")
+            return
+
+        logger.info(f"发现 {len(pdf_files)} 个 PDF 文件")
+
+        # 3. 提取所有文本块
+        all_chunks = []  # [{"id": ..., "text": ..., "source": ..., "page": ...}]
+
+        for pdf_path in pdf_files:
+            pages = extract_text_from_pdf(pdf_path)
+            for page_info in pages:
+                # 使用共享分块入口，自动区分正文和表格
+                chunk_items = _extract_chunks_from_page(page_info)
+                for idx, item in enumerate(chunk_items):
+                    chunk_content = item["text"]
+                    heading_path = item.get("heading_path", "")
+                    doc_id = generate_doc_id(
+                        page_info["source"], page_info["page"], idx, chunk_content
+                    )
+                    all_chunks.append(
+                        {
+                            "id": doc_id,
+                            "text": chunk_content,
+                            "source": page_info["source"],
+                            "page": page_info["page"],
+                            "heading_path": heading_path,
+                            "content_type": page_info.get("content_type", "text"),
+                        }
+                    )
+
+        if not all_chunks:
+            logger.warning("未提取到任何文本块")
+            return
+
+        logger.info(f"共提取 {len(all_chunks)} 个文本块")
+
+        # 4. 批量生成 embedding（使用增强 embedding 文本）
+        logger.info("开始生成文本向量...")
+
+        try:
+            embedding_texts = []
+            for chunk in all_chunks:
+                source_filename = chunk["source"]
+                doc_meta = get_enriched_metadata(source_filename)
+                rec_level = _extract_recommendation_level(chunk["text"])
+                ev_level = _extract_evidence_level(chunk["text"])
+                enhanced_text = _build_embedding_text(
+                    chunk["text"], doc_meta,
+                    heading_path=chunk.get("heading_path", ""),
+                    recommendation_level=rec_level,
+                    evidence_level=ev_level,
+                )
+                embedding_texts.append(enhanced_text)
+
+            embeddings = await get_embeddings(embedding_texts)
+            logger.info(f"向量生成完成: {len(embeddings)} 条")
+        except Exception as e:
+            logger.error(f"向量生成失败: {e}")
+            return
+
+        # 5. 准备 ChromaDB 数据（增强 metadata）
+        ids = [chunk["id"] for chunk in all_chunks]
+        documents = [chunk["text"] for chunk in all_chunks]
+        metadatas = []
         for chunk in all_chunks:
             source_filename = chunk["source"]
             doc_meta = get_enriched_metadata(source_filename)
             rec_level = _extract_recommendation_level(chunk["text"])
             ev_level = _extract_evidence_level(chunk["text"])
-            enhanced_text = _build_embedding_text(
-                chunk["text"], doc_meta,
-                heading_path=chunk.get("heading_path", ""),
-                recommendation_level=rec_level,
-                evidence_level=ev_level,
+            enhanced_meta = {
+                "source": chunk["source"],
+                "page": chunk["page"],
+                "heading_path": chunk.get("heading_path", ""),
+                "content_type": chunk.get("content_type", "text"),
+                # 增强字段
+                "organization": doc_meta.organization or "",
+                "year": doc_meta.year or 0,
+                "version": doc_meta.version or "",
+                "document_type": doc_meta.document_type,
+                "title": doc_meta.title,
+                "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
+                "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
+                "population": json.dumps(doc_meta.population, ensure_ascii=False),
+                "recommendation_level": rec_level,
+                "evidence_level": ev_level,
+                "index_version": target_version,
+            }
+            metadatas.append(enhanced_meta)
+
+        # 6. 存入 ChromaDB
+        store = get_medical_store()
+        try:
+            store.add_documents(
+                ids=ids,
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas,
             )
-            embedding_texts.append(enhanced_text)
-
-        embeddings = await get_embeddings(embedding_texts)
-        logger.info(f"向量生成完成: {len(embeddings)} 条")
-    except Exception as e:
-        logger.error(f"向量生成失败: {e}")
-        return
-
-    # 5. 准备 ChromaDB 数据（增强 metadata）
-    ids = [chunk["id"] for chunk in all_chunks]
-    documents = [chunk["text"] for chunk in all_chunks]
-    metadatas = []
-    for chunk in all_chunks:
-        source_filename = chunk["source"]
-        doc_meta = get_enriched_metadata(source_filename)
-        rec_level = _extract_recommendation_level(chunk["text"])
-        ev_level = _extract_evidence_level(chunk["text"])
-        enhanced_meta = {
-            "source": chunk["source"],
-            "page": chunk["page"],
-            "heading_path": chunk.get("heading_path", ""),
-            "content_type": chunk.get("content_type", "text"),
-            # 增强字段
-            "organization": doc_meta.organization or "",
-            "year": doc_meta.year or 0,
-            "version": doc_meta.version or "",
-            "document_type": doc_meta.document_type,
-            "title": doc_meta.title,
-            "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
-            "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
-            "population": json.dumps(doc_meta.population, ensure_ascii=False),
-            "recommendation_level": rec_level,
-            "evidence_level": ev_level,
-            "index_version": target_version,
-        }
-        metadatas.append(enhanced_meta)
-
-    # 6. 存入 ChromaDB
-    store = get_medical_store()
-    try:
-        store.add_documents(
-            ids=ids,
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
-        logger.info(f"医学知识库构建完成，共 {store.count()} 条文档")
-    except Exception as e:
-        logger.error(f"保存到 ChromaDB 失败: {e}")
-        return
+            logger.info(f"医学知识库构建完成，共 {store.count()} 条文档")
+        except Exception as e:
+            logger.error(f"保存到 ChromaDB 失败: {e}")
+            return
     finally:
-        # 恢复原始 ACTIVE_INDEX_VERSION
+        # 恢复原始 ACTIVE_INDEX_VERSION（所有退出路径都会执行）
         settings.ACTIVE_INDEX_VERSION = original_version
+        set_build_mode(False)
         _reset_collection_cache()  # 清除缓存，恢复原始版本 collection
 
 
@@ -811,110 +814,113 @@ async def index_single_pdf(
         {"source": 文件名, "status": "added"/"skipped"/"replaced", "chunks": 块数}
     """
     from app.core.config import settings
-
-    from app.services.rag.medical_store import _reset_collection_cache
+    from app.services.rag.medical_store import _reset_collection_cache, set_build_mode
 
     # 如果指定了 target_version，临时覆盖
     original_version = None
     if target_version is not None:
         original_version = settings.ACTIVE_INDEX_VERSION
         settings.ACTIVE_INDEX_VERSION = target_version
+        set_build_mode(True)
         _reset_collection_cache()
     else:
         target_version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
 
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
+    try:
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
 
-    source_name = pdf_path.name
-    store = get_medical_store()
+        source_name = pdf_path.name
+        store = get_medical_store()
 
-    # 检查是否已有索引
-    existing_count = store.get_source_doc_count(source_name)
-    if existing_count > 0:
-        if not force_replace:
-            logger.info(f"跳过已索引文件 '{source_name}'（{existing_count} 条块）")
-            return {"source": source_name, "status": "skipped", "chunks": existing_count}
-        else:
-            deleted = store.delete_by_source(source_name)
-            logger.info(f"已删除 '{source_name}' 旧索引 {deleted} 条")
+        # 检查是否已有索引
+        existing_count = store.get_source_doc_count(source_name)
+        if existing_count > 0:
+            if not force_replace:
+                logger.info(f"跳过已索引文件 '{source_name}'（{existing_count} 条块）")
+                return {"source": source_name, "status": "skipped", "chunks": existing_count}
+            else:
+                deleted = store.delete_by_source(source_name)
+                logger.info(f"已删除 '{source_name}' 旧索引 {deleted} 条")
 
-    # 提取并分块
-    pages = extract_text_from_pdf(pdf_path)
-    chunks = []
-    for page_info in pages:
-        chunk_items = _extract_chunks_from_page(page_info)
-        for idx, item in enumerate(chunk_items):
-            doc_id = generate_doc_id(
-                page_info["source"], page_info["page"], idx, item["text"]
+        # 提取并分块
+        pages = extract_text_from_pdf(pdf_path)
+        chunks = []
+        for page_info in pages:
+            chunk_items = _extract_chunks_from_page(page_info)
+            for idx, item in enumerate(chunk_items):
+                doc_id = generate_doc_id(
+                    page_info["source"], page_info["page"], idx, item["text"]
+                )
+                chunks.append(
+                    {
+                        "id": doc_id,
+                        "text": item["text"],
+                        "source": page_info["source"],
+                        "page": page_info["page"],
+                        "heading_path": item.get("heading_path", ""),
+                        "content_type": page_info.get("content_type", "text"),
+                    }
+                )
+
+        if not chunks:
+            logger.warning(f"'{source_name}' 未提取到任何文本块")
+            return {"source": source_name, "status": "added", "chunks": 0}
+
+        # 生成增强 embedding 文本
+        doc_meta = get_enriched_metadata(source_name)
+        embedding_texts = []
+        for c in chunks:
+            rec_level = _extract_recommendation_level(c["text"])
+            ev_level = _extract_evidence_level(c["text"])
+            enhanced_text = _build_embedding_text(
+                c["text"], doc_meta,
+                heading_path=c.get("heading_path", ""),
+                recommendation_level=rec_level,
+                evidence_level=ev_level,
             )
-            chunks.append(
-                {
-                    "id": doc_id,
-                    "text": item["text"],
-                    "source": page_info["source"],
-                    "page": page_info["page"],
-                    "heading_path": item.get("heading_path", ""),
-                    "content_type": page_info.get("content_type", "text"),
-                }
-            )
+            embedding_texts.append(enhanced_text)
+        embeddings = await get_embeddings(embedding_texts)
 
-    if not chunks:
-        logger.warning(f"'{source_name}' 未提取到任何文本块")
-        return {"source": source_name, "status": "added", "chunks": 0}
+        # 构建增强 metadata 并写入 ChromaDB
+        enhanced_metadatas = []
+        for c in chunks:
+            rec_level = _extract_recommendation_level(c["text"])
+            ev_level = _extract_evidence_level(c["text"])
+            enhanced_metadatas.append({
+                "source": c["source"],
+                "page": c["page"],
+                "heading_path": c.get("heading_path", ""),
+                "content_type": c.get("content_type", "text"),
+                "organization": doc_meta.organization or "",
+                "year": doc_meta.year or 0,
+                "version": doc_meta.version or "",
+                "document_type": doc_meta.document_type,
+                "title": doc_meta.title,
+                "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
+                "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
+                "population": json.dumps(doc_meta.population, ensure_ascii=False),
+                "recommendation_level": rec_level,
+                "evidence_level": ev_level,
+                "index_version": target_version,
+            })
 
-    # 生成增强 embedding 文本
-    doc_meta = get_enriched_metadata(source_name)
-    embedding_texts = []
-    for c in chunks:
-        rec_level = _extract_recommendation_level(c["text"])
-        ev_level = _extract_evidence_level(c["text"])
-        enhanced_text = _build_embedding_text(
-            c["text"], doc_meta,
-            heading_path=c.get("heading_path", ""),
-            recommendation_level=rec_level,
-            evidence_level=ev_level,
+        store.add_documents(
+            ids=[c["id"] for c in chunks],
+            documents=[c["text"] for c in chunks],
+            embeddings=embeddings,
+            metadatas=enhanced_metadatas,
         )
-        embedding_texts.append(enhanced_text)
-    embeddings = await get_embeddings(embedding_texts)
 
-    # 构建增强 metadata 并写入 ChromaDB
-    enhanced_metadatas = []
-    for c in chunks:
-        rec_level = _extract_recommendation_level(c["text"])
-        ev_level = _extract_evidence_level(c["text"])
-        enhanced_metadatas.append({
-            "source": c["source"],
-            "page": c["page"],
-            "heading_path": c.get("heading_path", ""),
-            "content_type": c.get("content_type", "text"),
-            "organization": doc_meta.organization or "",
-            "year": doc_meta.year or 0,
-            "version": doc_meta.version or "",
-            "document_type": doc_meta.document_type,
-            "title": doc_meta.title,
-            "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
-            "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
-            "population": json.dumps(doc_meta.population, ensure_ascii=False),
-            "recommendation_level": rec_level,
-            "evidence_level": ev_level,
-            "index_version": target_version,
-        })
-
-    store.add_documents(
-        ids=[c["id"] for c in chunks],
-        documents=[c["text"] for c in chunks],
-        embeddings=embeddings,
-        metadatas=enhanced_metadatas,
-    )
-    # 恢复原始版本
-    if original_version is not None:
-        settings.ACTIVE_INDEX_VERSION = original_version
-        _reset_collection_cache()
-
-    status = "replaced" if force_replace and existing_count > 0 else "added"
-    logger.info(f"'{source_name}' 增量索引完成，共 {len(chunks)} 块，status={status}")
-    return {"source": source_name, "status": status, "chunks": len(chunks)}
+        status = "replaced" if force_replace and existing_count > 0 else "added"
+        logger.info(f"'{source_name}' 增量索引完成，共 {len(chunks)} 块，status={status}")
+        return {"source": source_name, "status": status, "chunks": len(chunks)}
+    finally:
+        # 恢复原始版本（所有退出路径都会执行）
+        if original_version is not None:
+            settings.ACTIVE_INDEX_VERSION = original_version
+            set_build_mode(False)
+            _reset_collection_cache()
 
 
 async def get_indexed_sources() -> List[dict]:
@@ -971,9 +977,21 @@ async def switch_index_version(new_version: str) -> dict:
             content += f"\nACTIVE_INDEX_VERSION={new_version}\n"
         env_path.write_text(content, encoding="utf-8")
         logger.info(f"已将 ACTIVE_INDEX_VERSION={new_version} 持久化到 .env")
+    else:
+        # .env 不存在时创建新文件
+        env_path.write_text(f"ACTIVE_INDEX_VERSION={new_version}\n", encoding="utf-8")
+        logger.info(f"已创建 .env 文件并写入 ACTIVE_INDEX_VERSION={new_version}")
 
     # 更新 medical_store 的 collection 引用
     store.collection = col
+
+    # 重建 BM25 索引
+    try:
+        from app.services.rag.bm25_search import rebuild_bm25_index
+        await asyncio.to_thread(rebuild_bm25_index)
+        logger.info(f"BM25 索引已重建（版本: {new_version}）")
+    except Exception as e:
+        logger.warning(f"BM25 索引重建失败（非致命）: {e}")
 
     logger.info(f"索引版本切换: {previous} → {new_version} (文档数: {doc_count})")
 

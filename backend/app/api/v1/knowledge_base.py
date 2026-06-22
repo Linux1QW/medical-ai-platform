@@ -60,12 +60,16 @@ async def _run_rebuild_task():
     """后台全量重建任务（加锁防止并发）"""
     async with _rebuild_lock:
         _rebuild_status.update({"running": True, "progress": "开始全量重建...", "error": ""})
+        target_version = "rag-v2"
         try:
-            from app.services.rag.build_medical_index import build_medical_index
+            from app.services.rag.build_medical_index import build_medical_index, switch_index_version
             clear_embed_cache()
-            await build_medical_index()
+            await build_medical_index(target_version=target_version)
             store = get_medical_store()
-            _rebuild_status["progress"] = f"重建完成，共 {store.count()} 条文档"
+            # 重建完成后自动切换到新版本
+            await switch_index_version(target_version)
+            _rebuild_status["progress"] = f"重建完成，已自动切换到 {target_version}，共 {store.count()} 条文档"
+            logger.info(f"全量重建完成，已自动切换到 {target_version}")
         except Exception as e:
             logger.error(f"知识库全量重建失败: {e}")
             _rebuild_status["error"] = str(e)
@@ -114,6 +118,15 @@ async def add_pdf(
         logger.error(f"增量索引失败 [{body.filename}]: {e}")
         raise HTTPException(status_code=500, detail=f"索引失败: {e}")
 
+    # 增量操作完成后重建 BM25 索引
+    if result["status"] in ("added", "replaced"):
+        try:
+            from app.services.rag.bm25_search import rebuild_bm25_index
+            await asyncio.to_thread(rebuild_bm25_index)
+            logger.info("增量索引完成，BM25 索引已重建")
+        except Exception as e:
+            logger.warning(f"BM25 索引重建失败（非致命）: {e}")
+
     status_msg = {
         "added": f"成功新增 {result['chunks']} 个文本块",
         "skipped": f"已有索引（{result['chunks']} 块），跳过",
@@ -144,6 +157,15 @@ async def delete_source(
         raise HTTPException(
             status_code=404, detail=f"未找到来源 '{source_name}' 的任何索引"
         )
+
+    # 删除操作完成后重建 BM25 索引
+    try:
+        from app.services.rag.bm25_search import rebuild_bm25_index
+        await asyncio.to_thread(rebuild_bm25_index)
+        logger.info("删除操作完成，BM25 索引已重建")
+    except Exception as e:
+        logger.warning(f"BM25 索引重建失败（非致命）: {e}")
+
     return DeleteSourceResponse(
         source=source_name,
         deleted_chunks=deleted,

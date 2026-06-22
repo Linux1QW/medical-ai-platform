@@ -8,7 +8,7 @@ import {
   LineChartOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, type Payload } from 'recharts';
 import dayjs from 'dayjs';
 import { getConsultations } from '../../api/consultation';
 import { useAuth } from '../../store/useAuth';
@@ -96,7 +96,7 @@ const DashboardPage: React.FC = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart 
                   data={trendData} 
-                  onClick={(data: any) => {
+                  onClick={(data: { activePayload?: Array<{ payload: { id: number } }> }) => {
                     if (data?.activePayload) {
                       navigate(`/evaluation/${data.activePayload[0].payload.id}`);
                     }
@@ -107,7 +107,7 @@ const DashboardPage: React.FC = () => {
                   <XAxis dataKey="time" />
                   <YAxis domain={[0, 100]} />
                   <Tooltip 
-                    labelFormatter={(_v, items: any) => items[0]?.payload?.fullTime}
+                    labelFormatter={(_v, items: Payload[]) => (items[0]?.payload as { fullTime: string } | undefined)?.fullTime ?? ''}
                     contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                   />
                   <ReferenceLine y={80} label={{ position: 'right', value: '目标线(80)', fill: '#ff4d4f', fontSize: 12 }} stroke="#ff4d4f" strokeDasharray="3 3" />

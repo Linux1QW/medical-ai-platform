@@ -23,12 +23,23 @@ COLLECTION_NAME = "medical_guidelines"  # 保留用于向后兼容
 # 懒加载缓存：避免每次调用都查询 ChromaDB
 _resolved_collection_name: Optional[str] = None
 
+# 构建模式标志：True 时跳过回退逻辑，让 ChromaDB 自动创建 collection
+_build_mode: bool = False
+
+
+def set_build_mode(enabled: bool) -> None:
+    """设置构建模式标志（构建索引时调用，禁用 collection 回退逻辑）"""
+    global _build_mode
+    _build_mode = enabled
+
 
 def _get_collection_name(use_cache: bool = True) -> str:
     """根据活跃索引版本返回 collection 名称，带向后兼容回退
 
     首次调用时检查 ChromaDB 中实际存在的 collection，
     如果版本化 collection 不存在则回退到旧名称 'medical_guidelines'。
+
+    构建模式下直接返回版本化名称，让 ChromaDB 的 get_or_create 自动创建。
     """
     global _resolved_collection_name
 
@@ -38,6 +49,12 @@ def _get_collection_name(use_cache: bool = True) -> str:
     version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
     versioned_name = f"medical_guidelines_{version}"
 
+    if _build_mode:
+        # 构建模式：直接返回版本化名称，让 ChromaDB 自动创建
+        _resolved_collection_name = versioned_name
+        return versioned_name
+
+    # 检索模式：保留回退逻辑
     # 检查版本化 collection 是否存在
     try:
         PERSIST_DIR.mkdir(parents=True, exist_ok=True)

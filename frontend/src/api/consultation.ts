@@ -7,7 +7,14 @@ export const startConsultation = (patient_id: number): Promise<Consultation> =>
 export const getConsultations = (): Promise<Consultation[]> =>
   request.get('/consultations/');
 
-export const getAllConsultations = (params?: any): Promise<Consultation[]> =>
+export interface ConsultationQueryParams {
+  username?: string;
+  personality?: string;
+  start_time?: string;
+  end_time?: string;
+}
+
+export const getAllConsultations = (params?: ConsultationQueryParams): Promise<Consultation[]> =>
   request.get('/consultations/all', { params });
 
 export const getConsultationDetail = (id: number): Promise<ConsultationDetail> =>

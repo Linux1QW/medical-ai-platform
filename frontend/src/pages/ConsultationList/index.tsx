@@ -28,7 +28,17 @@ const ConsultationListPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchList();
+    void (async () => {
+      setLoading(true);
+      try {
+        const data = await getConsultations();
+        setConsultations(data);
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   const handleDelete = async (id: number) => {

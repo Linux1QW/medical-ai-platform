@@ -90,11 +90,12 @@ export interface Evaluation {
   improvement_suggestions: string;
   created_at: string;
   citation_data?: Citation[] | null;
-  retrieval_status: string;
-  evidence_stance: string;
+  rag_trace_data?: Record<string, unknown> | null;
+  retrieval_status: 'not_run' | 'sufficient' | 'insufficient' | 'unavailable' | 'error';
+  evidence_stance: 'supports' | 'contradicts' | 'mixed' | 'undetermined';
   human_review_needed: boolean;
   review_reason?: string | null;
-  evaluation_status: string;
+  evaluation_status: 'completed' | 'needs_review';
 }
 
 export interface UserStatItem {

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from app.core.config import settings
@@ -63,7 +64,7 @@ def _sync_dashscope_rerank(
     """同步调用 DashScope TextReRank API（需在线程池中运行）"""
     from dashscope import TextReRank
 
-    texts = [doc.text[:500] for doc in documents]
+    texts = [doc.text[:800] for doc in documents]
     response = TextReRank.call(
         model=settings.RERANK_MODEL,
         query=query,
@@ -117,7 +118,7 @@ def _compute_freshness_score(doc: EvidenceItem) -> float:
     """基于 year 元数据计算时效性分数（归一化到 0-1）"""
     if doc.year is None:
         return 0.5  # 未知年份给中等分
-    current_year = 2026
+    current_year = datetime.now().year
     age = current_year - doc.year
     if age <= 1:
         return 1.0
@@ -283,11 +284,11 @@ def _apply_rerank_results(
                 doc_copy, result.relevance, result.completeness
             )
         else:
-            # 未被 LLM 评分的文档给默认分
-            doc_copy.rerank_score = _compute_final_score(doc_copy, 5, 5)
+            # 未被 LLM 评分的文档排在已评分文档之后
+            doc_copy.rerank_score = None
         scored_docs.append(doc_copy)
 
-    scored_docs.sort(key=lambda d: d.rerank_score or 0, reverse=True)
+    scored_docs.sort(key=lambda d: (d.rerank_score is None, -(d.rerank_score or 0)))
     return scored_docs
 
 
@@ -335,7 +336,7 @@ async def two_stage_rerank(
     # Stage 1: 专用 reranker 粗排（20 → 10）
     try:
         candidates = await dedicated_rerank(
-            query, candidates, top_k=LLM_RERANK_INPUT * 2
+            query, candidates, top_k=LLM_RERANK_INPUT
         )
     except Exception as e:
         logger.warning(f"专用 reranker 失败，使用 RRF 排序: {e}")
@@ -359,7 +360,7 @@ async def two_stage_rerank(
 
     logger.info(
         f"两阶段重排完成：{len(documents)} 条候选 → "
-        f"粗排 {min(len(candidates), LLM_RERANK_INPUT * 2)} 条 → "
+        f"粗排 {min(len(candidates), LLM_RERANK_INPUT)} 条 → "
         f"精排返回 {len(final)} 条（degraded={degraded}）"
     )
 

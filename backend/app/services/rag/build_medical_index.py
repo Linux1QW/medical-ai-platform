@@ -662,9 +662,21 @@ def _extract_chunks_from_page(page_info: Dict) -> List[Dict]:
         )
 
 
-async def build_medical_index():
-    """主构建流程"""
-    logger.info(f"开始构建医学知识库索引，PDF 目录: {PDF_DIR}")
+async def build_medical_index(target_version: str = "rag-v2"):
+    """主构建流程
+
+    Args:
+        target_version: 目标索引版本（如 "rag-v2"），临时覆盖 ACTIVE_INDEX_VERSION
+    """
+    from app.core.config import settings
+    from app.services.rag.medical_store import _reset_collection_cache
+
+    # 保存原始版本，临时覆盖
+    original_version = settings.ACTIVE_INDEX_VERSION
+    settings.ACTIVE_INDEX_VERSION = target_version
+    _reset_collection_cache()  # 清除缓存，确保使用新版本 collection
+
+    logger.info(f"开始构建医学知识库索引，PDF 目录: {PDF_DIR}，目标版本: {target_version}")
 
     # 1. 验证 PDF 目录
     if not PDF_DIR.exists():
@@ -759,7 +771,7 @@ async def build_medical_index():
             "population": json.dumps(doc_meta.population, ensure_ascii=False),
             "recommendation_level": rec_level,
             "evidence_level": ev_level,
-            "index_version": "rag-v2",
+            "index_version": target_version,
         }
         metadatas.append(enhanced_meta)
 
@@ -776,12 +788,17 @@ async def build_medical_index():
     except Exception as e:
         logger.error(f"保存到 ChromaDB 失败: {e}")
         return
+    finally:
+        # 恢复原始 ACTIVE_INDEX_VERSION
+        settings.ACTIVE_INDEX_VERSION = original_version
+        _reset_collection_cache()  # 清除缓存，恢复原始版本 collection
 
 
 # ── 增量更新接口 ────────────────────────────────────────────────────────────────────
 async def index_single_pdf(
     pdf_path: Path,
     force_replace: bool = False,
+    target_version: str = None,
 ) -> dict:
     """对单个 PDF 进行增量索引。
 
@@ -793,6 +810,19 @@ async def index_single_pdf(
     Returns:
         {"source": 文件名, "status": "added"/"skipped"/"replaced", "chunks": 块数}
     """
+    from app.core.config import settings
+
+    from app.services.rag.medical_store import _reset_collection_cache
+
+    # 如果指定了 target_version，临时覆盖
+    original_version = None
+    if target_version is not None:
+        original_version = settings.ACTIVE_INDEX_VERSION
+        settings.ACTIVE_INDEX_VERSION = target_version
+        _reset_collection_cache()
+    else:
+        target_version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
+
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
 
@@ -868,7 +898,7 @@ async def index_single_pdf(
             "population": json.dumps(doc_meta.population, ensure_ascii=False),
             "recommendation_level": rec_level,
             "evidence_level": ev_level,
-            "index_version": "rag-v2",
+            "index_version": target_version,
         })
 
     store.add_documents(
@@ -877,6 +907,11 @@ async def index_single_pdf(
         embeddings=embeddings,
         metadatas=enhanced_metadatas,
     )
+    # 恢复原始版本
+    if original_version is not None:
+        settings.ACTIVE_INDEX_VERSION = original_version
+        _reset_collection_cache()
+
     status = "replaced" if force_replace and existing_count > 0 else "added"
     logger.info(f"'{source_name}' 增量索引完成，共 {len(chunks)} 块，status={status}")
     return {"source": source_name, "status": status, "chunks": len(chunks)}
@@ -892,10 +927,6 @@ async def get_indexed_sources() -> List[dict]:
     return result
 
 
-if __name__ == "__main__":
-    asyncio.run(build_medical_index())
-
-
 async def switch_index_version(new_version: str) -> dict:
     """切换活跃索引版本
 
@@ -906,6 +937,7 @@ async def switch_index_version(new_version: str) -> dict:
         {"previous": str, "current": str, "doc_count": int}
     """
     from app.core.config import settings
+    from app.services.rag.medical_store import _reset_collection_cache
 
     previous = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
 
@@ -921,12 +953,24 @@ async def switch_index_version(new_version: str) -> dict:
     except Exception:
         return {"error": f"Collection '{new_collection_name}' 不存在"}
 
-    # 更新配置（运行时更新，不修改 .env 文件）
+    # 更新配置（运行时更新）
     settings.ACTIVE_INDEX_VERSION = new_version
+    _reset_collection_cache()  # 清除缓存，确保新版本生效
 
-    # 重建 BM25 索引以匹配新版本
-    from app.services.rag.bm25_search import rebuild_bm25_index
-    rebuild_bm25_index()
+    # 持久化到 .env 文件
+    env_path = Path(__file__).resolve().parent.parent.parent.parent / ".env"
+    if env_path.exists():
+        content = env_path.read_text(encoding="utf-8")
+        if "ACTIVE_INDEX_VERSION" in content:
+            content = re.sub(
+                r'ACTIVE_INDEX_VERSION\s*=\s*.*',
+                f'ACTIVE_INDEX_VERSION={new_version}',
+                content,
+            )
+        else:
+            content += f"\nACTIVE_INDEX_VERSION={new_version}\n"
+        env_path.write_text(content, encoding="utf-8")
+        logger.info(f"已将 ACTIVE_INDEX_VERSION={new_version} 持久化到 .env")
 
     # 更新 medical_store 的 collection 引用
     store.collection = col
@@ -938,3 +982,7 @@ async def switch_index_version(new_version: str) -> dict:
         "current": new_version,
         "doc_count": doc_count,
     }
+
+
+if __name__ == "__main__":
+    asyncio.run(build_medical_index())

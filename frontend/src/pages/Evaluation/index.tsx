@@ -180,15 +180,15 @@ const EvaluationPage: React.FC = () => {
     );
   }
 
-  const isNeedsReview = evaluation.evaluation_status === 'needs_review';
+  const isNeedsReview = evaluation.evaluation_status === 'needs_review' || evaluation.human_review_needed === true;
 
   const radarData = [
     { subject: '病史采集', score: evaluation.inquiry_score, fullMark: 100 },
-    { subject: '医学知识', score: isNeedsReview ? 0 : (evaluation.knowledge_score ?? 0), fullMark: 100 },
+    { subject: '医学知识', score: isNeedsReview ? null : (evaluation.knowledge_score ?? null), fullMark: 100 },
     { subject: '人文关怀', score: evaluation.humanistic_score, fullMark: 100 },
     { subject: '诊断结果', score: evaluation.diagnosis_score, fullMark: 100 },
     { subject: '治疗方案', score: evaluation.treatment_score, fullMark: 100 },
-  ];
+  ].filter(item => item.score !== null);
 
   const dimensionItems = [
     { key: 'inquiry', label: '病史采集', score: evaluation.inquiry_score, analysis: evaluation.inquiry_analysis, icon: <ReadOutlined /> },
@@ -372,16 +372,17 @@ const EvaluationPage: React.FC = () => {
           {evaluation.citation_data && evaluation.citation_data.length > 0 && (
             <div>
               <Text strong style={{ display: 'block', marginBottom: 8 }}>引用文献（{evaluation.citation_data.length} 条）：</Text>
-              {evaluation.citation_data.map((cite: Citation, idx: number) => (
-                <div key={idx} style={{
+              {evaluation.citation_data?.map((cite: Citation) => (
+                <div key={cite.citation_id || cite.source + cite.page} style={{
                   borderLeft: '3px solid #1677ff', padding: '8px 12px', marginBottom: 8,
                   background: '#fafafa', borderRadius: 4,
                 }}>
+                  {cite.claim && <div style={{ fontSize: 13, marginBottom: 4, color: '#333' }}><strong>结论：</strong>{cite.claim}</div>}
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text strong style={{ fontSize: 13 }}>{cite.source}</Text>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       {cite.page ? `第 ${cite.page} 页` : ''}
-                      {cite.rerank_score != null ? ` | 相关度 ${(cite.rerank_score * 100).toFixed(0)}%` : ''}
+                      {cite.rerank_score != null ? ` | 综合重排分 ${(cite.rerank_score * 100).toFixed(0)}%` : ''}
                     </Text>
                   </div>
                   {cite.heading_path && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>{cite.heading_path}</Text>}

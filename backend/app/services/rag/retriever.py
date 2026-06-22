@@ -22,6 +22,7 @@ from app.services.rag.reranker import rerank_documents
 from app.services.rag.types import (
     EvidenceItem, RetrievalBundle, RetrievalQuery,
     MIN_CANDIDATE_COUNT, MIN_QUERY_TYPE_COVERAGE, MIN_RRF_SCORE, MIN_SOURCE_COUNT,
+    MIN_VECTOR_SCORE,
     MAX_MQE_EXPANSIONS, MAX_HYDE_CALLS, MAX_RAG_CANDIDATES,
 )
 from app.core.config import settings
@@ -387,7 +388,10 @@ def reciprocal_rank_fusion(
     for item in sorted_results[:top_k]:
         doc_copy = dict(item["doc"])
         doc_copy["rrf_score"] = round(item["rrf_score"], 6)
-        # 用 rrf_score 作为统一的 score 字段
+        # 保留原始向量相似度分数（来自向量检索通道的 score）
+        if "score" in doc_copy and "bm25_score" not in doc_copy:
+            doc_copy["vector_score"] = doc_copy["score"]
+        # 用 rrf_score 作为统一的 score 字段（用于后续排序）
         doc_copy["score"] = doc_copy["rrf_score"]
         final_results.append(doc_copy)
 
@@ -641,7 +645,7 @@ def _dict_to_evidence(
             page=d.get("page"),
             heading_path=d.get("heading_path", ""),
             query_types=[query_type],
-            vector_score=d.get("score") if retrieved_via == "base" else None,
+            vector_score=d.get("vector_score") or d.get("score"),
             bm25_score=d.get("bm25_score"),
             rrf_score=d.get("rrf_score"),
             # 从 metadata 提取增强字段（如果存在）
@@ -687,11 +691,14 @@ def _assess_retrieval(
     if len(sources) < MIN_SOURCE_COUNT:
         return "insufficient"
 
-    # 分数检查（至少有一条高分结果）
-    max_score = max(
-        (c.rrf_score or c.vector_score or c.bm25_score or 0) for c in candidates
+    # 分数检查 — 分别判断各通道分数
+    has_good_vector = any(
+        (c.vector_score or 0) >= MIN_VECTOR_SCORE for c in candidates
     )
-    if max_score < MIN_RRF_SCORE:
+    has_good_rrf = any(
+        (c.rrf_score or 0) >= MIN_RRF_SCORE for c in candidates
+    )
+    if not has_good_vector and not has_good_rrf:
         return "insufficient"
 
     return "sufficient"
@@ -834,7 +841,7 @@ async def tiered_retrieve(
     mqe_expansion_count = 0
 
     for query in queries:
-        if mqe_expansion_count >= MAX_MQE_EXPANSIONS * len(queries):
+        if mqe_expansion_count >= MAX_MQE_EXPANSIONS:
             break
 
         expanded = await expand_queries(query.text, n=2)
@@ -889,12 +896,14 @@ async def tiered_retrieve(
 
     # 选择最有价值的查询做 HyDE（优先 case 类型）
     hyde_query = next((q for q in queries if q.query_type == "case"), queries[0])
+    hyde_success = False
     try:
         hyde_results = await hyde_retrieve(hyde_query.text, top_k=top_k_per_query)
         if hyde_results:
             query_types_with_hits.add(hyde_query.query_type)
             evidence_items = _dict_to_evidence(hyde_results, hyde_query.query_type, retrieved_via="hyde")
             all_candidates = _merge_evidence(all_candidates, evidence_items)
+        hyde_success = True
     except Exception as e:
         logger.warning(f"HyDE 检索失败: {e}")
 
@@ -904,7 +913,7 @@ async def tiered_retrieve(
     trace["total_ms"] = round(elapsed * 1000, 1)
     trace["timing"]["retrieval_ms"] = trace["total_ms"]
     trace["mqe_expansions"] = mqe_expansion_count
-    trace["hyde_calls"] = 1
+    trace["hyde_calls"] = 1 if hyde_success else 0
     trace["retrieval_level"] = "hyde"
     trace["candidate_count"] = len(all_candidates[:candidate_limit])
     trace["retrieval_status"] = "candidate" if status == "sufficient" else status

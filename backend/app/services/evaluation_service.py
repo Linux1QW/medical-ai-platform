@@ -4,7 +4,7 @@ import re
 import logging
 from typing import Optional, List
 
-from sqlalchemy import select, func, case, literal
+from sqlalchemy import select, func, case, literal, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 
@@ -156,10 +156,14 @@ async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
         scoring_result = await run_scoring(
             inquiry_score=inquiry_data.get("score", 0),
             inquiry_analysis=inquiry_data.get("analysis", ""),
-            knowledge_score=knowledge_score_value if knowledge_score_value is not None else 50,
+            knowledge_score=knowledge_score_value,
             knowledge_analysis=knowledge_data.get("analysis", ""),
             humanistic_score=humanistic_data.get("score", 0),
             humanistic_analysis=humanistic_data.get("analysis", ""),
+            diagnosis_score=diagnosis_data.get("score"),
+            diagnosis_analysis=diagnosis_data.get("analysis", ""),
+            treatment_score=treatment_data.get("score"),
+            treatment_analysis=treatment_data.get("analysis", ""),
         )
         scoring_data = _extract_json(scoring_result["raw_response"])
 
@@ -357,7 +361,12 @@ async def get_user_stats_breakdown(db: AsyncSession) -> List[dict]:
         .outerjoin(Consultation, Consultation.doctor_id == User.id)
         .outerjoin(Evaluation, Evaluation.consultation_id == Consultation.id)
         .where(User.role == "doctor")
-        .where(Evaluation.evaluation_status != "needs_review")
+        .where(
+            or_(
+                Evaluation.evaluation_status != "needs_review",
+                Evaluation.evaluation_status.is_(None),  # 保留 outerjoin 未匹配的记录
+            )
+        )
         .group_by(User.id, User.username, User.real_name, User.department)
         .order_by(func.avg(Evaluation.total_score).desc())
     )

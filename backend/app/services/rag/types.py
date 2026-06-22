@@ -155,10 +155,11 @@ MAX_HYDE_CALLS = 1
 MAX_RAG_CANDIDATES = 20
 
 # 召回判断阈值
-MIN_CANDIDATE_COUNT = 2
-MIN_QUERY_TYPE_COVERAGE = 1                        # 至少 1 个查询类型有命中
+MIN_CANDIDATE_COUNT = 3                            # 至少 3 个候选
+MIN_QUERY_TYPE_COVERAGE = 2                        # 至少覆盖 2 类查询
 MIN_RRF_SCORE = 0.015
-MIN_SOURCE_COUNT = 1                               # 至少 1 个不同来源
+MIN_VECTOR_SCORE = 0.5                             # 向量相似度独立阈值
+MIN_SOURCE_COUNT = 2                               # 至少 2 个不同来源
 
 # 重排序配置
 MAX_RERANK_INPUT = 20                              # 专用 reranker 最大输入

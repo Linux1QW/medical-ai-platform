@@ -535,7 +535,7 @@ async def run_knowledge_check(
         # ── Step 10: 构造返回结果 ──
         # raw_response 保持与 evaluation_service.py 的兼容性
         raw_payload = {
-            "score": score if score is not None else 50,  # 拒答时给默认分，兼容旧流程
+            "score": score,  # None 表示拒答，上层 evaluation_service 会正确处理
             "analysis": analysis_text,
         }
 
@@ -560,12 +560,12 @@ async def run_knowledge_check(
         logger.error(f"知识核对流程异常: {e}", exc_info=True)
         # 全局降级：不崩溃，返回安全默认值
         fallback_payload = {
-            "score": 50,
-            "analysis": "医学知识核对过程中遇到技术问题，无法完成评估。默认给予中等分数，建议人工复核。",
+            "score": None,
+            "analysis": "医学知识核对过程中遇到技术问题，无法完成评估。建议人工复核。",
         }
         return {
             "raw_response": json.dumps(fallback_payload, ensure_ascii=False),
-            "score": 50,
+            "score": None,
             "analysis": fallback_payload["analysis"],
             "retrieval_status": "error",
             "evidence_stance": "undetermined",

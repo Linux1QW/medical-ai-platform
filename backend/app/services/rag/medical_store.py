@@ -20,11 +20,62 @@ PERSIST_DIR = (
 
 COLLECTION_NAME = "medical_guidelines"  # 保留用于向后兼容
 
+# 懒加载缓存：避免每次调用都查询 ChromaDB
+_resolved_collection_name: Optional[str] = None
 
-def _get_collection_name() -> str:
-    """根据活跃索引版本返回 collection 名称"""
+
+def _get_collection_name(use_cache: bool = True) -> str:
+    """根据活跃索引版本返回 collection 名称，带向后兼容回退
+
+    首次调用时检查 ChromaDB 中实际存在的 collection，
+    如果版本化 collection 不存在则回退到旧名称 'medical_guidelines'。
+    """
+    global _resolved_collection_name
+
+    if use_cache and _resolved_collection_name is not None:
+        return _resolved_collection_name
+
     version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
-    return f"medical_guidelines_{version}"
+    versioned_name = f"medical_guidelines_{version}"
+
+    # 检查版本化 collection 是否存在
+    try:
+        PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(
+            path=str(PERSIST_DIR),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        collections = client.list_collections()
+        collection_names = [c.name for c in collections] if collections else []
+
+        if versioned_name in collection_names:
+            _resolved_collection_name = versioned_name
+            return versioned_name
+
+        # 回退到旧名称
+        if "medical_guidelines" in collection_names:
+            logger.warning(
+                f"版本化 collection '{versioned_name}' 不存在，"
+                f"回退到旧 collection 'medical_guidelines'。"
+                f"建议运行索引重建并切换到新版本。"
+            )
+            _resolved_collection_name = "medical_guidelines"
+            return "medical_guidelines"
+    except Exception as e:
+        logger.debug(f"检查 collection 存在性失败: {e}")
+
+    # 默认返回版本化名称（首次部署场景）
+    _resolved_collection_name = versioned_name
+    return versioned_name
+
+
+def _reset_collection_cache() -> None:
+    """重置 collection 名称缓存并刷新单例的 collection 引用（版本切换后调用）"""
+    global _resolved_collection_name
+    _resolved_collection_name = None
+    # 如果单例已存在，刷新其 collection 引用
+    if _medical_store is not None and _medical_store.client is not None:
+        _medical_store.refresh_collection()
 
 
 class MedicalKnowledgeStore:
@@ -47,6 +98,21 @@ class MedicalKnowledgeStore:
             metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
         )
         logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR} (collection={collection_name})")
+
+    def refresh_collection(self):
+        """重新解析并更新 collection 引用（版本切换后调用）"""
+        if self.client is None:
+            self._init_client()
+            return
+        collection_name = _get_collection_name(use_cache=False)
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
+            )
+            logger.info(f"Collection 引用已刷新: {collection_name}")
+        except Exception as e:
+            logger.error(f"刷新 collection 引用失败: {e}")
 
     def add_documents(
         self,

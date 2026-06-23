@@ -24,6 +24,69 @@
 
 前五个评估智能体通过 `asyncio.gather` 并行执行；综合评分与建议指导依次串行完成。所有智能体均由阿里云百炼平台 Qwen API 驱动，全局通过 `asyncio.Semaphore` 控制 LLM 并发调用数，防止 API 限流。
 
+#### LangGraph 编排层（v5）
+
+自 v5 版本起，评估流程由 **LangGraph StateGraph** 统一编排，替代原有的 `asyncio.gather` 硬编码方式。
+
+**核心特性**：
+- **状态图编排**：`EvaluationState` TypedDict 定义所有节点共享状态
+- **Safety 门控**：确定性红旗规则优先 → LLM 语义补充 → fail closed 策略
+- **动态路由**：基于咨询类型（initial/follow_up/emergency/communication）和提交状态决定执行哪些 Agent
+- **并行分支**：通过 `Annotated[list, add]` reducer 支持多 Agent 并行结果合并
+- **SQLite/Redis Checkpoint**：支持中断恢复和断点续传
+
+**关键文件**：
+- `backend/app/orchestration/state.py` — 状态定义
+- `backend/app/orchestration/graph.py` — StateGraph 主图实现
+- `backend/app/orchestration/checkpointer.py` — Redis Checkpoint 持久化
+- `backend/app/orchestration/adapters/` — Agent 适配器模式（统一输出契约）
+- `backend/app/orchestration/routes.py` — 路由矩阵与场景分类
+
+**Feature Flag**：
+```bash
+LANGGRAPH_ENABLED=true   # 启用 LangGraph 编排（默认 false）
+LANGGRAPH_SHADOW_MODE=true  # 影子模式：新旧路径并行对比
+```
+
+#### Function Call / Tool Use（v5.1）
+
+知识 Agent 引入 **Function Calling** 能力，LLM 可自主调用检索工具完成医学证据检索和引用校验。
+
+**核心设计**：
+- **Agent 内部 Tool Use**：不改变 LangGraph 主编排，仅在知识 Agent 内部启用
+- **工具白名单**：5 个医学检索工具 + 1 个引用校验工具，全部经过 Pydantic 参数校验
+- **预算控制**：限制 RAG 调用次数（最多 3 次）、MQE 扩展（最多 2 次）、HyDE（最多 1 次）
+- **确定性边界**：总分计算、Safety 门控、拒答规则保持代码控制，LLM 不可干预
+- **Trace 审计**：所有工具调用记录写入 `tool_trace`，前端可追溯
+
+**关键文件**：
+- `backend/app/services/tools/base.py` — BaseTool 基类 + ToolContext
+- `backend/app/services/tools/registry.py` — 工具注册表
+- `backend/app/services/tools/executor.py` — 统一执行器（校验/预算/超时/截断）
+- `backend/app/services/tools/medical_retrieval.py` — 4 个检索工具
+- `backend/app/services/tools/citation.py` — 引用校验工具
+- `backend/app/services/agents/knowledge_agent.py` — `run_knowledge_check_with_tools()`
+
+**Feature Flag**：
+```bash
+ENABLE_TOOL_USE=true   # 启用知识 Agent Tool Use（默认 false）
+TOOL_USE_FALLBACK_TO_LEGACY=true  # 失败时回退旧路径
+```
+
+#### 评分引擎重构
+
+评分逻辑从单体拆分为三个独立组件，支持版本化策略和确定性计算。
+
+**核心组件**：
+- **ScoringPolicy**：版本化权重配置（`v1`, `v2`...），支持 A/B 测试
+- **ScoreCalculator**：纯代码加权计算，禁止 None 临时权重重分配
+- **SummaryGenerator**：LLM 摘要生成 + 五维确定性降级模板
+
+**关键文件**：
+- `backend/app/services/scoring/policies.py` — 评分策略
+- `backend/app/services/scoring/calculator.py` — 确定性计算器
+- `backend/app/services/scoring/summary.py` — 摘要生成器
+
 ### RAG 检索系统（V2）
 
 知识核对智能体依托 RAG V2 检索管线，从 80+ 部医学教材与 CSCO/NCCN 指南中检索循证证据。核心特性：
@@ -66,6 +129,9 @@
 | 重排序 | DashScope gte-rerank + LLM Cross-Encoder | — |
 | PDF 解析 | PyMuPDF | — |
 | 并发控制 | asyncio.Semaphore（全局 LLM 限流） | — |
+| 编排框架 | LangGraph（StateGraph 状态图编排） | — |
+| 缓存/Checkpoint | Redis（生产环境 Checkpoint 持久化） | — |
+| Function Calling | OpenAI SDK（Qwen Function Calling 兼容接口） | — |
 
 ## 项目结构
 
@@ -106,10 +172,36 @@ medical-ai-platform/
 │   │   │   │   └── build_medical_index.py#   索引构建脚本（参数化版本）
 │   │   │   ├── evaluation_service.py     #   评估编排器
 │   │   │   ├── consultation_service.py   #   问诊逻辑
-│   │   │   └── qwen_client.py            #   Qwen API 客户端
+│   │   │   ├── qwen_client.py            #   Qwen API 客户端
+│   │   │   ├── tools/                    # Function Call 工具系统
+│   │   │   │   ├── base.py               #   BaseTool 基类 + ToolContext
+│   │   │   │   ├── registry.py           #   工具注册表
+│   │   │   │   ├── executor.py           #   统一执行器（校验/预算/超时/截断）
+│   │   │   │   ├── medical_retrieval.py  #   医学检索工具
+│   │   │   │   ├── citation.py           #   引用校验工具
+│   │   │   │   └── scoring.py            #   评分工具
+│   │   │   └── scoring/                  # 评分引擎
+│   │   │       ├── policies.py           #   版本化策略
+│   │   │       ├── calculator.py         #   确定性计算器
+│   │   │       └── summary.py            #   摘要生成器
+│   │   ├── orchestration/                # LangGraph 编排层
+│   │   │   ├── state.py                  #   EvaluationState 状态定义
+│   │   │   ├── graph.py                  #   StateGraph 主图
+│   │   │   ├── checkpointer.py           #   Redis Checkpoint
+│   │   │   ├── adapters/                 #   Agent 适配器
+│   │   │   └── routes.py                 #   路由矩阵
 │   │   └── db/session.py                 # 数据库连接
 │   ├── tests/                            # 测试
 │   │   ├── rag/                          #   RAG 单元测试与离线评测
+│   │   ├── tools/                        #   Tool Use 单元测试
+│   │   │   ├── test_registry.py
+│   │   │   └── test_executor.py
+│   │   ├── services/
+│   │   │   └── test_qwen_client_tools.py #   qwen_client Tool Calling
+│   │   ├── agents/
+│   │   │   └── test_knowledge_agent_tool_use.py  # 知识 Agent Tool Use
+│   │   ├── orchestration/
+│   │   │   └── test_knowledge_adapter_tool_flag.py  # Feature Flag 切换
 │   │   ├── test_auth_error_handling.py
 │   │   └── test_auth_password_length.py
 │   ├── requirements.txt
@@ -127,6 +219,7 @@ medical-ai-platform/
 │   ├── migrate_v2.sql                    # 诊断/治疗字段 + 五维度评估
 │   ├── migrate_v3.sql                    # 密码字段扩容
 │   ├── migrate_v4.sql                    # RAG 审计字段（幂等迁移）
+│   ├── migrate_v5.sql                    # LangGraph + 审计字段
 │   └── seed.sql                          # 种子数据
 ├── dataset/                              # 评测数据集（150+ 病例）
 └── data/                                 # 医学教材与指南 PDF（80+ 部）
@@ -141,6 +234,7 @@ medical-ai-platform/
 | Python | 3.10+ | 后端运行环境 |
 | Node.js | 18+ | 前端运行环境 |
 | MySQL | 8.0 | 数据存储 |
+| Redis | 6.0+ | Checkpoint 持久化（LangGraph 生产环境，可选） |
 
 此外，需在系统环境变量中配置阿里云百炼平台 API Key：
 
@@ -178,6 +272,7 @@ mysql -u root -p medical_ai < database/seed.sql
 mysql -u root -p medical_ai < database/migrate_v2.sql
 mysql -u root -p medical_ai < database/migrate_v3.sql
 mysql -u root -p medical_ai < database/migrate_v4.sql
+mysql -u root -p medical_ai < database/migrate_v5.sql
 ```
 
 或使用初始化脚本：
@@ -209,6 +304,13 @@ python -m app.services.rag.build_medical_index --version rag-v2
 # 终端 1 — 后端（默认 8000 端口）
 cd backend
 .\venv\Scripts\Activate.ps1
+
+# 启用 LangGraph 编排（可选）
+$env:LANGGRAPH_ENABLED="true"
+
+# 启用知识 Agent Tool Use（可选）
+$env:ENABLE_TOOL_USE="true"
+
 uvicorn app.main:app --reload --port 8000
 
 # 终端 2 — 前端（默认 5173 端口）
@@ -228,6 +330,7 @@ npm run dev
 | `migrate_v2.sql` | 新增诊断/治疗方案字段（`diagnosis`、`treatment_plan`）及五维度评估字段 |
 | `migrate_v3.sql` | `users.hashed_password` 字段扩容为 TEXT |
 | `migrate_v4.sql` | RAG 审计字段（幂等版本）：`citation_data`、`retrieval_status`、`evidence_stance`、`human_review_needed`、`review_reason`、`rag_trace_data`、`evaluation_status`；`knowledge_score` 和 `total_score` 允许 NULL |
+| `migrate_v5.sql` | LangGraph + 审计字段：`consultations.consultation_type`、新建 `evaluation_runs` / `evaluation_node_results` 表、`evaluations` 新增 `run_id` / `safety_data` / `applicable_dimensions` / `scoring_policy_version` / `graph_version` |
 
 ## 配置说明
 
@@ -274,20 +377,54 @@ npm run dev
 | `MAX_RERANK_INPUT` | 20 | 专用 reranker 最大输入条数 |
 | `LLM_RERANK_INPUT` | 5 | LLM 精排最大输入条数 |
 
+**LangGraph 编排配置**：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `LANGGRAPH_ENABLED` | false | 启用 LangGraph 编排 |
+| `LANGGRAPH_SHADOW_MODE` | false | 影子模式：新旧路径并行对比 |
+| `LANGGRAPH_GRAPH_VERSION` | evaluation-graph-v1 | 图版本标识 |
+| `REDIS_CHECKPOINT_URL` | redis://localhost:6379/1 | Redis Checkpoint 连接地址 |
+| `REDIS_CHECKPOINT_TTL` | 86400 | Checkpoint 过期时间（秒） |
+
+**Function Call / Tool Use 配置**：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `ENABLE_TOOL_USE` | false | 启用知识 Agent Tool Use |
+| `TOOL_USE_MODEL` | qwen-max | Tool Use 专用模型 |
+| `TOOL_USE_MAX_ROUNDS` | 4 | 最大工具调用轮次 |
+| `TOOL_USE_MAX_CALLS` | 8 | 最大工具调用总次数 |
+| `KNOWLEDGE_TOOL_MAX_RAG_CALLS` | 3 | RAG 检索最大调用次数 |
+| `KNOWLEDGE_TOOL_MAX_MQE_CALLS` | 2 | MQE 扩展最大调用次数 |
+| `KNOWLEDGE_TOOL_MAX_HYDE_CALLS` | 1 | HyDE 最大调用次数 |
+| `TOOL_USE_FALLBACK_TO_LEGACY` | true | 失败时回退旧路径 |
+
 ## 测试
 
 ```powershell
 cd backend
 
-# 运行全部单元测试
-pytest tests/ -v
+# 运行全部单元测试（186+ 个用例）
+pytest tests/ -v --tb=short
 
 # 仅运行 RAG 相关测试
 pytest tests/rag/ -v
 
+# 仅运行 Tool Use 相关测试
+pytest tests/tools/ -v
+pytest tests/services/test_qwen_client_tools.py -v
+pytest tests/agents/test_knowledge_agent_tool_use.py -v
+
 # 离线评测（评估 RAG 检索质量）
 python tests/rag/eval_offline.py
 ```
+
+**测试覆盖**：
+- LangGraph 编排层：28 个基线测试 + 17 个图节点测试
+- Tool Use：10 个 Registry 测试 + 10 个 Executor 测试 + 8 个 qwen_client 测试
+- 知识 Agent：17 个分数映射测试 + 6 个 Feature Flag 测试
+- 适配器：16 个适配器测试 + 13 个路由测试
 
 ## API 文档
 

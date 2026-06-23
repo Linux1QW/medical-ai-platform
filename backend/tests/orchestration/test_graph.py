@@ -32,7 +32,8 @@ class TestBuildEvaluationGraph:
         assert "load_context" in nodes
         assert "classify_consultation" in nodes
         assert "safety_check" in nodes
-        assert "build_route_plan" in nodes
+        assert "plan_evaluation" in nodes
+        assert "validate_plan" in nodes
         assert "dispatch_and_run" in nodes
         assert "run_agent" in nodes
         assert "aggregate_results" in nodes
@@ -738,7 +739,8 @@ class TestSendFanOutFanIn:
         nodes = list(graph.nodes.keys())
 
         # 关键节点都存在
-        assert "build_route_plan" in nodes
+        assert "plan_evaluation" in nodes
+        assert "validate_plan" in nodes
         assert "run_agent" in nodes
         assert "aggregate_results" in nodes
         # dispatch_and_run 保留用于向后兼容

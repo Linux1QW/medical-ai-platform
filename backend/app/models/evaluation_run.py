@@ -18,6 +18,8 @@ class EvaluationRun(Base):
     checkpoint_thread_id = Column(String(100), nullable=False)
     status = Column(String(30), nullable=False, default="running")
     selected_agents = Column(JSON, nullable=True)
+    evaluation_plan = Column(JSON, nullable=True, comment="评估计划（Plan-Execute 模式）")
+    execution_results = Column(JSON, nullable=True, comment="计划步骤执行结果")
     attempt = Column(Integer, nullable=False, default=1)
     error_type = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)

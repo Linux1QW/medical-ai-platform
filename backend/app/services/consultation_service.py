@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, AsyncGenerator
+import json
 import logging
 
 from sqlalchemy import select, func, and_
@@ -289,6 +290,154 @@ async def send_doctor_message(
     await db.refresh(doctor_msg)
     await db.refresh(patient_msg)
     return doctor_msg, patient_msg
+
+
+def _make_sse_event(event_type: str, data: dict) -> str:
+    """构造 SSE 事件字符串"""
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def send_doctor_message_stream(
+    db: AsyncSession, consultation_id: int, content: str
+) -> AsyncGenerator[str, None]:
+    """医生发送消息并流式获取虚拟患者回复（SSE）
+
+    在每个关键步骤发送进度事件，最终发送完整结果。
+    事件类型：progress / complete / error
+    """
+    try:
+        # Step 1: 加载对话历史
+        yield _make_sse_event("progress", {
+            "step": "loading_history",
+            "message": "正在加载对话历史...",
+            "progress": 10,
+        })
+        messages = await get_messages(db, consultation_id)
+        next_seq = len(messages) + 1
+
+        # Step 2: 保存医生消息
+        yield _make_sse_event("progress", {
+            "step": "saving_message",
+            "message": "正在保存您的消息...",
+            "progress": 20,
+        })
+        doctor_msg = ConsultationMessage(
+            consultation_id=consultation_id,
+            role="doctor",
+            content=content,
+            sequence=next_seq,
+        )
+        db.add(doctor_msg)
+
+        # Step 3: 加载患者信息
+        yield _make_sse_event("progress", {
+            "step": "loading_patient",
+            "message": "正在加载患者信息...",
+            "progress": 30,
+        })
+        consultation = await get_consultation(db, consultation_id)
+        patient_result = await db.execute(
+            select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
+        )
+        patient = patient_result.scalar_one()
+
+        # Step 4: 构建对话上下文
+        yield _make_sse_event("progress", {
+            "step": "building_context",
+            "message": "正在构建对话上下文...",
+            "progress": 40,
+        })
+        wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
+        chat_history = [{"role": "system", "content": wrapped_prompt}]
+
+        recent_window = MEMORY_RECENT_TURNS * 2
+        compress_threshold = MEMORY_COMPRESS_THRESHOLD * 2
+
+        # Step 5: 处理长期记忆压缩（如需要）
+        if len(messages) > compress_threshold:
+            yield _make_sse_event("progress", {
+                "step": "compressing_memory",
+                "message": "正在压缩早期对话记忆...",
+                "progress": 50,
+            })
+            early_messages = messages[:-recent_window]
+            recent_messages = messages[-recent_window:]
+            summary = await _summarize_early_messages(early_messages, patient.system_prompt or "")
+            if summary:
+                chat_history.append({
+                    "role": "system",
+                    "content": f"《早期问诊记录摘要》（口述展示的症状和对话要点，请保持与此一致）\n{summary}",
+                })
+        else:
+            recent_messages = messages[-recent_window:] if len(messages) > recent_window else messages
+
+        for msg in recent_messages:
+            chat_history.append({
+                "role": "user" if msg.role == "doctor" else "assistant",
+                "content": msg.content,
+            })
+        chat_history.append({"role": "user", "content": content})
+
+        # Step 6: 调用 LLM 生成患者回复
+        yield _make_sse_event("progress", {
+            "step": "generating_reply",
+            "message": "患者正在思考回复...",
+            "progress": 60,
+        })
+        patient_reply = await call_qwen_chat(chat_history, temperature=0.3)
+
+        # Step 7: 保存患者回复
+        yield _make_sse_event("progress", {
+            "step": "saving_reply",
+            "message": "正在保存患者回复...",
+            "progress": 90,
+        })
+        patient_msg = ConsultationMessage(
+            consultation_id=consultation_id,
+            role="patient",
+            content=patient_reply,
+            sequence=next_seq + 1,
+        )
+        db.add(patient_msg)
+        await db.commit()
+        await db.refresh(doctor_msg)
+        await db.refresh(patient_msg)
+
+        # Step 8: 完成
+        yield _make_sse_event("progress", {
+            "step": "completed",
+            "message": "完成",
+            "progress": 100,
+        })
+        yield _make_sse_event("complete", {
+            "doctor_msg": {
+                "id": doctor_msg.id,
+                "consultation_id": doctor_msg.consultation_id,
+                "role": doctor_msg.role,
+                "content": doctor_msg.content,
+                "sequence": doctor_msg.sequence,
+                "created_at": doctor_msg.created_at.isoformat() if doctor_msg.created_at else None,
+            },
+            "patient_msg": {
+                "id": patient_msg.id,
+                "consultation_id": patient_msg.consultation_id,
+                "role": patient_msg.role,
+                "content": patient_msg.content,
+                "sequence": patient_msg.sequence,
+                "created_at": patient_msg.created_at.isoformat() if patient_msg.created_at else None,
+            },
+        })
+
+    except Exception as e:
+        logger.error(f"SSE 流式消息处理失败: {e}", exc_info=True)
+        # 回滚数据库会话
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        yield _make_sse_event("error", {
+            "message": f"处理失败: {type(e).__name__}: {str(e)[:200]}",
+        })
 
 
 async def end_consultation(db: AsyncSession, consultation_id: int) -> Consultation:

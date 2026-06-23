@@ -42,3 +42,6 @@ dataset/
 
 # 审查中间文件
 review_*.txt
+
+# 调试日志
+debug.log

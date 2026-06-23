@@ -2,6 +2,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -21,6 +22,7 @@ from app.services.consultation_service import (
     list_consultations,
     get_messages,
     send_doctor_message,
+    send_doctor_message_stream,
     end_consultation,
     submit_diagnosis,
     delete_consultation,
@@ -115,6 +117,47 @@ async def send_message(
         MessageOut.model_validate(doctor_msg),
         MessageOut.model_validate(patient_msg),
     ]
+
+
+@router.post("/{consultation_id}/messages/stream")
+async def send_message_stream(
+    consultation_id: int,
+    data: MessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """SSE 流式发送消息并获取患者回复进度
+
+    事件类型：
+    - progress: 处理进度更新（包含 step/message/progress 字段）
+    - complete: 处理完成（包含 doctor_msg/patient_msg）
+    - error: 处理出错（包含 message 字段）
+    """
+    consultation = await get_consultation(db, consultation_id)
+    if not consultation:
+        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    if consultation.status != "in_progress":
+        raise HTTPException(status_code=400, detail="该问诊已结束")
+
+    # 检查轮次限制
+    messages = await get_messages(db, consultation_id)
+    current_rounds = len([m for m in messages if m.role == 'doctor'])
+    if current_rounds >= consultation.max_rounds:
+        raise HTTPException(status_code=403, detail="已达到最大问诊轮次，请提交评估或延长轮次")
+
+    async def event_generator():
+        async for event in send_doctor_message_stream(db, consultation_id, data.content):
+            yield event
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+        },
+    )
 
 
 @router.post("/{consultation_id}/extend", response_model=ConsultationOut)

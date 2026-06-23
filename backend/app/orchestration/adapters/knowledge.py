@@ -5,7 +5,11 @@ import logging
 from app.core.config import settings
 from app.orchestration.adapters.base import BaseAgentAdapter
 from app.orchestration.state import AgentResultEnvelope, EvaluationContext
-from app.services.agents.knowledge_agent import run_knowledge_check, run_knowledge_check_with_tools
+from app.services.agents.knowledge_agent import (
+    run_knowledge_check,
+    run_knowledge_check_with_tools,
+    run_knowledge_check_react,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +22,31 @@ class KnowledgeAdapter(BaseAgentAdapter):
         doctor_diagnosis = context.doctor_diagnosis or ""
         treatment_plan = context.treatment_plan or ""
 
-        if settings.ENABLE_TOOL_USE:
+        if settings.ENABLE_REACT_KNOWLEDGE:
+            logger.info("Using ReAct path for knowledge agent")
+            consultation = {
+                "conversation_text": context.conversation_text,
+                "patient_info": patient_info,
+                "doctor_diagnosis": doctor_diagnosis,
+                "treatment_plan": treatment_plan,
+            }
+            try:
+                return await run_knowledge_check_react(
+                    consultation=consultation,
+                    diagnosis_text=doctor_diagnosis,
+                    treatment_text=treatment_plan,
+                )
+            except Exception as e:
+                if settings.TOOL_USE_FALLBACK_TO_LEGACY:
+                    logger.warning("Fallback to Tool Use knowledge check: %s", e)
+                    return await run_knowledge_check_with_tools(
+                        consultation=consultation,
+                        diagnosis_text=doctor_diagnosis,
+                        treatment_text=treatment_plan,
+                    )
+                else:
+                    raise
+        elif settings.ENABLE_TOOL_USE:
             logger.info("Using Tool Use path for knowledge agent")
             # 构建 consultation dict 供 run_knowledge_check_with_tools 使用
             consultation = {

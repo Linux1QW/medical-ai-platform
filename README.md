@@ -219,7 +219,6 @@ medical-ai-platform/
 │   ├── migrate_v2.sql                    # 诊断/治疗字段 + 五维度评估
 │   ├── migrate_v3.sql                    # 密码字段扩容
 │   ├── migrate_v4.sql                    # RAG 审计字段（幂等迁移）
-│   ├── migrate_v5.sql                    # LangGraph + 审计字段
 │   └── seed.sql                          # 种子数据
 ├── dataset/                              # 评测数据集（150+ 病例）
 └── data/                                 # 医学教材与指南 PDF（80+ 部）
@@ -272,7 +271,6 @@ mysql -u root -p medical_ai < database/seed.sql
 mysql -u root -p medical_ai < database/migrate_v2.sql
 mysql -u root -p medical_ai < database/migrate_v3.sql
 mysql -u root -p medical_ai < database/migrate_v4.sql
-mysql -u root -p medical_ai < database/migrate_v5.sql
 ```
 
 或使用初始化脚本：
@@ -330,7 +328,6 @@ npm run dev
 | `migrate_v2.sql` | 新增诊断/治疗方案字段（`diagnosis`、`treatment_plan`）及五维度评估字段 |
 | `migrate_v3.sql` | `users.hashed_password` 字段扩容为 TEXT |
 | `migrate_v4.sql` | RAG 审计字段（幂等版本）：`citation_data`、`retrieval_status`、`evidence_stance`、`human_review_needed`、`review_reason`、`rag_trace_data`、`evaluation_status`；`knowledge_score` 和 `total_score` 允许 NULL |
-| `migrate_v5.sql` | LangGraph + 审计字段：`consultations.consultation_type`、新建 `evaluation_runs` / `evaluation_node_results` 表、`evaluations` 新增 `run_id` / `safety_data` / `applicable_dimensions` / `scoring_policy_version` / `graph_version` |
 
 ## 配置说明
 

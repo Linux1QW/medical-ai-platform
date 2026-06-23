@@ -153,6 +153,9 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
     # 4. 执行图
     try:
         graph = await get_graph()
+        if graph is None:
+            raise RuntimeError("LangGraph 图未初始化，请检查 LANGGRAPH_ENABLED 配置和 Redis Checkpointer 状态")
+        
         config = {
             "configurable": {
                 "thread_id": f"evaluation:{run_id}",

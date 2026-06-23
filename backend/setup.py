@@ -1,0 +1,33 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="medical-ai-platform-backend",
+    version="1.0.0",
+    packages=find_packages(),
+    install_requires=[
+        "fastapi==0.115.6",
+        "uvicorn[standard]==0.34.0",
+        "sqlalchemy[asyncio]==2.0.36",
+        "aiomysql==0.2.0",
+        "pymysql==1.1.1",
+        "pydantic==2.10.4",
+        "pydantic-settings==2.7.1",
+        "python-jose[cryptography]==3.3.0",
+        "passlib[bcrypt]==1.7.4",
+        "bcrypt==4.0.1",
+        "python-multipart==0.0.20",
+        "openai==1.58.1",
+        "email-validator==2.2.0",
+        "chromadb==1.5.7",
+        "pymupdf==1.27.2.2",
+        "dashscope>=1.20.0",
+        "pytest>=7.0.0",
+        "pytest-asyncio>=0.21.0",
+        "langgraph==1.2.6",
+        "langgraph-checkpoint-redis==0.4.1",
+        "redis==7.4.1",
+    ],
+    author="Medical AI Platform Team",
+    description="A medical AI platform for clinical consultation evaluation",
+    python_requires=">=3.9",
+)

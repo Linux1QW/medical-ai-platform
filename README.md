@@ -226,6 +226,94 @@ medical-ai-platform/
 
 ## 快速开始
 
+### Docker Compose 一键部署（推荐）
+
+使用 Docker Compose 可一键启动整个平台，包括 MySQL 数据库、Redis、后端和前端服务。
+
+**环境要求**：Docker 20.10+ 和 Docker Compose 2.0+
+
+#### 1. 配置环境变量
+
+```powershell
+# 复制环境变量模板
+cp .env.docker .env
+
+# 编辑 .env 文件，至少修改以下配置：
+# - MYSQL_PASSWORD：数据库密码
+# - SECRET_KEY：JWT 签名密钥（使用随机字符串）
+# - DASHSCOPE_API_KEY：阿里云百炼平台 API Key（必填）
+```
+
+#### 2. 启动服务
+
+```powershell
+# 生产环境启动
+docker compose up -d
+
+# 查看服务状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
+
+# 停止服务
+docker compose down
+```
+
+#### 3. 本地开发环境
+
+```powershell
+# 使用开发配置启动（支持热重载）
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+```
+
+#### 4. 访问服务
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| 前端界面 | http://localhost | Nginx 托管的 React SPA |
+| 后端 API | http://localhost:8000 | FastAPI 服务 |
+| API 文档 | http://localhost:8000/docs | Swagger UI |
+| MySQL | localhost:3306 | 数据库（仅开发环境暴露） |
+| Redis | localhost:6379 | 缓存（仅开发环境暴露） |
+
+#### 5. 数据持久化
+
+以下数据通过 Docker Volume 持久化存储：
+
+| Volume | 用途 |
+|--------|------|
+| `medical-ai-mysql-data` | MySQL 数据库文件 |
+| `medical-ai-redis-data` | Redis AOF 持久化 |
+| `medical-ai-chroma-data` | ChromaDB 向量数据库 |
+
+```powershell
+# 查看所有 volume
+docker volume ls | findstr medical-ai
+
+# 清除所有数据（谨慎！）
+docker compose down -v
+```
+
+#### 6. 知识库构建
+
+将医学教材 PDF 放入 `data/` 目录后，在容器内构建索引：
+
+```powershell
+# 进入 backend 容器
+docker compose exec backend bash
+
+# 构建 RAG 索引
+python -m backend.app.services.rag.build_medical_index
+
+# 指定版本构建
+python -m backend.app.services.rag.build_medical_index --version rag-v2
+```
+
+### 手动安装部署
+
+如果不使用 Docker，可按以下步骤手动安装。
+
 ### 环境要求
 
 | 软件 | 最低版本 | 用途 |
@@ -257,21 +345,28 @@ npm install
 
 ### 数据库初始化与迁移
 
+**新环境部署**（推荐）：只需执行 `init.sql`，已包含全部表结构和字段：
+
 ```powershell
 # 1. 创建数据库
 mysql -u root -p -e "CREATE DATABASE medical_ai CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-# 2. 建表
+# 2. 建表（init.sql 已包含所有表结构，含 LangGraph 编排相关表）
 mysql -u root -p medical_ai < database/init.sql
 
 # 3. 导入种子数据（含管理员账号 + 虚拟患者）
 mysql -u root -p medical_ai < database/seed.sql
+```
 
-# 4. 执行增量迁移（可重复执行，已存在的列自动跳过）
+**从旧版本升级**：按顺序执行增量迁移脚本（均可重复执行，已存在的列自动跳过）：
+
+```powershell
 mysql -u root -p medical_ai < database/migrate_v2.sql
 mysql -u root -p medical_ai < database/migrate_v3.sql
 mysql -u root -p medical_ai < database/migrate_v4.sql
 ```
+
+> **注意**：`migrate_v5.sql` 的变更（`consultation_type` 字段、`evaluation_runs` / `evaluation_node_results` 表、`evaluations` 审计字段）已合并到 `init.sql`，不再提供独立迁移脚本。如需在已有数据库上添加这些结构，请手动执行对应 `ALTER TABLE` / `CREATE TABLE` 语句。
 
 或使用初始化脚本：
 
@@ -324,10 +419,12 @@ npm run dev
 
 | 文件 | 说明 |
 |------|------|
-| `init.sql` | 初始建表：users、patients、consultations、evaluations 等 |
+| `init.sql` | 初始建表：users、patients、consultations、evaluations、evaluation_runs、evaluation_node_results 等（含全部字段） |
 | `migrate_v2.sql` | 新增诊断/治疗方案字段（`diagnosis`、`treatment_plan`）及五维度评估字段 |
 | `migrate_v3.sql` | `users.hashed_password` 字段扩容为 TEXT |
 | `migrate_v4.sql` | RAG 审计字段（幂等版本）：`citation_data`、`retrieval_status`、`evidence_stance`、`human_review_needed`、`review_reason`、`rag_trace_data`、`evaluation_status`；`knowledge_score` 和 `total_score` 允许 NULL |
+
+> **说明**：原 `migrate_v5.sql`（LangGraph 编排支持：`consultation_type`、`evaluation_runs`、`evaluation_node_results`、`evaluations` 审计字段）已合并至 `init.sql`，新环境直接执行 `init.sql` 即可，无需额外迁移。
 
 ## 配置说明
 

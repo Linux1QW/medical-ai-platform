@@ -1,0 +1,200 @@
+# ============================================
+# Docker Compose - 医疗AI平台一键部署
+# ============================================
+# 使用方式:
+#   生产环境: docker compose up -d
+#   开发环境: docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+# ============================================
+
+name: medical-ai-platform
+
+# ──────────────────────────────────────────
+# 服务定义
+# ──────────────────────────────────────────
+services:
+
+  # ── MySQL 数据库 ──────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: medical-ai-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-qjr3225365}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-medical_ai}
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_PASSWORD:-qjr3225365}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    networks:
+      - backend-net
+
+  # ── Redis（LangGraph Checkpoint + 缓存） ──
+  redis:
+    image: redis:7-alpine
+    container_name: medical-ai-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - backend-net
+
+  # ── Backend（FastAPI） ────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    container_name: medical-ai-backend
+    restart: unless-stopped
+    environment:
+      # 数据库
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-qjr3225365}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-medical_ai}
+      # JWT
+      SECRET_KEY: ${SECRET_KEY:-change-this-to-a-secure-random-string}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      # Qwen API
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?请在 .env 中设置 DASHSCOPE_API_KEY}
+      QWEN_API_KEY: ${DASHSCOPE_API_KEY:?请在 .env 中设置 DASHSCOPE_API_KEY}
+      QWEN_API_BASE_URL: ${QWEN_API_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen3.7-max}
+      # Redis
+      REDIS_CHECKPOINT_URL: redis://redis:6379/1
+      REDIS_CHECKPOINT_TTL: ${REDIS_CHECKPOINT_TTL:-86400}
+      # LangGraph
+      LANGGRAPH_ENABLED: ${LANGGRAPH_ENABLED:-true}
+      LANGGRAPH_SHADOW_MODE: ${LANGGRAPH_SHADOW_MODE:-false}
+      # Tool Use
+      ENABLE_TOOL_USE: ${ENABLE_TOOL_USE:-false}
+      TOOL_USE_MODEL: ${TOOL_USE_MODEL:-qwen-max}
+      TOOL_USE_MAX_ROUNDS: ${TOOL_USE_MAX_ROUNDS:-4}
+      TOOL_USE_MAX_CALLS: ${TOOL_USE_MAX_CALLS:-8}
+      TOOL_USE_TIMEOUT_SECONDS: ${TOOL_USE_TIMEOUT_SECONDS:-30}
+      TOOL_USE_MAX_RESULT_CHARS: ${TOOL_USE_MAX_RESULT_CHARS:-6000}
+      KNOWLEDGE_TOOL_MAX_RAG_CALLS: ${KNOWLEDGE_TOOL_MAX_RAG_CALLS:-3}
+      KNOWLEDGE_TOOL_MAX_MQE_CALLS: ${KNOWLEDGE_TOOL_MAX_MQE_CALLS:-2}
+      KNOWLEDGE_TOOL_MAX_HYDE_CALLS: ${KNOWLEDGE_TOOL_MAX_HYDE_CALLS:-1}
+      TOOL_USE_FALLBACK_TO_LEGACY: ${TOOL_USE_FALLBACK_TO_LEGACY:-true}
+      # RAG
+      ACTIVE_INDEX_VERSION: ${ACTIVE_INDEX_VERSION:-rag-v1}
+      RERANK_MODEL: ${RERANK_MODEL:-gte-rerank}
+      LLM_MAX_CONCURRENT: ${LLM_MAX_CONCURRENT:-10}
+      LLM_SEMAPHORE_TIMEOUT: ${LLM_SEMAPHORE_TIMEOUT:-60}
+      # CORS
+      CORS_ORIGINS: '["http://localhost", "http://localhost:80", "http://localhost:5173"]'
+      TZ: Asia/Shanghai
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # ChromaDB 向量数据库持久化
+      - chroma_data:/app/backend/data
+      # 医学教材 PDF（只读挂载）
+      - ./data:/app/backend/data/medical_pdfs:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    networks:
+      - backend-net
+
+  # ── Frontend（Nginx 托管 React SPA） ──────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: production
+    container_name: medical-ai-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    networks:
+      - frontend-net
+      - backend-net
+
+# ──────────────────────────────────────────
+# 网络
+# ──────────────────────────────────────────
+networks:
+  backend-net:
+    driver: bridge
+    name: medical-ai-backend-net
+  frontend-net:
+    driver: bridge
+    name: medical-ai-frontend-net
+
+# ──────────────────────────────────────────
+# 持久化卷
+# ──────────────────────────────────────────
+volumes:
+  mysql_data:
+    name: medical-ai-mysql-data
+  redis_data:
+    name: medical-ai-redis-data
+  chroma_data:
+    name: medical-ai-chroma-data

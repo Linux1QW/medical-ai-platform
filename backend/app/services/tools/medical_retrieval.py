@@ -6,8 +6,15 @@
 2. ExpandQuery — 多查询扩展（MQE）
 3. GenerateHydeQuery — HyDE 假设性文档生成
 4. RerankEvidence — 两阶段重排序
+
+加固机制：
+- 输入安全边界检查（长度限制、注入防护）
+- 结果结构验证
+- 细粒度错误分类与降级
+- 执行耗时监控
 """
 
+import time
 import logging
 from typing import List, Optional
 
@@ -24,6 +31,23 @@ from app.services.rag.retriever import (
 from app.services.rag.reranker import two_stage_rerank
 
 logger = logging.getLogger(__name__)
+
+
+# ── 安全边界常量 ──────────────────────────────────────────────────────────────
+
+MAX_QUERY_LENGTH = 2000        # 查询最大字符数
+MAX_CONTEXT_LENGTH = 5000      # 上下文最大字符数
+MAX_CASE_SUMMARY_LENGTH = 5000 # 病例摘要最大字符数
+MAX_CITATION_IDS = 100         # 最大候选 citation_id 数量
+
+
+def _sanitize_query(query: str, max_length: int = MAX_QUERY_LENGTH) -> str:
+    """输入清洗：截断过长查询、移除潜在注入字符"""
+    if not query or not query.strip():
+        return ""
+    # 截断
+    query = query.strip()[:max_length]
+    return query
 
 
 # ── Args Schemas ──────────────────────────────────────────────────────────────
@@ -71,23 +95,57 @@ class SearchMedicalKB(BaseTool):
 
     async def execute(self, args: SearchMedicalKBArgs, context: ToolContext) -> dict:
         """调用 hybrid_retrieve 检索医学证据，转为统一格式并缓存"""
-        try:
-            raw_results = await hybrid_retrieve(
-                query=args.query,
-                top_k=args.top_k,
-                enable_rerank=False,  # 重排交给独立工具
-            )
-        except Exception as e:
-            logger.warning(f"search_medical_kb 检索失败: {e}")
+        # ── 安全边界检查 ──
+        sanitized_query = _sanitize_query(args.query)
+        if not sanitized_query:
             return {
                 "evidence": [],
                 "retrieval_level": "error",
                 "total_found": 0,
                 "degraded": True,
+                "error": "查询为空或无效",
+            }
+
+        start_time = time.monotonic()
+        try:
+            raw_results = await hybrid_retrieve(
+                query=sanitized_query,
+                top_k=args.top_k,
+                enable_rerank=False,  # 重排交给独立工具
+            )
+        except Exception as e:
+            elapsed = (time.monotonic() - start_time) * 1000
+            logger.warning(f"search_medical_kb 检索失败 ({elapsed:.0f}ms): {e}")
+            return {
+                "evidence": [],
+                "retrieval_level": "error",
+                "total_found": 0,
+                "degraded": True,
+                "error": f"检索异常: {type(e).__name__}",
+                "elapsed_ms": round(elapsed, 2),
+            }
+
+        elapsed = (time.monotonic() - start_time) * 1000
+
+        # ── 结果验证 ──
+        if not isinstance(raw_results, list):
+            logger.warning(f"search_medical_kb 返回类型异常: {type(raw_results)}")
+            return {
+                "evidence": [],
+                "retrieval_level": "error",
+                "total_found": 0,
+                "degraded": True,
+                "error": "检索返回格式异常",
+                "elapsed_ms": round(elapsed, 2),
             }
 
         evidence_list = []
         for i, doc in enumerate(raw_results):
+            # 验证单条结果结构
+            if not isinstance(doc, dict):
+                logger.warning(f"search_medical_kb 第 {i} 条结果类型异常: {type(doc)}")
+                continue
+
             citation_id = _build_citation_id(doc, i)
             snippet = doc.get("text", "")[:300]
 
@@ -112,11 +170,18 @@ class SearchMedicalKB(BaseTool):
         # 判断检索级别
         retrieval_level = "level1" if len(raw_results) >= args.top_k else "level0"
 
+        logger.info(
+            f"search_medical_kb: query='{sanitized_query[:50]}...', "
+            f"found={len(evidence_list)}, level={retrieval_level}, "
+            f"elapsed={elapsed:.0f}ms"
+        )
+
         return {
             "evidence": evidence_list,
             "retrieval_level": retrieval_level,
             "total_found": len(raw_results),
             "degraded": False,
+            "elapsed_ms": round(elapsed, 2),
         }
 
 
@@ -131,10 +196,22 @@ class ExpandQuery(BaseTool):
 
     async def execute(self, args: ExpandQueryArgs, context: ToolContext) -> dict:
         """复用 retriever.expand_queries 进行多查询扩展"""
+        # ── 安全边界检查 ──
+        sanitized_query = _sanitize_query(args.original_query)
+        if not sanitized_query:
+            return {
+                "expanded_queries": [],
+                "original_query": args.original_query,
+                "degraded": True,
+                "error": "原始查询为空或无效",
+            }
+
         # 如果有临床背景，拼接到原始查询中以提升扩展质量
-        query_text = args.original_query
+        query_text = sanitized_query
         if args.clinical_context:
-            query_text = f"{args.clinical_context} {query_text}"
+            ctx = _sanitize_query(args.clinical_context, MAX_CONTEXT_LENGTH)
+            if ctx:
+                query_text = f"{ctx} {query_text}"
 
         try:
             expanded = await expand_queries(query_text, n=args.max_queries)
@@ -142,8 +219,15 @@ class ExpandQuery(BaseTool):
             logger.warning(f"expand_query 失败: {e}")
             expanded = []
 
+        result_queries = expanded[: args.max_queries]
+
+        # ── 结果验证：无扩展结果时降级为原始查询 ──
+        if not result_queries:
+            logger.warning("expand_query 未生成扩展查询，使用原始查询作为降级")
+            result_queries = [sanitized_query]
+
         return {
-            "expanded_queries": expanded[: args.max_queries],
+            "expanded_queries": result_queries,
             "original_query": args.original_query,
         }
 
@@ -161,18 +245,33 @@ class GenerateHydeQuery(BaseTool):
         self, args: GenerateHydeQueryArgs, context: ToolContext
     ) -> dict:
         """复用 retriever._generate_hypothetical_document 生成 HyDE 查询"""
+        # ── 安全边界检查 ──
+        sanitized_summary = _sanitize_query(args.case_summary, MAX_CASE_SUMMARY_LENGTH)
+        if not sanitized_summary:
+            return {
+                "hyde_query": "",
+                "query_type": args.query_type,
+                "degraded": True,
+                "error": "病例摘要为空或无效",
+            }
+
         # 根据 query_type 构建更有针对性的 HyDE 输入
-        hyde_input = args.case_summary
+        hyde_input = sanitized_summary
         if args.query_type == "diagnosis":
-            hyde_input = f"诊断相关：{args.case_summary}"
+            hyde_input = f"诊断相关：{sanitized_summary}"
         elif args.query_type == "treatment":
-            hyde_input = f"治疗方案相关：{args.case_summary}"
+            hyde_input = f"治疗方案相关：{sanitized_summary}"
 
         try:
             hyde_doc = await _generate_hypothetical_document(hyde_input)
         except Exception as e:
             logger.warning(f"generate_hyde_query 失败: {e}")
-            hyde_doc = args.case_summary  # 降级为原始摘要
+            hyde_doc = sanitized_summary  # 降级为原始摘要
+
+        # ── 结果验证 ──
+        if not hyde_doc or not hyde_doc.strip():
+            logger.warning("generate_hyde_query 返回空结果，降级为原始摘要")
+            hyde_doc = sanitized_summary
 
         return {
             "hyde_query": hyde_doc,
@@ -193,9 +292,23 @@ class RerankEvidence(BaseTool):
         self, args: RerankEvidenceArgs, context: ToolContext
     ) -> dict:
         """从 evidence_cache 查找候选证据，调用 two_stage_rerank 重排"""
+        # ── 安全边界检查 ──
+        sanitized_query = _sanitize_query(args.query)
+        if not sanitized_query:
+            return {
+                "reranked_evidence": [],
+                "total_candidates": 0,
+                "returned": 0,
+                "degraded": True,
+                "error": "查询为空或无效",
+            }
+
+        # 限制候选数量防止过大输入
+        candidate_ids = args.candidate_citation_ids[:MAX_CITATION_IDS]
+
         # 从缓存中收集候选 EvidenceItem
         candidates: list[EvidenceItem] = []
-        for cid in args.candidate_citation_ids:
+        for cid in candidate_ids:
             item = context.evidence_cache.get(cid)
             if item is not None and isinstance(item, EvidenceItem):
                 candidates.append(item)
@@ -209,7 +322,7 @@ class RerankEvidence(BaseTool):
 
         try:
             reranked, degraded = await two_stage_rerank(
-                query=args.query,
+                query=sanitized_query,
                 documents=candidates,
                 top_k=args.top_k,
             )
@@ -233,6 +346,7 @@ class RerankEvidence(BaseTool):
             "reranked_evidence": reranked_list,
             "total_candidates": len(candidates),
             "returned": len(reranked_list),
+            "degraded": degraded,
         }
 
 

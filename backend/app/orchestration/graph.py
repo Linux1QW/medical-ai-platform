@@ -1,15 +1,17 @@
-"""LangGraph 评估主图 — StateGraph 构建与编译"""
+"""LangGraph 评估主图 — StateGraph 构建与编译（Send fan-out/fan-in）"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, TypedDict
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import Send
 
 from app.orchestration.state import (
     EvaluationState,
+    EvaluationContext,
     AgentResultEnvelope,
     DimensionResult as StateDimensionResult,
     ProgressEvent,
@@ -20,6 +22,21 @@ from app.services.scoring.calculator import ScoreCalculator, DimensionResult as 
 from app.services.scoring.summary import SummaryGenerator
 
 logger = logging.getLogger(__name__)
+
+
+# ── Send 工作器状态 ────────────────────────────────────────────────────────
+
+
+class RunAgentState(TypedDict):
+    """Send fan-out 工作器状态
+
+    每个 Send 携带一个 agent 的执行上下文，
+    run_agent 节点读取此状态并返回 AgentResultEnvelope。
+    """
+    agent_name: str
+    context: EvaluationContext
+    run_id: str
+
 
 # ── 节点函数 ──────────────────────────────────────────────────────────────
 
@@ -100,7 +117,11 @@ async def build_route_plan_node(state: EvaluationState) -> dict[str, Any]:
 
 
 async def dispatch_and_run(state: EvaluationState) -> dict[str, Any]:
-    """分发并并行运行选中 Agent（简化方案：asyncio.gather）"""
+    """分发并并行运行选中 Agent（保留向后兼容）
+
+    注意：主流程已升级为 Send fan-out/fan-in 模式（route_to_agents → run_agent），
+    此函数保留用于直接调用或测试场景。
+    """
     from app.orchestration.adapters.registry import get_adapter
 
     plan = state["route_plan"]
@@ -142,8 +163,72 @@ async def dispatch_and_run(state: EvaluationState) -> dict[str, Any]:
     }
 
 
+async def run_agent(state: RunAgentState) -> dict[str, Any]:
+    """Send fan-out 工作器节点 — 执行单个 Agent
+
+    由 route_to_agents 条件边通过 Send 机制触发，
+    每个 Send 携带 RunAgentState（agent_name + context）。
+    返回的 agent_results 列表通过 reducer（operator.add）累积到主状态。
+    """
+    from app.orchestration.adapters.registry import get_adapter
+
+    agent_name = state["agent_name"]
+    context = state["context"]
+
+    try:
+        adapter = get_adapter(agent_name)
+        envelope = await adapter.run(context)
+    except Exception as e:
+        logger.error(f"Send agent '{agent_name}' failed: {e}", exc_info=True)
+        envelope = AgentResultEnvelope(
+            agent_name=agent_name,  # type: ignore[arg-type]
+            status="error",
+            analysis=f"执行异常: {e}",
+            human_review_needed=True,
+            review_reason=str(e)[:200],
+        )
+
+    return {
+        "agent_results": [envelope],
+        "progress_events": [
+            ProgressEvent(
+                progress=50,
+                message=f"Agent '{agent_name}' 执行完成",
+                node_name="run_agent",
+            )
+        ],
+    }
+
+
+def route_to_agents(state: EvaluationState) -> list[Send]:
+    """Fan-out 条件路由 — 为每个选中的 Agent 生成一个 Send
+
+    读取 route_plan.selected_agents，为每个 agent 创建独立的
+    RunAgentState 并通过 Send 机制分发到 run_agent 节点并行执行。
+    """
+    plan = state["route_plan"]
+    context = state["context"]
+    run_id = state.get("run_id", "unknown")
+
+    return [
+        Send(
+            "run_agent",
+            {
+                "agent_name": agent_name,
+                "context": context,
+                "run_id": f"{run_id}_{agent_name}",
+            },
+        )
+        for agent_name in plan.selected_agents
+    ]
+
+
 async def aggregate_results(state: EvaluationState) -> dict[str, Any]:
-    """聚合 Agent 结果为 dimension_results"""
+    """聚合 Agent 结果为 dimension_results（Fan-in 汇聚点）
+
+    在 Send fan-out/fan-in 模式下，所有 run_agent 并行执行后，
+    其 agent_results 通过 reducer 累积到此节点，由本函数统一转换。
+    """
     dimensions: dict[str, StateDimensionResult] = {}
 
     # 从 agent_results 转换
@@ -309,11 +394,11 @@ async def finalize_needs_review(state: EvaluationState) -> dict[str, Any]:
 def build_evaluation_graph() -> StateGraph:
     """构建评估状态图
 
-    状态图结构：
+    状态图结构（Send fan-out/fan-in）：
     START → load_context → classify_consultation → safety_check → safety_gate
-      → build_route_plan → dispatch_and_run → aggregate_results → deterministic_scoring
-      → review_gate → generate_suggestion → finalize_completed → END
-                  → finalize_needs_review → END
+      → build_route_plan → [Send fan-out] → run_agent × N → [fan-in] → aggregate_results
+      → deterministic_scoring → review_gate → generate_suggestion → finalize_completed → END
+                                       → finalize_needs_review → END
     """
     graph = StateGraph(EvaluationState)
 
@@ -323,6 +408,7 @@ def build_evaluation_graph() -> StateGraph:
     graph.add_node("safety_check", safety_check)
     graph.add_node("build_route_plan", build_route_plan_node)
     graph.add_node("dispatch_and_run", dispatch_and_run)
+    graph.add_node("run_agent", run_agent)
     graph.add_node("aggregate_results", aggregate_results)
     graph.add_node("deterministic_scoring", deterministic_scoring)
     graph.add_node("generate_suggestion", generate_suggestion)
@@ -344,8 +430,11 @@ def build_evaluation_graph() -> StateGraph:
         },
     )
 
-    graph.add_edge("build_route_plan", "dispatch_and_run")
-    graph.add_edge("dispatch_and_run", "aggregate_results")
+    # Fan-out: build_route_plan → run_agent（每个 agent 一个 Send）
+    graph.add_conditional_edges("build_route_plan", route_to_agents)
+    # Fan-in: run_agent → aggregate_results（所有 agent 汇聚）
+    graph.add_edge("run_agent", "aggregate_results")
+
     graph.add_edge("aggregate_results", "deterministic_scoring")
 
     # 评分后审核门控
@@ -371,15 +460,35 @@ _compiled_graph = None
 
 
 async def get_graph():
-    """获取编译后的图（应用生命周期内只编译一次）"""
+    """获取编译后的图（应用生命周期内只编译一次）
+    
+    Returns:
+        编译后的图，如果 LANGGRAPH_ENABLED=false 则返回 None
+    """
     global _compiled_graph
+    
+    from app.core.config import settings
+    
+    # LANGGRAPH_ENABLED=false 时不编译图
+    if not settings.LANGGRAPH_ENABLED:
+        logger.debug("LangGraph disabled, get_graph returning None")
+        return None
+    
     if _compiled_graph is None:
         from app.orchestration.checkpointer import get_checkpointer
 
         checkpointer = get_checkpointer()
         graph = build_evaluation_graph()
-        _compiled_graph = graph.compile(checkpointer=checkpointer)
-        logger.info("LangGraph 评估图已编译")
+        
+        if checkpointer is not None:
+            _compiled_graph = graph.compile(checkpointer=checkpointer)
+            logger.info("LangGraph 评估图已编译（带 checkpointer）")
+        else:
+            # LANGGRAPH_ENABLED=true 但 checkpointer 为 None 不应该发生
+            # 因为 init_checkpointer 在 LANGGRAPH_ENABLED=true 时会抛异常
+            _compiled_graph = graph.compile()
+            logger.warning("LangGraph 评估图已编译（无 checkpointer）")
+    
     return _compiled_graph
 
 

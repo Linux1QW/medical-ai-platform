@@ -12,9 +12,9 @@ class ToolRegistry:
         return cls._instance
 
     def register(self, tool: BaseTool) -> None:
-        """注册工具，重复注册同名工具抛异常"""
+        """注册工具，重复注册同名工具时跳过（幂等操作）"""
         if tool.name in self._tools:
-            raise ValueError(f"Tool '{tool.name}' already registered")
+            return
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> BaseTool | None:

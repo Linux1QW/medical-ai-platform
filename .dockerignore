@@ -1,0 +1,74 @@
+# ============================================
+# .dockerignore - 排除不必要文件
+# ============================================
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/venv
+backend/.venv
+*.egg-info
+.eggs
+dist
+build
+
+# Node
+frontend/node_modules
+frontend/.npm
+frontend/dist
+
+# 环境变量（敏感信息）
+backend/.env
+.env
+.env.local
+.env.*.local
+
+# Docker 自身配置（避免递归）
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# 测试和缓存
+.pytest_cache
+.coverage
+htmlcov
+.mypy_cache
+.ruff_cache
+
+# 医学教材 PDF（太大，通过 volume 挂载）
+data/*.pdf
+
+# 评测数据集
+dataset/
+
+# 文档和审查文件
+*.md
+review_*.txt
+.qoder/
+
+# SQLite 数据库（运行时生成）
+*.sqlite3
+*.db
+
+# 日志
+*.log
+logs/
+
+# OS 文件
+.DS_Store
+Thumbs.db
+desktop.ini

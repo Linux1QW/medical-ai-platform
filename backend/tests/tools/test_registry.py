@@ -54,15 +54,16 @@ def test_register_tool_success(reset_registry):
     assert "dummy_tool" in registry.list_tools()
 
 
-def test_register_duplicate_error(reset_registry):
-    """重复注册同名工具抛 ValueError"""
+def test_register_duplicate_idempotent(reset_registry):
+    """重复注册同名工具时幂等跳过，不抛异常"""
     registry = reset_registry
     tool1 = DummyTool()
     registry.register(tool1)
 
     tool2 = DummyTool()
-    with pytest.raises(ValueError, match="already registered"):
-        registry.register(tool2)
+    registry.register(tool2)  # 不应抛异常
+    assert len(registry.list_tools()) == 1  # 仍只有一个工具
+    assert registry.get("dummy_tool") is tool1  # 保留第一个实例
 
 
 def test_get_registered_tool(reset_registry):

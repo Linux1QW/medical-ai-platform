@@ -12,6 +12,7 @@ from app.orchestration.state import (
     AgentResultEnvelope,
     DimensionResult as StateDimensionResult,
 )
+from app.orchestration.graph import RunAgentState
 
 
 # ── 图构建测试 ────────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ class TestBuildEvaluationGraph:
         assert "safety_check" in nodes
         assert "build_route_plan" in nodes
         assert "dispatch_and_run" in nodes
+        assert "run_agent" in nodes
         assert "aggregate_results" in nodes
         assert "deterministic_scoring" in nodes
         assert "generate_suggestion" in nodes
@@ -296,7 +298,7 @@ class TestAggregateResults:
         assert dims["humanistic"].score == 75.0
 
     @pytest.mark.asyncio
-    async def test_aggregate_handles_skipped_agents(self):
+    async def test_aggregatehandles_skipped_agents(self):
         """被跳过的 Agent 应该标记为 not_submitted"""
         from app.orchestration.graph import aggregate_results
 
@@ -370,7 +372,7 @@ class TestAggregateResults:
 
 
 class TestDispatchAndRun:
-    """测试 dispatch_and_run 并行执行 Agent"""
+    """测试 dispatch_and_run 并行执行 Agent（向后兼容）"""
 
     @pytest.mark.asyncio
     async def test_dispatch_runs_selected_agents(self):
@@ -498,3 +500,257 @@ class TestDeterministicScoring:
         assert result["total_score"] is not None
         assert isinstance(result["total_score"], int)
         assert 0 <= result["total_score"] <= 100
+
+
+# ── Run Agent (Send 工作器) 测试 ─────────────────────────────────────────
+
+
+class TestRunAgent:
+    """测试 Send fan-out 工作器节点 run_agent"""
+
+    @pytest.mark.asyncio
+    async def test_run_agent_success(self):
+        """run_agent 应该正确执行单个 agent 并返回结果"""
+        from app.orchestration.graph import run_agent
+
+        mock_envelope = AgentResultEnvelope(
+            agent_name="inquiry",  # type: ignore[arg-type]
+            status="success",
+            score=85.0,
+            analysis="问诊表现优秀",
+        )
+
+        with patch("app.orchestration.adapters.registry.get_adapter") as mock_get_adapter:
+            mock_adapter = MagicMock()
+            mock_adapter.run = AsyncMock(return_value=mock_envelope)
+            mock_get_adapter.return_value = mock_adapter
+
+            state: RunAgentState = {
+                "agent_name": "inquiry",
+                "context": EvaluationContext(conversation_text="患者主诉头痛"),
+                "run_id": "test-run_inquiry",
+            }
+
+            result = await run_agent(state)
+
+            assert len(result["agent_results"]) == 1
+            envelope = result["agent_results"][0]
+            assert envelope.agent_name == "inquiry"
+            assert envelope.status == "success"
+            assert envelope.score == 85.0
+            mock_get_adapter.assert_called_once_with("inquiry")
+
+    @pytest.mark.asyncio
+    async def test_run_agent_handles_exception(self):
+        """run_agent 应该捕获异常并返回 error envelope"""
+        from app.orchestration.graph import run_agent
+
+        with patch("app.orchestration.adapters.registry.get_adapter") as mock_get_adapter:
+            mock_adapter = MagicMock()
+            mock_adapter.run = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+            mock_get_adapter.return_value = mock_adapter
+
+            state: RunAgentState = {
+                "agent_name": "diagnosis",
+                "context": EvaluationContext(conversation_text="对话"),
+                "run_id": "test-run_diagnosis",
+            }
+
+            result = await run_agent(state)
+
+            assert len(result["agent_results"]) == 1
+            envelope = result["agent_results"][0]
+            assert envelope.status == "error"
+            assert envelope.human_review_needed is True
+            assert "LLM timeout" in envelope.review_reason
+
+    @pytest.mark.asyncio
+    async def test_run_agent_adapter_not_found(self):
+        """run_agent 应该在 adapter 未注册时返回 error"""
+        from app.orchestration.graph import run_agent
+
+        with patch("app.orchestration.adapters.registry.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = KeyError("未注册的适配器: inquiry")
+
+            state: RunAgentState = {
+                "agent_name": "inquiry",  # 使用合法的 agent_name
+                "context": EvaluationContext(conversation_text="对话"),
+                "run_id": "test-run_unknown",
+            }
+
+            result = await run_agent(state)
+
+            assert len(result["agent_results"]) == 1
+            envelope = result["agent_results"][0]
+            assert envelope.status == "error"
+            assert envelope.human_review_needed is True
+
+    @pytest.mark.asyncio
+    async def test_run_agent_emits_progress_event(self):
+        """run_agent 应该发出进度事件"""
+        from app.orchestration.graph import run_agent
+
+        mock_envelope = AgentResultEnvelope(
+            agent_name="humanistic",
+            status="success",
+            score=90.0,
+            analysis="人文关怀优秀",
+        )
+
+        with patch("app.orchestration.adapters.registry.get_adapter") as mock_get_adapter:
+            mock_adapter = MagicMock()
+            mock_adapter.run = AsyncMock(return_value=mock_envelope)
+            mock_get_adapter.return_value = mock_adapter
+
+            state: RunAgentState = {
+                "agent_name": "humanistic",
+                "context": EvaluationContext(conversation_text="对话"),
+                "run_id": "test-run_humanistic",
+            }
+
+            result = await run_agent(state)
+
+            assert len(result["progress_events"]) == 1
+            event = result["progress_events"][0]
+            assert event.node_name == "run_agent"
+            assert "humanistic" in event.message
+
+
+# ── Route to Agents (Fan-out 路由) 测试 ───────────────────────────────────
+
+
+class TestRouteToAgents:
+    """测试 Send fan-out 条件路由 route_to_agents"""
+
+    def test_route_creates_send_for_each_agent(self):
+        """route_to_agents 应该为每个选中的 agent 创建一个 Send"""
+        from app.orchestration.graph import route_to_agents
+        from langgraph.types import Send
+
+        state: EvaluationState = {
+            "run_id": "test-20",
+            "context": EvaluationContext(conversation_text="患者主诉咳嗽"),
+            "consultation_type": "initial",
+            "submission_flags": SubmissionFlags(),
+            "route_plan": RoutePlan(
+                consultation_type="initial",
+                selected_agents=["inquiry", "diagnosis", "humanistic"],
+                skipped_agents=["treatment"],
+                skip_reasons={"treatment": "未提交治疗方案"},
+            ),
+        }
+
+        sends = route_to_agents(state)
+
+        assert len(sends) == 3
+        assert all(isinstance(s, Send) for s in sends)
+        # 验证每个 Send 的目标节点
+        assert all(s.node == "run_agent" for s in sends)
+        # 验证 agent_name 分发正确
+        agent_names = {s.arg["agent_name"] for s in sends}
+        assert agent_names == {"inquiry", "diagnosis", "humanistic"}
+
+    def test_route_passes_context_to_each_send(self):
+        """每个 Send 应该携带完整的 context"""
+        from app.orchestration.graph import route_to_agents
+
+        ctx = EvaluationContext(
+            conversation_text="患者发热3天",
+            patient_age=45,
+            patient_gender="男",
+            chief_complaint="发热",
+        )
+        state: EvaluationState = {
+            "run_id": "test-21",
+            "context": ctx,
+            "consultation_type": "initial",
+            "submission_flags": SubmissionFlags(),
+            "route_plan": RoutePlan(
+                consultation_type="initial",
+                selected_agents=["inquiry", "knowledge"],
+                skipped_agents=[],
+                skip_reasons={},
+            ),
+        }
+
+        sends = route_to_agents(state)
+
+        for s in sends:
+            assert s.arg["context"] is ctx
+            assert s.arg["context"].chief_complaint == "发热"
+
+    def test_route_generates_unique_run_ids(self):
+        """每个 Send 应该有唯一的 run_id（基于主 run_id + agent_name）"""
+        from app.orchestration.graph import route_to_agents
+
+        state: EvaluationState = {
+            "run_id": "run-abc",
+            "context": EvaluationContext(conversation_text="对话"),
+            "consultation_type": "initial",
+            "submission_flags": SubmissionFlags(),
+            "route_plan": RoutePlan(
+                consultation_type="initial",
+                selected_agents=["inquiry", "treatment"],
+                skipped_agents=[],
+                skip_reasons={},
+            ),
+        }
+
+        sends = route_to_agents(state)
+
+        run_ids = {s.arg["run_id"] for s in sends}
+        assert len(run_ids) == 2
+        assert "run-abc_inquiry" in run_ids
+        assert "run-abc_treatment" in run_ids
+
+    def test_route_empty_agents_returns_empty_list(self):
+        """没有选中 agent 时应该返回空列表"""
+        from app.orchestration.graph import route_to_agents
+
+        state: EvaluationState = {
+            "run_id": "test-22",
+            "context": EvaluationContext(conversation_text="对话"),
+            "consultation_type": "communication",
+            "submission_flags": SubmissionFlags(),
+            "route_plan": RoutePlan(
+                consultation_type="communication",
+                selected_agents=[],
+                skipped_agents=["inquiry", "humanistic"],
+                skip_reasons={"inquiry": "跳过", "humanistic": "跳过"},
+            ),
+        }
+
+        sends = route_to_agents(state)
+        assert sends == []
+
+
+# ── Send Fan-out/Fan-in 集成测试 ─────────────────────────────────────────
+
+
+class TestSendFanOutFanIn:
+    """测试 Send fan-out/fan-in 整体流程"""
+
+    def test_graph_has_send_structure(self):
+        """图应该包含 Send fan-out/fan-in 的节点结构"""
+        from app.orchestration.graph import build_evaluation_graph
+
+        graph = build_evaluation_graph()
+        nodes = list(graph.nodes.keys())
+
+        # 关键节点都存在
+        assert "build_route_plan" in nodes
+        assert "run_agent" in nodes
+        assert "aggregate_results" in nodes
+        # dispatch_and_run 保留用于向后兼容
+        assert "dispatch_and_run" in nodes
+
+    @pytest.mark.asyncio
+    async def test_graph_compiles_with_send(self):
+        """包含 Send 机制的图应该能成功编译"""
+        from app.orchestration.graph import build_evaluation_graph
+        from langgraph.checkpoint.memory import MemorySaver
+
+        graph = build_evaluation_graph()
+        checkpointer = MemorySaver()
+        compiled = graph.compile(checkpointer=checkpointer)
+        assert compiled is not None

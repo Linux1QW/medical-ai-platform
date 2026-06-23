@@ -1017,8 +1017,12 @@ async def run_knowledge_check_with_tools(
             if evidence_item and isinstance(evidence_item, EvidenceItem):
                 citations.append({
                     "citation_id": cid,
-                    "title": evidence_item.source,
-                    "snippet": evidence_item.text[:500],
+                    "claim": evidence_item.text[:200],
+                    "source": evidence_item.source,
+                    "page": evidence_item.page,
+                    "heading_path": evidence_item.heading_path,
+                    "text_snippet": evidence_item.text[:500],
+                    "rerank_score": evidence_item.rerank_score,
                 })
 
         # 构建 rag_trace（从 search_medical_kb 工具结果中提取）

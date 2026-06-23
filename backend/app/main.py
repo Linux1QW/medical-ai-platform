@@ -15,7 +15,7 @@ from app.api.v1 import router as api_v1_router
 from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
-from app.orchestration.checkpointer import init_checkpointer, close_checkpointer
+from app.orchestration.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer
 from app.services.qwen_client import get_llm_metrics
 import app.models  # noqa: F401
 
@@ -31,14 +31,18 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured.")
-    try:
-        await init_checkpointer(
-            redis_url=settings.REDIS_CHECKPOINT_URL,
-            ttl=settings.REDIS_CHECKPOINT_TTL,
-        )
-        yield
-    finally:
-        await close_checkpointer()
+    
+    # 初始化 checkpointer（LANGGRAPH_ENABLED=false 时返回 None）
+    # LANGGRAPH_ENABLED=true 但 Redis 失败时会抛出 RuntimeError，阻止服务启动
+    await init_checkpointer(
+        redis_url=settings.REDIS_CHECKPOINT_URL,
+        ttl=settings.REDIS_CHECKPOINT_TTL,
+    )
+    
+    yield
+    
+    # 关闭 checkpointer（None 时无操作）
+    await close_checkpointer()
 
 
 app = FastAPI(
@@ -136,8 +140,21 @@ app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 
 @app.get("/health")
 async def health_check():
+    checkpointer = get_checkpointer()
+    
+    # 根据 LANGGRAPH_ENABLED 和 checkpointer 状态返回健康信息
+    if settings.LANGGRAPH_ENABLED:
+        if checkpointer is not None:
+            langgraph_status = "available"
+        else:
+            langgraph_status = "not_available"
+    else:
+        langgraph_status = "disabled"
+    
     return {
         "status": "ok",
         "version": settings.VERSION,
         "llm": get_llm_metrics(),
+        "langgraph_enabled": settings.LANGGRAPH_ENABLED,
+        "checkpointer": langgraph_status,
     }

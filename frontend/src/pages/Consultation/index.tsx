@@ -246,7 +246,7 @@ const ConsultationPage: React.FC = () => {
         width={700}
       >
         <Form form={form} layout="vertical" style={{ maxHeight: '60vh', overflow: 'auto', paddingRight: 8 }}>
-          <Divider orientation="start" style={{ marginTop: 0 }}>诊断结果</Divider>
+          <Divider style={{ marginTop: 0 }}>诊断结果</Divider>
           <Form.Item name="main_diagnosis" label="主诊断" rules={[{ required: true, message: '请输入主诊断' }]}>
             <Input placeholder="例如：慢性胃炎（非萎缩性）" />
           </Form.Item>
@@ -256,7 +256,7 @@ const ConsultationPage: React.FC = () => {
           <Form.Item name="diagnosis_basis" label="诊断依据">
             <TextArea rows={2} placeholder="例如：根据患者反酸烧心症状、胃镜结果提示..." />
           </Form.Item>
-          <Divider orientation="start">治疗方案</Divider>
+          <Divider>治疗方案</Divider>
           <Form.Item name="drug_treatment" label="药物治疗">
             <TextArea rows={2} placeholder="例如：奥美拉唑 20mg bid，铝碳酸镁 1g tid" />
           </Form.Item>

@@ -26,6 +26,7 @@ from .tool_health_checker import (
 from .scoring import register_scoring_tools
 from .medical_retrieval import register_medical_retrieval_tools
 from .citation import register_citation_tools
+from .consistency import register_consistency_tools
 
 
 def register_all_tools(registry: ToolRegistry) -> None:
@@ -35,6 +36,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     """
     register_medical_retrieval_tools(registry)
     register_citation_tools(registry)
+    register_consistency_tools(registry)
 
 
 __all__ = [
@@ -65,4 +67,5 @@ __all__ = [
     # 注册函数
     "register_all_tools",
     "register_scoring_tools",
+    "register_consistency_tools",
 ]

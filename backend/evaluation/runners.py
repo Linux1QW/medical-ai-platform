@@ -350,7 +350,7 @@ def filter_cases_by_split(cases: List[RagGoldCase], split: str) -> List[RagGoldC
     Returns:
         Filtered list of cases
     """
-    return [case for case in cases if case.split.value == split]
+    return [case for case in cases if (case.split.value if hasattr(case.split, 'value') else case.split) == split]
 
 
 def create_mock_cases(count: int = 5) -> List[RagGoldCase]:

@@ -177,6 +177,20 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
             [r.agent_name for r in final_state.get("agent_results", [])]
             if final_state.get("agent_results") else None
         )
+
+        # 保存评估计划（Plan-Execute 模式）
+        eval_plan = final_state.get("evaluation_plan")
+        if eval_plan is not None:
+            eval_run.evaluation_plan = eval_plan.model_dump() if hasattr(eval_plan, "model_dump") else eval_plan
+
+        # 保存执行结果
+        exec_results = final_state.get("execution_results")
+        if exec_results:
+            eval_run.execution_results = [
+                r.model_dump() if hasattr(r, "model_dump") else r
+                for r in exec_results
+            ]
+
         eval_run.finished_at = datetime.utcnow()
 
         # 8. 保存 Evaluation

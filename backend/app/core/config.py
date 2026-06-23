@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     KNOWLEDGE_TOOL_MAX_HYDE_CALLS: int = 1
     TOOL_USE_FALLBACK_TO_LEGACY: bool = True
 
+    # ReAct 模式配置
+    ENABLE_REACT_KNOWLEDGE: bool = False          # Knowledge Agent 启用 ReAct 模式
+    ENABLE_REACT_REFLECTION: bool = False         # Reflection Agent 启用 ReAct 模式
+    REACT_MAX_STEPS: int = 6                      # ReAct 最大推理步数（Thought→Action→Observation）
+    REFLECTION_CONSISTENCY_THRESHOLD: float = 0.3 # 评分一致性偏差阈值（超过则标记矛盾）
+    REFLECTION_EVIDENCE_MIN_SCORE: float = 60.0   # 反思时认为证据充足的最低分数
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -199,9 +199,10 @@ const EvaluationPage: React.FC = () => {
   ];
 
   const scoreLevel = (score: number) => {
-    if (score >= 80) return { text: '优秀', color: '#52c41a' };
-    if (score >= 60) return { text: '良好', color: '#faad14' };
-    return { text: '待提升', color: '#ff4d4f' };
+    const color = scoreColor(score);
+    if (score >= 80) return { text: '优秀', color };
+    if (score >= 60) return { text: '良好', color };
+    return { text: '待提升', color };
   };
 
   const parseSuggestions = (text: string) => {

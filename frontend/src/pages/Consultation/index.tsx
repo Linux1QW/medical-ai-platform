@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, Input, Button, List, Avatar, Typography, Tag, Space, Spin, message, Modal, Form, Popconfirm, Divider, Progress } from 'antd';
-import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined } from '@ant-design/icons';
+import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getConsultationDetail, sendMessage, submitDiagnosis, endConsultation, extendRounds } from '../../api/consultation';
+import { getConsultationDetail, sendMessageStream, submitDiagnosis, endConsultation, extendRounds } from '../../api/consultation';
+import type { SSEProgressEvent } from '../../api/consultation';
 import { getPatient } from '../../api/patient';
 import type { Message, VirtualPatient } from '../../types';
 
@@ -27,8 +28,10 @@ const ConsultationPage: React.FC = () => {
   const [diagnosisVisible, setDiagnosisVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [maxRounds, setMaxRounds] = useState(20);
+  const [progressInfo, setProgressInfo] = useState<SSEProgressEvent | null>(null);
   const [form] = Form.useForm();
   const listRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -46,19 +49,54 @@ const ConsultationPage: React.FC = () => {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, progressInfo]);
+
+  // 组件卸载时中止未完成的 SSE 连接
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim() || !id) return;
     setSending(true);
+    setProgressInfo({ step: 'starting', message: '正在发送消息...', progress: 0 });
+
+    // 创建 AbortController 用于取消 SSE 连接
+    abortControllerRef.current = new AbortController();
+
     try {
-      const newMsgs = await sendMessage(Number(id), input.trim());
-      setMessages((prev) => [...prev, ...newMsgs]);
-      setInput('');
-    } catch {
-      message.error('发送消息失败');
+      await sendMessageStream(
+        Number(id),
+        input.trim(),
+        {
+          onProgress: (event) => {
+            setProgressInfo(event);
+          },
+          onComplete: (event) => {
+            setMessages((prev) => [...prev, event.doctor_msg, event.patient_msg]);
+            setInput('');
+            setProgressInfo(null);
+          },
+          onError: (event) => {
+            message.error(event.message || '发送消息失败');
+            setProgressInfo(null);
+          },
+        },
+        abortControllerRef.current.signal,
+      );
+    } catch (err: unknown) {
+      // 忽略用户主动取消的错误
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      const errorMsg = err instanceof Error ? err.message : '发送消息失败';
+      message.error(errorMsg);
+      setProgressInfo(null);
     } finally {
       setSending(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -208,7 +246,22 @@ const ConsultationPage: React.FC = () => {
               </List.Item>
             )}
           />
-          {sending && <div style={{ textAlign: 'center', padding: 16 }}><Spin tip="患者思考中..." /></div>}
+          {sending && (
+            <div style={{ padding: '8px 24px', background: '#fafafa', borderRadius: 8, margin: '8px 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                <LoadingOutlined style={{ fontSize: 16, color: '#1677ff' }} />
+                <span style={{ color: '#666', fontSize: 14 }}>
+                  {progressInfo?.message || '患者思考中...'}
+                </span>
+              </div>
+              <Progress
+                percent={progressInfo?.progress || 0}
+                size="small"
+                status="active"
+                strokeColor={{ from: '#108ee9', to: '#87d068' }}
+              />
+            </div>
+          )}
         </div>
 
         {isRoundLimitReached && !isEnded && (

@@ -178,8 +178,88 @@ class RagEvalReport(BaseModel):
     thresholds: Dict[str, Any] = Field(..., description="阈值检查")
 
 
+# ---------------------------------------------------------------------------
+# Legacy format conversion
+# ---------------------------------------------------------------------------
+
+_DIFFICULTY_ZH_TO_EN = {
+    "简单": "easy",
+    "中等": "medium",
+    "困难": "hard",
+}
+
+_STANCE_ZH_TO_EN = {
+    "提供信息": "supports",
+    "建议就医": "mixed",
+    "拒绝回答": "contradicts",
+}
+
+
+def _convert_legacy_format(data: Dict[str, Any]) -> Dict[str, Any]:
+    """将旧版 gold case 格式转换为 RagGoldCase 兼容格式。
+
+    旧版格式字段: id, query, expected_answer, reference_docs,
+    department, difficulty(中文), expected_stance(中文),
+    tool_use_expectation, tags, created_at
+    """
+    # 如果已经包含 case_id 字段，说明是新格式
+    if "case_id" in data:
+        return data
+
+    difficulty_raw = data.get("difficulty", "medium")
+    difficulty = _DIFFICULTY_ZH_TO_EN.get(difficulty_raw, difficulty_raw)
+    if difficulty not in ("easy", "medium", "hard"):
+        difficulty = "medium"
+
+    stance_raw = data.get("expected_stance", "supports")
+    stance = _STANCE_ZH_TO_EN.get(stance_raw, stance_raw)
+    if stance not in ("supports", "contradicts", "mixed", "undetermined"):
+        stance = "supports"
+
+    should_refuse = (
+        stance == "contradicts"
+        or data.get("tool_use_expectation") == "refusal"
+    )
+
+    query_text = data.get("query", "")
+    reference_docs = data.get("reference_docs", [])
+    tags = data.get("tags", [])
+
+    return {
+        "case_id": data.get("id", "unknown"),
+        "split": data.get("split", "dev"),
+        "department": data.get("department", "未知"),
+        "domain_expertise": data.get("domain_expertise", data.get("department", "未知")),
+        "difficulty": difficulty,
+        "chief_complaint": query_text[:50] if query_text else None,
+        "patient_info": query_text,
+        "conversation_text": f"患者: {query_text}" if query_text else "",
+        "doctor_diagnosis": data.get("expected_answer", ""),
+        "treatment_plan": None,
+        "gold_queries": [query_text] if query_text else [],
+        "gold_doc_ids": [],
+        "gold_citation_ids": [],
+        "gold_relevant_sources": reference_docs,
+        "gold_citation_keywords": tags,
+        "gold_relevance_grades": {},
+        "expected_queries": [query_text] if query_text else [],
+        "expected_stance": stance,
+        "should_refuse": should_refuse,
+        "expected_score_range": data.get("expected_score_range"),
+        "expected_review_reason": None,
+        "expected_tool_calls": [],
+        "expected_tool_params": {},
+        "expected_final_answer_keywords": tags,
+        "notes": f"converted from legacy format; created_at={data.get('created_at', '')}",
+    }
+
+
 def load_gold_cases(cases_path: Path) -> List[RagGoldCase]:
-    """Load gold cases from JSONL file."""
+    """Load gold cases from JSONL file.
+
+    支持新版格式（字段名与 RagGoldCase 一致）和旧版格式
+    （id / query / expected_answer 等），自动检测并转换。
+    """
     if not cases_path.exists():
         raise FileNotFoundError(f"Gold cases file not found: {cases_path}")
     
@@ -192,6 +272,7 @@ def load_gold_cases(cases_path: Path) -> List[RagGoldCase]:
             
             try:
                 data = json.loads(line)
+                data = _convert_legacy_format(data)
                 case = RagGoldCase(**data)
                 cases.append(case)
             except json.JSONDecodeError as e:

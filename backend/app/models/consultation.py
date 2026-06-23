@@ -22,6 +22,10 @@ class Consultation(Base):
     summary = Column(Text, default="")
     diagnosis = Column(Text, default="", comment="医生提交的诊断结果")
     treatment_plan = Column(Text, default="", comment="医生提交的治疗方案")
+    consultation_type = Column(
+        String(20), nullable=False, default="initial",
+        comment="问诊类型: initial/follow_up/communication"
+    )
     max_rounds = Column(Integer, default=20, comment="最大允许问诊轮次")
     created_at = Column(DateTime, default=datetime.utcnow)
 

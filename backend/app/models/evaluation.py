@@ -51,4 +51,11 @@ class Evaluation(Base):
     rag_trace_data = Column(JSON, nullable=True, comment="RAG 追踪数据")
     evaluation_status = Column(String(20), nullable=False, default='completed', comment="评估状态")
 
+    # LangGraph 审计字段
+    run_id = Column(String(36), nullable=True, comment="关联的评估运行ID")
+    safety_data = Column(JSON, nullable=True, comment="Safety检查结果")
+    applicable_dimensions = Column(JSON, nullable=True, comment="适用维度列表")
+    scoring_policy_version = Column(String(50), nullable=True, comment="评分策略版本")
+    graph_version = Column(String(50), nullable=True, comment="编排图版本")
+
     created_at = Column(DateTime, default=datetime.utcnow)

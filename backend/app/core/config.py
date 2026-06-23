@@ -55,6 +55,29 @@ class Settings(BaseSettings):
     # RAG 索引版本
     ACTIVE_INDEX_VERSION: str = "rag-v1"    # 当前活跃版本
 
+    # LangGraph 编排
+    LANGGRAPH_ENABLED: bool = True          # Feature Flag，False 时回退旧编排
+    LANGGRAPH_SHADOW_MODE: bool = False     # 影子模式（同时运行新旧编排，只记录不返回新结果）
+    LANGGRAPH_GRAPH_VERSION: str = "evaluation-graph-v1"
+    LANGGRAPH_CHECKPOINT_DB: str = "backend/data/langgraph_checkpoints.sqlite3"  # 已弃用，保留作为回退
+    LANGGRAPH_CHECKPOINT_TTL_HOURS: int = 24
+
+    # Redis Checkpoint
+    REDIS_CHECKPOINT_URL: str = "redis://localhost:6379/1"  # 使用 db=1 避免与应用缓存冲突
+    REDIS_CHECKPOINT_TTL: int = 86400  # 24小时过期（秒）
+
+    # Function Call / Tool Use
+    ENABLE_TOOL_USE: bool = False
+    TOOL_USE_MODEL: str = "qwen-max"
+    TOOL_USE_MAX_ROUNDS: int = 4
+    TOOL_USE_MAX_CALLS: int = 8
+    TOOL_USE_TIMEOUT_SECONDS: int = 30
+    TOOL_USE_MAX_RESULT_CHARS: int = 6000
+    KNOWLEDGE_TOOL_MAX_RAG_CALLS: int = 3
+    KNOWLEDGE_TOOL_MAX_MQE_CALLS: int = 2
+    KNOWLEDGE_TOOL_MAX_HYDE_CALLS: int = 1
+    TOOL_USE_FALLBACK_TO_LEGACY: bool = True
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

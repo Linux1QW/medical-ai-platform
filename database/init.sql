@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS consultations (
     summary TEXT DEFAULT NULL,
     diagnosis TEXT DEFAULT NULL COMMENT '医生提交的诊断结果',
     treatment_plan TEXT DEFAULT NULL COMMENT '医生提交的治疗方案',
+    consultation_type VARCHAR(20) NOT NULL DEFAULT 'initial' COMMENT '问诊类型: initial/follow_up/communication',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_doctor_id (doctor_id),
     FOREIGN KEY (doctor_id) REFERENCES users(id),
@@ -88,7 +89,54 @@ CREATE TABLE IF NOT EXISTS evaluations (
     review_reason TEXT NULL COMMENT '复核原因',
     rag_trace_data JSON NULL COMMENT 'RAG追踪数据',
     evaluation_status VARCHAR(20) NOT NULL DEFAULT 'completed' COMMENT '评估状态',
+    run_id CHAR(36) NULL COMMENT '关联的评估运行ID',
+    safety_data JSON NULL COMMENT 'Safety检查结果',
+    applicable_dimensions JSON NULL COMMENT '适用维度列表',
+    scoring_policy_version VARCHAR(50) NULL COMMENT '评分策略版本',
+    graph_version VARCHAR(50) NULL COMMENT '编排图版本',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_consultation_id (consultation_id),
     FOREIGN KEY (consultation_id) REFERENCES consultations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 评估运行记录表
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+    id CHAR(36) PRIMARY KEY COMMENT 'run_id (UUID)',
+    consultation_id INT NOT NULL,
+    evaluation_id INT NULL,
+    graph_version VARCHAR(50) NOT NULL DEFAULT 'evaluation-graph-v1',
+    scoring_policy_version VARCHAR(50) NOT NULL DEFAULT 'v1',
+    checkpoint_thread_id VARCHAR(100) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'running'
+        COMMENT 'running/completed/failed/needs_review',
+    selected_agents JSON NULL
+        COMMENT '本次运行选中的Agent列表',
+    attempt INT NOT NULL DEFAULT 1,
+    error_type VARCHAR(100) NULL,
+    error_message TEXT NULL,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_consultation_id (consultation_id),
+    INDEX idx_status (status),
+    FOREIGN KEY (consultation_id) REFERENCES consultations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 评估节点执行结果表
+CREATE TABLE IF NOT EXISTS evaluation_node_results (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    run_id CHAR(36) NOT NULL,
+    node_name VARCHAR(50) NOT NULL,
+    attempt INT NOT NULL DEFAULT 1,
+    status VARCHAR(20) NOT NULL
+        COMMENT 'success/skipped/error/insufficient',
+    duration_ms INT NULL,
+    result_summary JSON NULL
+        COMMENT '脱敏摘要：状态、分数、关键标志',
+    error_type VARCHAR(100) NULL,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
+    INDEX idx_run_id (run_id),
+    FOREIGN KEY (run_id) REFERENCES evaluation_runs(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

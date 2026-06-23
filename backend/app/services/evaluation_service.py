@@ -20,6 +20,7 @@ from app.services.agents.treatment_agent import run_treatment_evaluation
 from app.services.agents.scoring_agent import run_scoring
 from app.services.agents.suggestion_agent import run_suggestion
 from app.core.websocket import manager
+from app.core.config import settings
 
 
 class EvaluationValidationError(Exception):
@@ -61,7 +62,228 @@ def _extract_json(text: str) -> dict:
 
 
 async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
-    """协调五个评估智能体 + 综合评分 + 建议指导，完成完整评估流程"""
+    """运行评估 — 根据配置选择 LangGraph 图或旧编排"""
+    if settings.LANGGRAPH_ENABLED:
+        return await _run_evaluation_graph(db, consultation_id)
+    else:
+        return await _run_evaluation_legacy(db, consultation_id)
+
+
+async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evaluation:
+    """LangGraph 图执行路径"""
+    import uuid
+    from datetime import datetime
+    from sqlalchemy import select
+    from app.models.consultation import Consultation, ConsultationMessage
+    from app.models.evaluation import Evaluation
+    from app.models.patient import VirtualPatient
+    from app.models.evaluation_run import EvaluationRun
+    from app.orchestration.state import EvaluationState, EvaluationContext
+    from app.orchestration.graph import get_graph
+    from app.orchestration.routes import build_submission_flags, get_consultation_type
+    from app.orchestration.progress import send_progress_events
+    from app.core.websocket import manager
+    from app.core.config import settings
+
+    # 1. 加载数据
+    await manager.send_progress(consultation_id, 0, "正在初始化...")
+
+    consultation = await db.execute(
+        select(Consultation).where(Consultation.id == consultation_id)
+    )
+    consultation = consultation.scalar_one()
+
+    patient = await db.execute(
+        select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
+    )
+    patient = patient.scalar_one()
+
+    msgs = await db.execute(
+        select(ConsultationMessage)
+        .where(ConsultationMessage.consultation_id == consultation_id)
+        .order_by(ConsultationMessage.sequence)
+    )
+    messages = msgs.scalars().all()
+
+    conversation_text = "\n".join(
+        f"{'医生' if m.role == 'doctor' else '患者'}: {m.content}" for m in messages
+    )
+
+    # 2. 构建初始 State
+    run_id = str(uuid.uuid4())
+    consultation_type = get_consultation_type(consultation)
+    submission_flags = build_submission_flags(consultation)
+
+    context = EvaluationContext(
+        conversation_text=conversation_text,
+        patient_age=patient.age,
+        patient_gender=patient.gender,
+        chief_complaint=patient.chief_complaint,
+        medical_history=patient.medical_history,
+        symptoms=_parse_symptoms(patient.symptoms),
+        doctor_diagnosis=consultation.diagnosis if consultation.diagnosis and consultation.diagnosis.strip() else None,
+        treatment_plan=consultation.treatment_plan if consultation.treatment_plan and consultation.treatment_plan.strip() else None,
+    )
+
+    initial_state = EvaluationState(
+        run_id=run_id,
+        consultation_id=consultation_id,
+        graph_version=settings.LANGGRAPH_GRAPH_VERSION,
+        context=context,
+        consultation_type=consultation_type,
+        submission_flags=submission_flags,
+    )
+
+    # 3. 创建 EvaluationRun
+    eval_run = EvaluationRun(
+        id=run_id,
+        consultation_id=consultation_id,
+        graph_version=settings.LANGGRAPH_GRAPH_VERSION,
+        scoring_policy_version="v1",
+        checkpoint_thread_id=f"evaluation:{run_id}",
+        status="running",
+        selected_agents=None,
+        started_at=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(eval_run)
+    await db.flush()
+
+    # 4. 执行图
+    try:
+        graph = await get_graph()
+        config = {
+            "configurable": {
+                "thread_id": f"evaluation:{run_id}",
+            }
+        }
+
+        final_state = await graph.ainvoke(initial_state, config=config)
+
+        # 5. 发送进度事件
+        progress_events = final_state.get("progress_events", [])
+        await send_progress_events(consultation_id, progress_events)
+
+        # 6. 从 final_state 构建 Evaluation
+        evaluation = _build_evaluation_from_state(final_state, consultation_id)
+
+        # 7. 更新 Run 状态
+        eval_run.status = final_state.get("evaluation_status", "completed")
+        eval_run.selected_agents = (
+            [r.agent_name for r in final_state.get("agent_results", [])]
+            if final_state.get("agent_results") else None
+        )
+        eval_run.finished_at = datetime.utcnow()
+
+        # 8. 保存 Evaluation
+        db.add(evaluation)
+        consultation.status = "evaluated"
+        await db.commit()
+        await db.refresh(evaluation)
+
+        # 更新 run 的 evaluation_id
+        eval_run.evaluation_id = evaluation.id
+        await db.commit()
+
+        await manager.send_progress(consultation_id, 100, "评估完成")
+        return evaluation
+
+    except Exception as e:
+        logging.error(f"LangGraph 评估流程异常: {e}")
+        eval_run.status = "failed"
+        eval_run.error_type = type(e).__name__
+        eval_run.error_message = str(e)[:500]
+        eval_run.finished_at = datetime.utcnow()
+        await db.commit()
+        raise
+
+
+def _build_evaluation_from_state(state: dict, consultation_id: int) -> Evaluation:
+    """从 LangGraph final state 构建 Evaluation ORM 对象"""
+    from app.models.evaluation import Evaluation
+
+    dimensions = state.get("dimension_results", {})
+
+    def get_dim(name):
+        dim = dimensions.get(name)
+        if dim and dim.status == "scored":
+            return dim.score, dim.analysis
+        return None, (dim.analysis if dim else "")
+
+    inquiry_score, inquiry_analysis = get_dim("inquiry")
+    knowledge_score, knowledge_analysis = get_dim("knowledge")
+    humanistic_score, humanistic_analysis = get_dim("humanistic")
+    diagnosis_score, diagnosis_analysis = get_dim("diagnosis")
+    treatment_score, treatment_analysis = get_dim("treatment")
+
+    # 从 agent_results 提取 RAG 审计字段
+    citation_data = None
+    retrieval_status = "not_run"
+    evidence_stance = "undetermined"
+    rag_trace_data = None
+
+    for result in state.get("agent_results", []):
+        if result.agent_name == "knowledge":
+            citation_data = result.citations or None
+            rag_trace_data = result.trace or None
+            if result.status == "insufficient":
+                retrieval_status = "insufficient"
+                evidence_stance = "refusal"
+
+    # 改进建议
+    suggestions = state.get("improvement_suggestions", [])
+    suggestions_text = "\n".join(suggestions) if suggestions else ""
+
+    eval_status = state.get("evaluation_status", "completed")
+
+    return Evaluation(
+        consultation_id=consultation_id,
+        inquiry_score=inquiry_score or 0,
+        inquiry_analysis=inquiry_analysis,
+        knowledge_score=knowledge_score,
+        knowledge_analysis=knowledge_analysis,
+        humanistic_score=humanistic_score or 0,
+        humanistic_analysis=humanistic_analysis,
+        diagnosis_score=diagnosis_score or 0,
+        diagnosis_analysis=diagnosis_analysis,
+        treatment_score=treatment_score or 0,
+        treatment_analysis=treatment_analysis,
+        total_score=state.get("total_score"),
+        overall_summary=state.get("overall_summary", ""),
+        improvement_suggestions=suggestions_text,
+        citation_data=citation_data,
+        retrieval_status=retrieval_status,
+        evidence_stance=evidence_stance,
+        human_review_needed=state.get("human_review_needed", False),
+        review_reason=state.get("review_reason"),
+        rag_trace_data=rag_trace_data,
+        evaluation_status=eval_status,
+        # LangGraph 审计字段
+        run_id=state.get("run_id"),
+        safety_data=state.get("safety_result").model_dump() if state.get("safety_result") else None,
+        applicable_dimensions=list(dimensions.keys()) if dimensions else None,
+        scoring_policy_version=state.get("scoring_policy_version"),
+        graph_version=state.get("graph_version"),
+    )
+
+
+def _parse_symptoms(symptoms_str) -> list[str]:
+    """解析患者症状字段"""
+    import json
+    if not symptoms_str:
+        return []
+    try:
+        data = json.loads(symptoms_str)
+        if isinstance(data, list):
+            return data
+        return [symptoms_str]
+    except (json.JSONDecodeError, TypeError):
+        return [symptoms_str] if symptoms_str else []
+
+
+async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Evaluation:
+    """旧编排路径 — 保留原有代码作为回退"""
     await manager.send_progress(consultation_id, 0, "正在初始化...")
     consultation = await db.execute(
         select(Consultation).where(Consultation.id == consultation_id)

@@ -15,6 +15,7 @@ from app.api.v1 import router as api_v1_router
 from app.core.config import settings
 from app.db.session import engine
 from app.models.base import Base
+from app.orchestration.checkpointer import init_checkpointer, close_checkpointer
 from app.services.qwen_client import get_llm_metrics
 import app.models  # noqa: F401
 
@@ -30,7 +31,14 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured.")
-    yield
+    try:
+        await init_checkpointer(
+            redis_url=settings.REDIS_CHECKPOINT_URL,
+            ttl=settings.REDIS_CHECKPOINT_TTL,
+        )
+        yield
+    finally:
+        await close_checkpointer()
 
 
 app = FastAPI(

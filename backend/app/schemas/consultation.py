@@ -44,6 +44,7 @@ class ConsultationOut(BaseModel):
     summary: Optional[str] = ""
     diagnosis: Optional[str] = ""
     treatment_plan: Optional[str] = ""
+    consultation_type: str = "initial"
     max_rounds: int = 20
     created_at: datetime
 

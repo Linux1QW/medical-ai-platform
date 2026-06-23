@@ -16,3 +16,6 @@ pymupdf==1.27.2.2
 dashscope>=1.20.0
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+langgraph==1.2.6
+langgraph-checkpoint-redis==0.4.1
+redis==7.4.1

@@ -441,7 +441,7 @@ class TestCLIInvocation(unittest.TestCase):
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(PROJECT_ROOT / "backend"),
             env=env,
             timeout=120,
         )
@@ -485,7 +485,7 @@ class TestCLIInvocation(unittest.TestCase):
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(PROJECT_ROOT),
+                cwd=str(PROJECT_ROOT / "backend"),
                 timeout=60,
             )
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")

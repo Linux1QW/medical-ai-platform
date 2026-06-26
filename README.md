@@ -11,6 +11,8 @@
 - **Reflection Agent ReAct + Consistency Tools** 评估质量自审
 - **RAG V2 分级检索与两阶段重排管线**
 - **Tool Use 端到端加固**（熔断器、预算管理器、健康检查器）
+- **安全加固体系**（JWT + API 速率限制 + 审计日志 + XSS 防护）
+- **LLM 响应语义缓存层**（Redis + SHA256 精确哈希，best-effort 降级）
 - **统一 Pydantic 数据契约**、五维加权评分模型（含拒答权重重分配）
 - **Docker Compose 一键部署**（MySQL + Redis + 后端 + 前端）
 
@@ -84,7 +86,7 @@
 - `backend/app/orchestration/state.py` — 状态定义（含 `EvaluationPlan`、`PlanStep`、`ExecutionResult`、`ReflectionResult`）
 - `backend/app/orchestration/graph.py` — StateGraph 主图（Plan-Execute + Send fan-out/fan-in）
 - `backend/app/orchestration/checkpointer.py` — Redis Checkpoint 持久化
-- `backend/app/orchestration/adapters/` — Agent 适配器模式（含 knowledge、reflection 适配器）
+- `backend/app/orchestration/adapters/` — Agent 适配器模式（8 个适配器：inquiry/diagnosis/treatment/humanistic/knowledge/reflection/suggestion + base/registry）
 - `backend/app/orchestration/routes.py` — 路由矩阵与场景分类
 
 **Feature Flag**：
@@ -140,7 +142,7 @@ LANGGRAPH_SHADOW_MODE=true  # 影子模式：新旧路径并行对比
 - **4 个一致性工具**：`check_score_consistency`（评分一致性）、`check_evidence_sufficiency`（证据充分性）、`detect_score_contradictions`（矛盾检测）、`summarize_evaluation`（结果汇总）
 - **内置矛盾规则**：诊断高分+知识低分、治疗高分+知识低分、病史低分+诊断高分等
 - **反思结果辅助性**：不替代原始评分，仅标记需要关注的问题（review flags）
-- **Feature Flag**：`ENABLE_REACT_REFLECTION=false`（默认关闭）
+- **Feature Flag**：`ENABLE_REACT_REFLECTION=true`（默认开启）
 
 **关键文件**：
 - `backend/app/services/agents/reflection_agent.py` — `run_reflection()` 主函数
@@ -157,6 +159,43 @@ LANGGRAPH_SHADOW_MODE=true  # 影子模式：新旧路径并行对比
 | `ToolBudgetManager` | 全局工具调用预算管理与告警 | `tools/tool_budget_manager.py` |
 | `ToolHealthChecker` | 工具健康状态检查与降级结果构建 | `tools/tool_health_checker.py` |
 | `CircuitBreaker` | 熔断器（closed→open→half_open） | `tools/robust_tool_executor.py` |
+
+### 安全加固体系
+
+平台内置多层安全机制，保障生产环境部署的安全性：
+
+| 模块 | 功能 | 关键文件 |
+|------|------|----------|
+| **JWT 认证** | bcrypt 密码哈希 + python-jose JWT 令牌签发与校验 | `core/security.py` |
+| **API 速率限制** | slowapi 中间件，基于 IP 的分级限流（认证 5次/分钟、问诊 10次/分钟、评估 5次/小时） | `core/limiter.py` |
+| **审计日志** | AuditLog 模型（`audit_logs` 表），记录 login / create_consultation / submit_diagnosis / trigger_evaluation / admin_action 五种操作，支持 IP 和 UA 采集 | `core/audit.py`, `models/audit_log.py` |
+| **输入验证** | HTML 标签过滤（`strip_html_tags`）、文本清理（`sanitize_text`）、XSS 检测（`contains_html`） | `core/validation.py` |
+
+**Feature Flag**：
+```bash
+AUDIT_LOG_ENABLED=true   # 启用审计日志（默认 true）
+```
+
+### LLM 响应语义缓存层
+
+基于 Redis 的精确哈希缓存层，对 `temperature=0` 的确定性 LLM 调用进行响应缓存，减少重复 API 调用开销。
+
+**核心特性**：
+- **精确哈希匹配**：SHA256 哈希作为缓存键，格式 `llm_cache:{model}:{temperature}:{sha256_hash}`
+- **仅缓存确定性调用**：`temperature=0` 时启用，`temperature>0` 具有随机性不缓存
+- **TTL 与容量**：默认 24 小时过期，最大 10000 条目
+- **静默降级**：Redis 连接失败或任何异常均静默处理（best-effort），不影响正常 LLM 调用
+- **统计指标**：`cache_hits`、`cache_misses`、`hit_rate` 进程内计数器
+
+**关键文件**：
+- `backend/app/services/llm_cache.py` — 缓存层实现
+
+**Feature Flag**：
+```bash
+LLM_CACHE_ENABLED=true          # 启用 LLM 响应缓存（默认 true）
+LLM_CACHE_TTL=86400             # 缓存过期时间（秒），24小时
+LLM_CACHE_MAX_SIZE=10000        # 最大缓存条目数
+```
 
 ### 评分引擎
 
@@ -218,7 +257,9 @@ LANGGRAPH_SHADOW_MODE=true  # 影子模式：新旧路径并行对比
 | PDF 解析 | PyMuPDF | — |
 | 并发控制 | asyncio.Semaphore（全局 LLM 限流） | — |
 | 编排框架 | LangGraph（Plan-Execute + Send fan-out/fan-in） | — |
-| 缓存/Checkpoint | Redis（生产环境 Checkpoint 持久化） | — |
+| 缓存/Checkpoint | Redis（生产环境 Checkpoint 持久化 + LLM 响应缓存） | redis 7.4.1 |
+| Checkpoint 持久化 | langgraph-checkpoint-redis | 0.4.1 |
+| 速率限制 | slowapi | >=0.1.9 |
 | Function Calling | OpenAI SDK（Qwen Function Calling 兼容接口） | — |
 | 实时通信 | SSE（Server-Sent Events） | — |
 | 容器化 | Docker Compose（MySQL + Redis + Backend + Frontend） | — |
@@ -237,10 +278,21 @@ medical-ai-platform/
 │   │   │   ├── knowledge_base.py         #   知识库管理
 │   │   │   └── stats.py                  #   管理员统计
 │   │   ├── core/                         # 核心基础设施
-│   │   │   ├── config.py                 #   配置管理（含 ReAct/Tool Use/LangGraph）
-│   │   │   ├── security.py               #   密码加密（bcrypt_sha256）+ JWT
-│   │   │   └── deps.py                   #   认证依赖注入
+│   │   │   ├── config.py                 #   配置管理（含 ReAct/Tool Use/LangGraph/缓存/审计）
+│   │   │   ├── security.py               #   密码加密（bcrypt）+ JWT（python-jose）
+│   │   │   ├── deps.py                   #   认证依赖注入
+│   │   │   ├── audit.py                  #   审计日志记录模块
+│   │   │   ├── limiter.py                #   API 速率限制（slowapi）
+│   │   │   ├── validation.py             #   输入验证（XSS 防护、HTML 过滤）
+│   │   │   └── websocket.py              #   WebSocket 支持
 │   │   ├── models/                       # 数据库模型（SQLAlchemy）
+│   │   │   ├── audit_log.py              #   审计日志模型
+│   │   │   ├── user.py                   #   用户模型
+│   │   │   ├── patient.py                #   患者模型
+│   │   │   ├── consultation.py           #   问诊模型
+│   │   │   ├── evaluation.py             #   评估模型
+│   │   │   ├── evaluation_run.py         #   评估运行模型
+│   │   │   └── evaluation_node_result.py #   评估节点结果模型
 │   │   ├── schemas/                      # 请求/响应模型（Pydantic）
 │   │   ├── services/
 │   │   │   ├── agents/                   # AI 智能体
@@ -264,6 +316,9 @@ medical-ai-platform/
 │   │   │   │   └── build_medical_index.py#   索引构建脚本（参数化版本）
 │   │   │   ├── evaluation_service.py     #   评估编排器
 │   │   │   ├── consultation_service.py   #   问诊逻辑（患者模拟 + SSE + 记忆管理）
+│   │   │   ├── patient_service.py        #   患者服务
+│   │   │   ├── user_service.py           #   用户服务
+│   │   │   ├── llm_cache.py              #   LLM 响应缓存层（Redis + SHA256）
 │   │   │   ├── qwen_client.py            #   Qwen API 客户端
 │   │   │   ├── tools/                    # Function Call 工具系统
 │   │   │   │   ├── base.py               #   BaseTool 基类 + ToolContext
@@ -285,30 +340,82 @@ medical-ai-platform/
 │   │   │   ├── state.py                  #   EvaluationState + EvaluationPlan + ReflectionResult
 │   │   │   ├── graph.py                  #   StateGraph 主图（Plan-Execute + Send fan-out）
 │   │   │   ├── checkpointer.py           #   Redis Checkpoint
-│   │   │   ├── adapters/                 #   Agent 适配器
+│   │   │   ├── adapters/                 #   Agent 适配器（8 个）
+│   │   │   │   ├── base.py               #     适配器基类
+│   │   │   │   ├── registry.py           #     适配器注册表
+│   │   │   │   ├── inquiry.py            #     问诊分析适配器
+│   │   │   │   ├── diagnosis.py          #     诊断评估适配器
+│   │   │   │   ├── treatment.py          #     治疗评估适配器
+│   │   │   │   ├── humanistic.py         #     人文关怀适配器
 │   │   │   │   ├── knowledge.py          #     知识 Agent 适配器（含 Tool Use/ReAct 切换）
-│   │   │   │   └── reflection.py         #     反思 Agent 适配器
+│   │   │   │   ├── reflection.py         #     反思 Agent 适配器
+│   │   │   │   └── suggestion.py         #     建议指导适配器
 │   │   │   └── routes.py                 #   路由矩阵
 │   │   └── db/session.py                 # 数据库连接
 │   ├── evaluation/                       # 离线评测框架
 │   │   ├── datasets.py                   #   评测数据集加载
 │   │   ├── runners.py                    #   评测运行器（Recall/MRR/nDCG）
 │   │   └── rag_cases/                    #   RAG 评测用例
-│   ├── tests/                            # 测试
-│   │   ├── rag/                          #   RAG 单元测试与离线评测
-│   │   ├── tools/                        #   Tool Use 单元测试
-│   │   ├── evaluation/                   #   评测回归测试
-│   │   ├── orchestration/                #   编排层测试
+│   ├── tests/                            # 测试（30 个测试文件）
+│   │   ├── test_auth_error_handling.py   #   认证错误处理测试
+│   │   ├── test_auth_password_length.py  #   密码长度校验测试
+│   │   ├── test_e2e.py                   #   端到端集成测试
+│   │   ├── test_llm_cache.py             #   LLM 缓存层测试
+│   │   ├── test_react_upgrade.py         #   ReAct 升级集成测试
+│   │   ├── test_security_hardening.py    #   安全加固测试
 │   │   ├── agents/                       #   智能体测试
-│   │   └── test_react_upgrade.py         #   ReAct 升级集成测试
+│   │   │   └── test_knowledge_agent_tool_use.py
+│   │   ├── evaluation/                   #   评测回归测试（5 个文件）
+│   │   │   ├── test_datasets.py
+│   │   │   ├── test_metrics.py
+│   │   │   ├── test_rag_eval_regression.py
+│   │   │   ├── test_rag_eval_smoke.py
+│   │   │   └── test_report.py
+│   │   ├── orchestration/                #   编排层测试（8 个文件）
+│   │   │   ├── test_adapters.py
+│   │   │   ├── test_baseline.py
+│   │   │   ├── test_graph.py
+│   │   │   ├── test_knowledge_adapter_tool_flag.py
+│   │   │   ├── test_models.py
+│   │   │   ├── test_routes.py
+│   │   │   ├── test_safety.py
+│   │   │   └── test_service.py
+│   │   ├── rag/                          #   RAG 单元测试与离线评测（5 个文件）
+│   │   │   ├── eval_offline.py
+│   │   │   ├── test_metadata.py
+│   │   │   ├── test_query_builder.py
+│   │   │   ├── test_retriever.py
+│   │   │   └── test_types.py
+│   │   ├── services/                     #   服务层测试（3 个文件）
+│   │   │   ├── test_consultation_service.py
+│   │   │   ├── test_evaluation_service.py
+│   │   │   └── test_qwen_client_tools.py
+│   │   └── tools/                        #   Tool Use 单元测试（2 个文件）
+│   │       ├── test_executor.py
+│   │       └── test_registry.py
 │   ├── requirements.txt
 │   └── .env                              # 环境变量
 ├── frontend/                             # 前端应用（React + Vite）
 │   ├── src/
 │   │   ├── api/                          # 后端接口封装（含 SSE 客户端）
-│   │   ├── pages/                        # 页面组件
-│   │   │   ├── Consultation/             #   问诊页面（SSE 进度展示）
-│   │   │   └── Evaluation/               #   评估页面（scoreColor 统一逻辑）
+│   │   ├── components/                   # 公共组件库
+│   │   │   ├── ScoreDisplay.tsx          #   统一分数展示（含 getScoreColor/getScoreLevel）
+│   │   │   ├── PersonalityTag.tsx        #   人格标签组件
+│   │   │   ├── DimensionRadar.tsx        #   五维雷达图（recharts）
+│   │   │   ├── LoadingOverlay.tsx        #   加载遮罩
+│   │   │   └── index.ts                  #   统一导出入口
+│   │   ├── pages/                        # 页面组件（11 个页面）
+│   │   │   ├── Login/                    #   登录
+│   │   │   ├── Register/                 #   注册
+│   │   │   ├── Dashboard/                #   主页/仪表盘
+│   │   │   ├── PatientList/              #   患者列表
+│   │   │   ├── Consultation/             #   问诊交互（SSE 流式）
+│   │   │   ├── ConsultationList/         #   问诊记录
+│   │   │   ├── Evaluation/               #   评估报告
+│   │   │   ├── Profile/                  #   个人资料
+│   │   │   ├── AdminPatients/            #   管理员 - 患者管理
+│   │   │   ├── AdminConsultations/       #   管理员 - 问诊管理
+│   │   │   └── AdminStats/               #   管理员 - 统计面板
 │   │   ├── store/useAuth.ts              # 状态管理
 │   │   └── utils/request.ts              # Axios 封装
 │   ├── vite.config.ts
@@ -319,9 +426,12 @@ medical-ai-platform/
 │   ├── migrate_v3.sql                    # 密码字段扩容
 │   ├── migrate_v4.sql                    # RAG 审计字段（幂等迁移）
 │   ├── migrate_v5.sql                    # Plan-Execute 字段（evaluation_plan, execution_results）
+│   ├── migrate_v6.sql                    # 审计日志表（audit_logs，幂等迁移）
+│   ├── migrate_v7.sql                    # consultations 新增 max_rounds 列（INT DEFAULT 20）
 │   └── seed.sql                          # 种子数据
 ├── dataset/                              # 评测数据集（150+ 病例，已 gitignore）
 ├── data/                                 # 医学教材与指南 PDF（80+ 部）
+├── .github/workflows/ci.yml              # CI/CD（GitHub Actions）
 ├── docker-compose.yml                    # 一键部署（MySQL + Redis + Backend + Frontend）
 ├── docker-compose.override.yml           # 开发环境覆盖配置
 ├── Dockerfile.backend                    # 后端容器构建
@@ -469,6 +579,8 @@ mysql -u root -p medical_ai < database/migrate_v2.sql
 mysql -u root -p medical_ai < database/migrate_v3.sql
 mysql -u root -p medical_ai < database/migrate_v4.sql
 mysql -u root -p medical_ai < database/migrate_v5.sql
+mysql -u root -p medical_ai < database/migrate_v6.sql
+mysql -u root -p medical_ai < database/migrate_v7.sql
 ```
 
 或使用初始化脚本：
@@ -533,6 +645,8 @@ npm run dev
 | `migrate_v3.sql` | `users.hashed_password` 字段扩容为 TEXT |
 | `migrate_v4.sql` | RAG 审计字段（幂等版本）：`citation_data`、`retrieval_status`、`evidence_stance`、`human_review_needed`、`review_reason`、`rag_trace_data`、`evaluation_status`；`knowledge_score` 和 `total_score` 允许 NULL |
 | `migrate_v5.sql` | Plan-Execute 模式字段：`evaluation_runs.evaluation_plan`（JSON）、`evaluation_runs.execution_results`（JSON） |
+| `migrate_v6.sql` | 新建 `audit_logs` 表（幂等迁移），含 user_id / action / resource_id / ip_address / user_agent / detail / created_at |
+| `migrate_v7.sql` | `consultations` 表新增 `max_rounds` 列（INT DEFAULT 20），控制最大问诊轮次 |
 
 ## 配置说明
 
@@ -542,13 +656,18 @@ npm run dev
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
+| `PROJECT_NAME` | 医学问诊评估平台 | 项目名称 |
+| `VERSION` | 1.0.0 | 项目版本 |
+| `API_V1_PREFIX` | /api/v1 | API v1 路径前缀 |
 | `MYSQL_HOST` | localhost | MySQL 地址 |
 | `MYSQL_PORT` | 3306 | MySQL 端口 |
 | `MYSQL_USER` | root | MySQL 用户 |
 | `MYSQL_PASSWORD` | （空） | MySQL 密码 |
 | `MYSQL_DATABASE` | medical_ai | 数据库名 |
 | `SECRET_KEY` | （内置默认值） | JWT 签名密钥 |
+| `ALGORITHM` | HS256 | JWT 签名算法 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | Token 有效期（24 小时） |
+| `CORS_ORIGINS` | ["http://localhost:5173", "http://localhost:3000"] | CORS 允许源 |
 | `DASHSCOPE_API_KEY` | （系统环境变量） | 阿里云百炼 API Key |
 | `QWEN_API_BASE_URL` | dashscope 兼容模式 | Qwen API 地址 |
 | `QWEN_MODEL` | qwen3.7-max | 默认 LLM 模型 |
@@ -575,6 +694,8 @@ npm run dev
 | `TOOL_USE_MODEL` | qwen-max | Tool Use 专用模型 |
 | `TOOL_USE_MAX_ROUNDS` | 4 | 最大工具调用轮次 |
 | `TOOL_USE_MAX_CALLS` | 8 | 最大工具调用总次数 |
+| `TOOL_USE_TIMEOUT_SECONDS` | 30 | 工具调用超时（秒） |
+| `TOOL_USE_MAX_RESULT_CHARS` | 6000 | 工具返回结果最大字符数 |
 | `KNOWLEDGE_TOOL_MAX_RAG_CALLS` | 3 | RAG 检索最大调用次数 |
 | `KNOWLEDGE_TOOL_MAX_MQE_CALLS` | 2 | MQE 扩展最大调用次数 |
 | `KNOWLEDGE_TOOL_MAX_HYDE_CALLS` | 1 | HyDE 最大调用次数 |
@@ -585,11 +706,39 @@ npm run dev
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `ENABLE_REACT_KNOWLEDGE` | true | Knowledge Agent 启用 ReAct 模式（显式 Thought→Action→Observation） |
-| `ENABLE_REACT_REFLECTION` | true | Reflection Agent 启用 ReAct 模式 |
+| `ENABLE_REACT_REFLECTION` | true | Reflection Agent 启用 ReAct 模式（默认开启） |
 | `ENABLE_LLM_SUGGESTION` | true | 启用 LLM 建议生成（调用 suggestion_agent 进行对比学习分析，false 时回退规则建议） |
 | `REACT_MAX_STEPS` | 6 | ReAct 最大推理步数 |
 | `REFLECTION_CONSISTENCY_THRESHOLD` | 0.3 | 评分一致性偏差阈值 |
 | `REFLECTION_EVIDENCE_MIN_SCORE` | 60.0 | 证据充足的最低分数 |
+
+### LLM 缓存配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `LLM_CACHE_ENABLED` | true | 启用 LLM 响应缓存（仅 temperature=0 的确定性调用） |
+| `LLM_CACHE_TTL` | 86400 | 缓存过期时间（秒），24小时 |
+| `LLM_CACHE_SIMILARITY_THRESHOLD` | 0.95 | 语义相似度阈值（保留，当前使用精确哈希匹配） |
+| `LLM_CACHE_MAX_SIZE` | 10000 | 最大缓存条目数 |
+
+### 安全与审计配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `AUDIT_LOG_ENABLED` | true | 启用审计日志记录 |
+
+### Feature Flags 完整清单
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `LANGGRAPH_ENABLED` | true | 启用 LangGraph 编排（设为 false 回退旧 asyncio.gather 编排） |
+| `LANGGRAPH_SHADOW_MODE` | false | 影子模式：新旧路径并行对比 |
+| `ENABLE_TOOL_USE` | true | 启用知识 Agent Tool Use（Function Calling） |
+| `ENABLE_REACT_KNOWLEDGE` | true | Knowledge Agent ReAct 模式 |
+| `ENABLE_REACT_REFLECTION` | true | Reflection Agent ReAct 模式（默认开启） |
+| `ENABLE_LLM_SUGGESTION` | true | 启用 LLM 建议生成 |
+| `LLM_CACHE_ENABLED` | true | 启用 LLM 响应缓存 |
+| `AUDIT_LOG_ENABLED` | true | 启用审计日志 |
 
 ### 五维评分权重（`scoring/policies.py`）
 
@@ -617,6 +766,8 @@ npm run dev
 
 ## 测试
 
+项目包含 30 个测试文件，覆盖全模块单元测试与集成测试。
+
 ```powershell
 cd backend
 
@@ -634,12 +785,36 @@ pytest tests/agents/test_knowledge_agent_tool_use.py -v
 # ReAct 升级集成测试
 pytest tests/test_react_upgrade.py -v
 
+# 安全加固测试
+pytest tests/test_security_hardening.py -v
+
+# LLM 缓存层测试
+pytest tests/test_llm_cache.py -v
+
 # 编排层测试
 pytest tests/orchestration/ -v
+
+# 服务层测试
+pytest tests/services/ -v
+
+# 评测回归测试
+pytest tests/evaluation/ -v
 
 # 离线评测（评估 RAG 检索质量）
 python tests/rag/eval_offline.py
 ```
+
+**测试目录结构**（30 个测试文件）：
+
+| 目录 | 文件数 | 覆盖范围 |
+|------|--------|----------|
+| `tests/`（根） | 6 | 认证错误处理、密码长度校验、端到端集成、LLM 缓存、ReAct 升级、安全加固 |
+| `tests/agents/` | 1 | 知识 Agent Tool Use 测试 |
+| `tests/evaluation/` | 5 | 数据集加载、评测指标、RAG 回归测试、RAG 冒烟测试、报告生成 |
+| `tests/orchestration/` | 8 | 适配器、基线、图结构、知识适配器工具标志、模型、路由、安全、服务 |
+| `tests/rag/` | 5 | 元数据、查询构建器、检索器、类型、离线评测 |
+| `tests/services/` | 3 | 问诊服务、评估服务、Qwen 客户端 |
+| `tests/tools/` | 2 | 执行器、注册表 |
 
 **测试覆盖**：
 - LangGraph 编排层：图节点测试 + Plan-Execute 测试 + Send fan-out 测试
@@ -647,6 +822,8 @@ python tests/rag/eval_offline.py
 - 知识 Agent：分数映射测试 + Feature Flag 切换测试 + ReAct 模式测试
 - Reflection Agent：一致性工具测试 + 反思流程测试
 - 适配器：适配器测试 + 路由测试
+- 安全加固：JWT 认证测试 + 速率限制测试 + 输入验证测试 + 审计日志测试
+- LLM 缓存：精确哈希匹配测试 + TTL 测试 + 降级测试
 - RAG 评测：离线回归测试（Recall/MRR/nDCG）
 
 ## API 文档
@@ -655,7 +832,7 @@ python tests/rag/eval_offline.py
 
 | 文档 | 地址 |
 |------|------|
-| Swagger UI | http://localhost:8000/api/v1/openapi.json |
+| Swagger UI | http://localhost:8000/docs |
 | 健康检查 | http://localhost:8000/health |
 
 ### 主要接口
@@ -665,11 +842,42 @@ python tests/rag/eval_offline.py
 | POST | /api/v1/auth/register | 注册 |
 | POST | /api/v1/auth/login | 登录 |
 | GET | /api/v1/auth/me | 获取当前用户 |
+| PUT | /api/v1/auth/profile | 更新个人资料 |
 | GET | /api/v1/patients/ | 虚拟患者列表 |
+| GET | /api/v1/patients/{id} | 患者详情 |
+| POST | /api/v1/patients/ | 创建患者 |
+| PUT | /api/v1/patients/{id} | 更新患者 |
+| DELETE | /api/v1/patients/{id} | 删除患者 |
 | POST | /api/v1/consultations/ | 创建问诊 |
-| POST | /api/v1/consultations/{id}/messages | 发送消息（SSE 流式返回患者回复进度） |
+| GET | /api/v1/consultations/ | 问诊列表 |
+| GET | /api/v1/consultations/all | 管理员全部问诊 |
+| GET | /api/v1/consultations/{id} | 问诊详情 |
+| POST | /api/v1/consultations/{id}/messages | 发送消息 |
+| POST | /api/v1/consultations/{id}/messages/stream | SSE 流式消息（患者回复实时推送） |
+| POST | /api/v1/consultations/{id}/extend | 延长问诊 |
+| POST | /api/v1/consultations/{id}/submit-diagnosis | 提交诊断 |
 | POST | /api/v1/consultations/{id}/end | 结束问诊 |
+| DELETE | /api/v1/consultations/{id} | 删除问诊 |
 | POST | /api/v1/evaluations/ | 触发评估 |
 | GET | /api/v1/evaluations/{id} | 查看评估报告 |
-| GET | /api/v1/knowledge-base/status | 知识库状态 |
+| GET | /api/v1/knowledge-base/stats | 知识库统计信息 |
+| POST | /api/v1/knowledge-base/add-pdf | 增量添加 PDF |
+| DELETE | /api/v1/knowledge-base/sources/{name} | 删除指定来源 |
+| POST | /api/v1/knowledge-base/rebuild | 触发全量重建 |
+| GET | /api/v1/knowledge-base/rebuild/status | 查询重建状态 |
+| POST | /api/v1/knowledge-base/cache/clear | 清空 Embedding 缓存 |
 | GET | /api/v1/stats/ | 管理员统计 |
+
+## CI/CD
+
+项目使用 GitHub Actions 实现持续集成，配置文件为 `.github/workflows/ci.yml`。
+
+### 流水线 Jobs
+
+| Job | 运行环境 | 说明 |
+|-----|----------|------|
+| `backend-test` | MySQL 8.0 + Redis 7 服务容器 | pytest 含覆盖率（`--cov=app`），上传 Codecov |
+| `frontend-build` | Node.js 18 | `npm ci` + `npm run build`，检查 dist 目录输出 |
+| `code-quality` | Python 3.10 | flake8 语法检查 + mypy 类型检查 + `compileall` 编译检查 |
+
+**触发条件**：`push` 和 `pull_request` 到 `main` / `master` 分支。

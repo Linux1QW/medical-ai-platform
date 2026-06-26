@@ -12,7 +12,6 @@ import {
   message,
   Typography,
   Space,
-  Tag,
   Rate,
   Spin,
 } from 'antd';
@@ -25,16 +24,11 @@ import {
   deletePatient,
 } from '../../api/patient';
 import type { VirtualPatient } from '../../types';
+import { PersonalityTag } from '../../components';
 
 const { Title } = Typography;
 const { TextArea } = Input;
 
-const personalityMap: Record<string, { color: string; text: string }> = {
-  配合型: { color: 'green', text: '配合型' },
-  焦虑型: { color: 'orange', text: '焦虑型' },
-  沉默型: { color: 'blue', text: '沉默型' },
-  对抗型: { color: 'red', text: '对抗型' },
-};
 
 type PatientFormValues = {
   name: string;
@@ -172,7 +166,7 @@ const AdminPatientsPage: React.FC = () => {
       dataIndex: 'personality_type',
       key: 'personality_type',
       width: 100,
-      render: (v: string) => <Tag color={personalityMap[v]?.color}>{personalityMap[v]?.text}</Tag>,
+      render: (v: string) => <PersonalityTag type={v} />,
     },
     {
       title: '主诉',

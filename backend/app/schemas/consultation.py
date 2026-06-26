@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConsultationCreate(BaseModel):
@@ -9,12 +9,12 @@ class ConsultationCreate(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    content: str
+    content: str = Field(..., min_length=1, max_length=5000)
 
 
 class DiagnosisSubmit(BaseModel):
-    diagnosis: str
-    treatment_plan: str
+    diagnosis: str = Field(..., min_length=1, max_length=5000)
+    treatment_plan: str = Field(..., max_length=10000)
 
 
 class MessageOut(BaseModel):

@@ -1,26 +1,26 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserRegister(BaseModel):
-    username: str
-    email: Optional[str] = ""
-    password: str
-    real_name: Optional[str] = ""
-    department: Optional[str] = ""
+    username: str = Field(..., min_length=3, max_length=50)
+    email: str | None = Field(default="", max_length=100)
+    password: str = Field(..., min_length=6, max_length=128)
+    real_name: str | None = Field(default="", max_length=50)
+    department: str | None = Field(default="", max_length=100)
 
 
 class UserLogin(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., max_length=50)
+    password: str = Field(..., max_length=128)
 
 
 class UserUpdate(BaseModel):
-    real_name: Optional[str] = None
-    department: Optional[str] = None
-    email: Optional[EmailStr] = None
+    real_name: str | None = Field(default=None, max_length=50)
+    department: str | None = Field(default=None, max_length=100)
+    email: EmailStr | None = None
 
 
 class UserOut(BaseModel):

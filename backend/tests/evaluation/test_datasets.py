@@ -5,7 +5,7 @@ import unittest
 import tempfile
 import json
 from pathlib import Path
-from backend.evaluation.datasets import RagGoldCase, RagEvalResult, load_gold_cases, save_gold_cases, StanceType
+from evaluation.datasets import RagGoldCase, RagEvalResult, load_gold_cases, save_gold_cases, StanceType
 
 
 class TestDatasets(unittest.TestCase):

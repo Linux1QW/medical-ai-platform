@@ -24,7 +24,7 @@ INSERT INTO virtual_patients (name, age, gender, personality_type, chief_complai
 -- 病例2：紧张型头痛合并焦虑状态
 INSERT INTO virtual_patients (name, age, gender, personality_type, chief_complaint, medical_history, symptoms, expected_diagnosis, system_prompt, difficulty_level) VALUES
 (
-    '李xx', 32, 'female', 'anxious',
+    '李xx', 32, 'female', '焦虑型',
     '头痛、头晕伴失眠2周',
     '【现病史】2周前因工作压力大、经常加班后出现头痛，以前额及双侧太阳穴为主，呈紧箍感，非搏动性，持续数小时。伴头晕、头昏沉感，无天旋地转。夜间入睡困难，易醒。偶有心慌、食欲减退。\n【既往史】体健，无高血压、糖尿病。无药物过敏史。\n【个人史】办公室工作，近期常加班至深夜。月经规律。\n【家族史】母亲有"神经衰弱"史。',
     '{"主要症状": "头痛", "部位": "前额、双侧太阳穴", "性质": "紧箍感、压迫感", "特点": "非搏动性、持续数小时", "伴随": "头晕头昏、失眠、心慌、食欲下降", "诱因": "工作紧张、熬夜", "无": "恶心呕吐、视物模糊、肢体无力"}',
@@ -36,7 +36,7 @@ INSERT INTO virtual_patients (name, age, gender, personality_type, chief_complai
 -- 病例3：肺癌高危（咳嗽咯血、消瘦，需鉴别）
 INSERT INTO virtual_patients (name, age, gender, personality_type, chief_complaint, medical_history, symptoms, expected_diagnosis, system_prompt, difficulty_level) VALUES
 (
-    '王xx', 68, 'male', 'reticent',
+    '王xx', 68, 'male', '沉默型',
     '咳嗽、咳痰带血丝1周',
     '【现病史】1周前咳嗽加重，咳白色黏痰，痰中带血丝，晨起明显。近3个月体重下降约5kg，伴乏力、盗汗，下午偶有低热（未测体温）。无胸痛、气促。\n【既往史】慢性支气管炎10年，冬春季加重。无结核接触史。\n【个人史】吸烟40年，约20支/日，未戒。偶饮酒。\n【家族史】父亲死于"肺病"（具体不详）。',
     '{"主要症状": "咳嗽、咳痰带血丝", "痰": "白色黏痰、带血丝", "时间": "晨起明显", "伴随": "消瘦约5kg/3月、乏力、盗汗、午后低热", "无": "胸痛、明显气促、大量咯血", "吸烟": "40年、20支/日"}',

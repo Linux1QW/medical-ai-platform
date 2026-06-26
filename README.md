@@ -571,7 +571,7 @@ npm run dev
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `ENABLE_TOOL_USE` | false | 启用知识 Agent Tool Use（Function Calling 模式） |
+| `ENABLE_TOOL_USE` | true | 启用知识 Agent Tool Use（Function Calling 模式） |
 | `TOOL_USE_MODEL` | qwen-max | Tool Use 专用模型 |
 | `TOOL_USE_MAX_ROUNDS` | 4 | 最大工具调用轮次 |
 | `TOOL_USE_MAX_CALLS` | 8 | 最大工具调用总次数 |
@@ -584,8 +584,9 @@ npm run dev
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `ENABLE_REACT_KNOWLEDGE` | false | Knowledge Agent 启用 ReAct 模式（显式 Thought→Action→Observation） |
-| `ENABLE_REACT_REFLECTION` | false | Reflection Agent 启用 ReAct 模式 |
+| `ENABLE_REACT_KNOWLEDGE` | true | Knowledge Agent 启用 ReAct 模式（显式 Thought→Action→Observation） |
+| `ENABLE_REACT_REFLECTION` | true | Reflection Agent 启用 ReAct 模式 |
+| `ENABLE_LLM_SUGGESTION` | true | 启用 LLM 建议生成（调用 suggestion_agent 进行对比学习分析，false 时回退规则建议） |
 | `REACT_MAX_STEPS` | 6 | ReAct 最大推理步数 |
 | `REFLECTION_CONSISTENCY_THRESHOLD` | 0.3 | 评分一致性偏差阈值 |
 | `REFLECTION_EVIDENCE_MIN_SCORE` | 60.0 | 证据充足的最低分数 |

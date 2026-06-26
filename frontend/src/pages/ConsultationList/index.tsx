@@ -4,6 +4,7 @@ import { EyeOutlined, FileTextOutlined, DeleteOutlined, SearchOutlined } from '@
 import { useNavigate } from 'react-router-dom';
 import { getConsultations, deleteConsultation } from '../../api/consultation';
 import type { Consultation } from '../../types';
+import { getScoreColor } from '../../components';
 
 const { Title } = Typography;
 
@@ -68,7 +69,7 @@ const ConsultationListPage: React.FC = () => {
     { title: '人格类型', dataIndex: 'personality_type', key: 'personality_type' },
     {
       title: '最终评分', dataIndex: 'total_score', key: 'total_score', sorter: (a: Consultation, b: Consultation) => (a.total_score || 0) - (b.total_score || 0),
-      render: (v: number | null) => (v !== null ? <Tag color={v >= 80 ? 'green' : v >= 60 ? 'orange' : 'red'}>{v}</Tag> : '-'),
+      render: (v: number | null) => (v !== null ? <Tag color={getScoreColor(v)}>{v}</Tag> : '-'),
     },
     {
       title: '用时(分)', dataIndex: 'duration_minutes', key: 'duration_minutes', sorter: (a: Consultation, b: Consultation) => (a.duration_minutes || 0) - (b.duration_minutes || 0),

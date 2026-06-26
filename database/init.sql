@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS evaluation_runs (
         COMMENT 'running/completed/failed/needs_review',
     selected_agents JSON NULL
         COMMENT '本次运行选中的Agent列表',
+    evaluation_plan JSON NULL
+        COMMENT '评估计划（Plan-Execute 模式）',
+    execution_results JSON NULL
+        COMMENT '计划步骤执行结果',
     attempt INT NOT NULL DEFAULT 1,
     error_type VARCHAR(100) NULL,
     error_message TEXT NULL,

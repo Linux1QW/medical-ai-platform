@@ -601,12 +601,98 @@ def review_gate(state: EvaluationState) -> str:
 
 
 async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:
-    """生成改进建议（确定性降级，本阶段不调用 LLM suggestion agent）
+    """生成改进建议 — 优先调用 LLM suggestion agent，失败时回退规则建议
 
-    结合反思结果提供更全面的改进建议。
+    当 ENABLE_LLM_SUGGESTION=true 时，调用 suggestion_agent 进行对比学习分析。
+    LLM 调用失败时自动降级到原有的规则建议方案。
     """
+    from app.core.config import settings as app_settings
+    from app.orchestration.adapters.suggestion import run_suggestion_from_context
+    import json
+
+    context = state.get("context")
+    dimension_results = state.get("dimension_results", {})
+
+    # 构建维度评估结果字符串
+    inquiry_result = ""
+    knowledge_result = ""
+    humanistic_result = ""
+
+    for name, dim in dimension_results.items():
+        if name == "inquiry":
+            inquiry_result = f"得分:{dim.score}分。{dim.analysis}" if dim.score is not None else dim.analysis
+        elif name == "knowledge":
+            knowledge_result = f"得分:{dim.score}分。{dim.analysis}" if dim.score is not None else dim.analysis
+        elif name == "humanistic":
+            humanistic_result = f"得分:{dim.score}分。{dim.analysis}" if dim.score is not None else dim.analysis
+
+    # 构建患者信息
+    patient_info_parts = []
+    if context and context.patient_age is not None:
+        patient_info_parts.append(f"年龄:{context.patient_age}岁")
+    if context and context.patient_gender:
+        patient_info_parts.append(f"性别:{context.patient_gender}")
+    if context and context.chief_complaint:
+        patient_info_parts.append(f"主诉:{context.chief_complaint}")
+    if context and context.medical_history:
+        patient_info_parts.append(f"病史:{context.medical_history}")
+    patient_info = "，".join(patient_info_parts) if patient_info_parts else "无额外患者信息"
+
+    conversation_text = context.conversation_text if context else ""
+
+    # 尝试调用 LLM suggestion agent
+    try:
+        if app_settings.ENABLE_LLM_SUGGESTION:
+            raw_result = await run_suggestion_from_context(
+                conversation_text=conversation_text,
+                patient_info=patient_info,
+                inquiry_result=inquiry_result,
+                knowledge_result=knowledge_result,
+                humanistic_result=humanistic_result,
+            )
+
+            # 解析 JSON 响应
+            raw_response = raw_result.get("raw_response", "{}")
+            suggestion_data = json.loads(raw_response)
+
+            # 提取 suggestions 字段
+            suggestions_text = suggestion_data.get("suggestions", "")
+            if suggestions_text:
+                # 将文本按段落分割为列表
+                suggestions = [s.strip() for s in suggestions_text.split("\n\n") if s.strip()]
+                if not suggestions:
+                    suggestions = [suggestions_text]
+            else:
+                # 如果没有 suggestions 字段，从其他字段构造
+                missing = suggestion_data.get("missing_questions", [])
+                improvements = suggestion_data.get("improvement_suggestions", [])
+                suggestions = []
+                if missing:
+                    suggestions.append("缺失的关键问题：" + "；".join(missing[:5]))
+                if improvements:
+                    suggestions.append("改进措施：" + "；".join(improvements[:5]))
+                if not suggestions:
+                    suggestions = ["整体表现良好，继续保持"]
+
+            logger.info(f"LLM suggestion generated successfully with {len(suggestions)} items")
+            return {
+                "improvement_suggestions": suggestions,
+                "progress_events": [
+                    ProgressEvent(
+                        progress=90,
+                        message="LLM 建议生成完成",
+                        node_name="generate_suggestion",
+                    )
+                ],
+            }
+        else:
+            logger.debug("ENABLE_LLM_SUGGESTION=false, using rule-based fallback")
+    except Exception as e:
+        logger.error(f"LLM suggestion failed, falling back to rule-based: {e}", exc_info=True)
+
+    # 降级：规则建议（原有逻辑）
     suggestions: list[str] = []
-    for name, dim in state.get("dimension_results", {}).items():
+    for name, dim in dimension_results.items():
         if dim.status == "scored" and dim.score is not None and dim.score < 70:
             suggestions.append(f"{name}维度得分较低({dim.score}分)，建议重点改进")
 
@@ -632,7 +718,7 @@ async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:
         "progress_events": [
             ProgressEvent(
                 progress=90,
-                message="建议生成完成",
+                message="建议生成完成（规则降级）",
                 node_name="generate_suggestion",
             )
         ],

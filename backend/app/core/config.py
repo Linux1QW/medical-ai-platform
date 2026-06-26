@@ -1,7 +1,12 @@
+import logging
 import os
 
 from pydantic_settings import BaseSettings
 from typing import List
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_SECRET_KEY = "change-this-to-a-secure-random-string"
 
 
 class Settings(BaseSettings):
@@ -67,7 +72,7 @@ class Settings(BaseSettings):
     REDIS_CHECKPOINT_TTL: int = 86400  # 24小时过期（秒）
 
     # Function Call / Tool Use
-    ENABLE_TOOL_USE: bool = False
+    ENABLE_TOOL_USE: bool = True
     TOOL_USE_MODEL: str = "qwen-max"
     TOOL_USE_MAX_ROUNDS: int = 4
     TOOL_USE_MAX_CALLS: int = 8
@@ -79,15 +84,35 @@ class Settings(BaseSettings):
     TOOL_USE_FALLBACK_TO_LEGACY: bool = True
 
     # ReAct 模式配置
-    ENABLE_REACT_KNOWLEDGE: bool = False          # Knowledge Agent 启用 ReAct 模式
-    ENABLE_REACT_REFLECTION: bool = False         # Reflection Agent 启用 ReAct 模式
+    ENABLE_REACT_KNOWLEDGE: bool = True           # Knowledge Agent 启用 ReAct 模式
+    ENABLE_REACT_REFLECTION: bool = True          # Reflection Agent 启用 ReAct 模式
     REACT_MAX_STEPS: int = 6                      # ReAct 最大推理步数（Thought→Action→Observation）
     REFLECTION_CONSISTENCY_THRESHOLD: float = 0.3 # 评分一致性偏差阈值（超过则标记矛盾）
     REFLECTION_EVIDENCE_MIN_SCORE: float = 60.0   # 反思时认为证据充足的最低分数
 
+    # LLM 响应缓存
+    LLM_CACHE_ENABLED: bool = True                # 是否启用 LLM 响应缓存
+    LLM_CACHE_TTL: int = 86400                    # 缓存过期时间（秒），24小时
+    LLM_CACHE_SIMILARITY_THRESHOLD: float = 0.95  # 语义相似度阈值（保留，当前使用精确哈希匹配）
+    LLM_CACHE_MAX_SIZE: int = 10000               # 最大缓存条目数
+
+    # LLM 建议生成
+    ENABLE_LLM_SUGGESTION: bool = True            # 启用 LLM 建议生成（false 时回退规则建议）
+
+    # 审计日志
+    AUDIT_LOG_ENABLED: bool = True
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    def check_security(self) -> None:
+        """启动时安全检查配置"""
+        if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
+            logger.warning(
+                "SECURITY WARNING: SECRET_KEY 仍为默认值！"
+                "请在生产环境中设置安全的随机密钥（环境变量 SECRET_KEY）。"
+            )
 
 
 settings = Settings()

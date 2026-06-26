@@ -21,7 +21,7 @@ from .metrics import (
     score_range_accuracy as compute_score_range_accuracy,
 )
 from .report import generate_json_report
-from ..app.services.agents.knowledge_agent import run_knowledge_check, run_knowledge_check_with_tools
+from app.services.agents.knowledge_agent import run_knowledge_check, run_knowledge_check_with_tools
 
 
 logger = logging.getLogger(__name__)

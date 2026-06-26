@@ -10,6 +10,7 @@ import httpx
 from openai import AsyncOpenAI, APIError, APITimeoutError, APIConnectionError, RateLimitError
 
 from app.core.config import settings
+from app.services.llm_cache import LLMResponseCache
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,17 @@ async def call_qwen_chat(
         RateLimitError: API 限流（重试耗尽后）
         APITimeoutError: API 超时（重试耗尽后）
     """
+    # ── Step 0: 缓存查询（仅 temperature=0 且缓存启用时）──
+    _model = model or settings.QWEN_MODEL
+    if settings.LLM_CACHE_ENABLED and temperature == 0:
+        try:
+            cached = await LLMResponseCache.get(messages, _model, temperature)
+            if cached is not None:
+                metrics.total_calls += 1
+                return cached
+        except Exception as e:
+            logger.debug(f"缓存查询异常，继续 API 调用: {e}")
+
     sem = _get_semaphore()
 
     # ── Step 1: 获取信号量（带超时保护）──
@@ -177,6 +189,14 @@ async def call_qwen_chat(
     # ── Step 2: 在信号量保护下执行 API 调用 ──
     try:
         result = await _execute_with_retry(messages, model, temperature, max_tokens)
+
+        # ── Step 3: 写入缓存（best-effort）──
+        if settings.LLM_CACHE_ENABLED and temperature == 0:
+            try:
+                await LLMResponseCache.set(messages, _model, temperature, result)
+            except Exception as e:
+                logger.debug(f"缓存写入异常，不影响返回结果: {e}")
+
         return result
     finally:
         sem.release()

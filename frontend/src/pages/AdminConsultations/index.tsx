@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { getAllConsultations, type ConsultationQueryParams } from '../../api/consultation';
 import type { Consultation } from '../../types';
+import { PersonalityTag, getScoreColor } from '../../components';
 
 interface FilterFormValues {
   username?: string;
@@ -13,13 +14,6 @@ interface FilterFormValues {
 }
 
 const { Title } = Typography;
-
-const personalityMap: Record<string, { color: string; text: string }> = {
-  配合型: { color: 'green', text: '配合型' },
-  焦虑型: { color: 'orange', text: '焦虑型' },
-  沉默型: { color: 'blue', text: '沉默型' },
-  对抗型: { color: 'red', text: '对抗型' },
-};
 
 const statusMap: Record<string, { color: string; text: string }> = {
   in_progress: { color: 'processing', text: '进行中' },
@@ -76,14 +70,11 @@ const AdminConsultationsPage: React.FC = () => {
     { title: '患者姓名', dataIndex: 'patient_name', key: 'patient_name' },
     {
       title: '人格类型', dataIndex: 'personality_type', key: 'personality_type', width: 100,
-      render: (v: string) => {
-        const item = personalityMap[v] || { color: 'default', text: v };
-        return <Tag color={item.color}>{item.text}</Tag>;
-      },
+      render: (v: string) => <PersonalityTag type={v} />,
     },
     {
       title: '最终评分', dataIndex: 'total_score', key: 'total_score', sorter: (a: Consultation, b: Consultation) => (a.total_score || 0) - (b.total_score || 0),
-      render: (v: number | null) => (v !== null ? <Tag color={v >= 80 ? 'green' : v >= 60 ? 'orange' : 'red'}>{v}</Tag> : '-'),
+      render: (v: number | null) => (v !== null ? <Tag color={getScoreColor(v)}>{v}</Tag> : '-'),
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 100,

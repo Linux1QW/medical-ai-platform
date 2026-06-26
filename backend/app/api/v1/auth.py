@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.limiter import limiter
 
 from app.core.security import create_access_token
 from app.core.deps import get_current_user
+from app.core.audit import record_audit_log
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserRegister, UserLogin, UserUpdate, UserOut, Token
@@ -17,7 +20,8 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserOut)
-async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, data: UserRegister, db: AsyncSession = Depends(get_db)):
     if await get_user_by_username(db, data.username):
         raise HTTPException(
             status_code=400,
@@ -33,14 +37,27 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(get_db)):
     user = await authenticate_user(db, data.username, data.password)
     if not user:
+        # 记录失败登录尝试（user_id 为 None，因为认证失败）
+        await record_audit_log(
+            db, user_id=None, action="login", request=request,
+            detail=f"登录失败: username={data.username}",
+        )
+        await db.commit()
         raise HTTPException(
             status_code=401,
             detail={"error_code": "AUTH_INVALID_CREDENTIALS", "message": "用户名或密码错误"},
         )
     access_token = create_access_token(data={"sub": str(user.id)})
+    # 记录成功登录
+    await record_audit_log(
+        db, user_id=user.id, action="login", request=request,
+        detail=f"登录成功: username={user.username}",
+    )
+    await db.commit()
     return Token(access_token=access_token, user=UserOut.model_validate(user))
 
 

@@ -6,7 +6,7 @@ import tempfile
 import asyncio
 from pathlib import Path
 
-from backend.evaluation.rag_eval import main as rag_eval_main
+from evaluation.rag_eval import main as rag_eval_main
 
 
 class TestRagEvalSmoke(unittest.TestCase):
@@ -19,16 +19,16 @@ class TestRagEvalSmoke(unittest.TestCase):
     def test_import_modules(self):
         """Test that all evaluation modules can be imported without errors."""
         try:
-            from backend.evaluation import config, datasets, metrics, report, runners, rag_eval
-            from backend.evaluation.datasets import RagGoldCase, RagEvalResult
-            from backend.evaluation.metrics import recall_at_k, mrr, ndcg_at_k
+            from evaluation import config, datasets, metrics, report, runners, rag_eval
+            from evaluation.datasets import RagGoldCase, RagEvalResult
+            from evaluation.metrics import recall_at_k, mrr, ndcg_at_k
             print("All evaluation modules imported successfully")
         except ImportError as e:
             self.fail(f"Failed to import evaluation modules: {e}")
     
     def test_create_mock_cases(self):
         """Test creating mock cases for smoke testing."""
-        from backend.evaluation.runners import create_mock_cases
+        from evaluation.runners import create_mock_cases
         
         # Test creating mock cases
         mock_cases = create_mock_cases(3)
@@ -43,7 +43,7 @@ class TestRagEvalSmoke(unittest.TestCase):
     
     def test_run_mock_evaluation(self):
         """Test running a mock evaluation."""
-        from backend.evaluation.runners import create_mock_cases, run_evaluation
+        from evaluation.runners import create_mock_cases, run_evaluation
         
         # Create mock cases
         mock_cases = create_mock_cases(2)
@@ -64,8 +64,8 @@ class TestRagEvalSmoke(unittest.TestCase):
     
     def test_generate_reports(self):
         """Test generating reports from mock results."""
-        from backend.evaluation.runners import create_mock_cases, run_evaluation
-        from backend.evaluation.report import generate_json_report, generate_markdown_report
+        from evaluation.runners import create_mock_cases, run_evaluation
+        from evaluation.report import generate_json_report, generate_markdown_report
         import json
         
         # Create mock cases

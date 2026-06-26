@@ -4,7 +4,7 @@ Unit tests for report generation.
 import unittest
 import tempfile
 from pathlib import Path
-from backend.evaluation.report import (
+from evaluation.report import (
     generate_json_report,
     generate_markdown_report,
     check_thresholds,
@@ -13,7 +13,7 @@ from backend.evaluation.report import (
     write_comparison_report,
     DEFAULT_THRESHOLDS,
 )
-from backend.evaluation.datasets import RagGoldCase, RagEvalResult, StanceType
+from evaluation.datasets import RagGoldCase, RagEvalResult, StanceType
 
 
 def _make_result(case_id="case_001", mode="tooluse", **kwargs):

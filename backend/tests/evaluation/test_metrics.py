@@ -2,12 +2,12 @@
 Unit tests for metrics calculation.
 """
 import unittest
-from backend.evaluation.metrics import (
+from evaluation.metrics import (
     recall_at_k, mrr, ndcg_at_k, citation_validity, 
     citation_hallucination_rate, refusal_metrics_from_results,
     retrieval_metrics, citation_metrics, refusal_metrics, tool_use_metrics,
 )
-from backend.evaluation.datasets import RagEvalResult, RagGoldCase, StanceType
+from evaluation.datasets import RagEvalResult, RagGoldCase, StanceType
 
 
 class TestMetrics(unittest.TestCase):

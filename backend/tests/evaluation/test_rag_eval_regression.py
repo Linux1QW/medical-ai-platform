@@ -84,14 +84,14 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_load_default_gold_cases(self):
         """应能从默认 JSONL 文件加载至少 10 条 gold cases。"""
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         self.assertGreaterEqual(len(cases), 10, "Expected at least 10 gold cases")
 
     def test_legacy_format_conversion(self):
         """旧版格式字段应被正确转换为 RagGoldCase 兼容格式。"""
-        from backend.evaluation.datasets import _convert_legacy_format, RagGoldCase
+        from evaluation.datasets import _convert_legacy_format, RagGoldCase
 
         legacy_data = {
             "id": "legacy_001",
@@ -118,7 +118,7 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_new_format_passthrough(self):
         """新版格式数据应直接通过而不需要转换。"""
-        from backend.evaluation.datasets import _convert_legacy_format
+        from evaluation.datasets import _convert_legacy_format
 
         new_data = {
             "case_id": "case_001",
@@ -135,7 +135,7 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_refusal_case_conversion(self):
         """拒绝回答类案例的 should_refuse 应为 True。"""
-        from backend.evaluation.datasets import _convert_legacy_format, RagGoldCase
+        from evaluation.datasets import _convert_legacy_format, RagGoldCase
 
         legacy_refusal = {
             "id": "legacy_refusal",
@@ -155,7 +155,7 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_difficulty_mapping(self):
         """中文难度值应被正确映射为英文枚举值。"""
-        from backend.evaluation.datasets import _convert_legacy_format
+        from evaluation.datasets import _convert_legacy_format
 
         for zh, en in [("简单", "easy"), ("中等", "medium"), ("困难", "hard")]:
             data = {"id": "x", "query": "q", "difficulty": zh, "expected_stance": "提供信息",
@@ -165,7 +165,7 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_all_cases_have_required_fields(self):
         """所有加载的案例都应包含必需字段。"""
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         for case in cases:
@@ -177,7 +177,7 @@ class TestDefaultGoldCasesLoading(unittest.TestCase):
 
     def test_gold_relevant_sources_preserved(self):
         """旧版 reference_docs 应被映射到 gold_relevant_sources。"""
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         case1 = cases[0]
@@ -193,15 +193,15 @@ class TestLegacyModePipeline(unittest.TestCase):
     """Legacy 模式评估流程回归测试（mock LLM 调用）。"""
 
     def _get_cases(self, limit: int = 3):
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         return cases[:limit]
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_legacy_evaluation_runs(self, mock_kc):
         """Legacy 模式应能正常执行评估并返回结果。"""
-        from backend.evaluation.runners import run_evaluation
+        from evaluation.runners import run_evaluation
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
         cases = self._get_cases(3)
@@ -215,11 +215,11 @@ class TestLegacyModePipeline(unittest.TestCase):
             self.assertEqual(r.evaluation_status, "completed")
             self.assertIsNone(r.error)
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_legacy_report_generation(self, mock_kc):
         """Legacy 模式应能生成有效的 JSON 报告。"""
-        from backend.evaluation.runners import run_evaluation
-        from backend.evaluation.report import generate_json_report
+        from evaluation.runners import run_evaluation
+        from evaluation.report import generate_json_report
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
         cases = self._get_cases(3)
@@ -248,15 +248,15 @@ class TestToolUseModePipeline(unittest.TestCase):
     """Tool Use 模式评估流程回归测试（mock LLM 调用）。"""
 
     def _get_cases(self, limit: int = 3):
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         return cases[:limit]
 
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_tooluse_evaluation_runs(self, mock_kcwt):
         """Tool Use 模式应能正常执行评估并返回结果。"""
-        from backend.evaluation.runners import run_evaluation
+        from evaluation.runners import run_evaluation
 
         mock_kcwt.return_value = _mock_knowledge_check_result("tooluse")
         cases = self._get_cases(3)
@@ -270,11 +270,11 @@ class TestToolUseModePipeline(unittest.TestCase):
             self.assertEqual(r.evaluation_status, "completed")
             self.assertIsNone(r.error)
 
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_tooluse_report_generation(self, mock_kcwt):
         """Tool Use 模式应能生成有效的 JSON 报告。"""
-        from backend.evaluation.runners import run_evaluation
-        from backend.evaluation.report import generate_json_report
+        from evaluation.runners import run_evaluation
+        from evaluation.report import generate_json_report
 
         mock_kcwt.return_value = _mock_knowledge_check_result("tooluse")
         cases = self._get_cases(3)
@@ -293,10 +293,10 @@ class TestToolUseModePipeline(unittest.TestCase):
         self.assertIn("thresholds", report)
         self.assertEqual(report["mode"], "tooluse")
 
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_tooluse_has_tool_trace(self, mock_kcwt):
         """Tool Use 模式的结果应包含 tool_trace 数据。"""
-        from backend.evaluation.runners import run_evaluation
+        from evaluation.runners import run_evaluation
 
         mock_kcwt.return_value = _mock_knowledge_check_result("tooluse")
         cases = self._get_cases(2)
@@ -316,16 +316,16 @@ class TestBothModesAndHighLevelRunners(unittest.TestCase):
     """测试 both 模式及高层评估接口。"""
 
     def _get_cases(self, limit: int = 2):
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         return cases[:limit]
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_both_mode_produces_double_results(self, mock_kcwt, mock_kc):
         """both 模式应为每个案例生成 legacy + tooluse 两条结果。"""
-        from backend.evaluation.runners import run_evaluation
+        from evaluation.runners import run_evaluation
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
         mock_kcwt.return_value = _mock_knowledge_check_result("tooluse")
@@ -338,10 +338,10 @@ class TestBothModesAndHighLevelRunners(unittest.TestCase):
         self.assertEqual(modes[0], "legacy")
         self.assertEqual(modes[1], "tooluse")
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_run_legacy_rag_evaluation(self, mock_kc):
         """高层 run_legacy_rag_evaluation 应能正常工作。"""
-        from backend.evaluation.runners import run_legacy_rag_evaluation
+        from evaluation.runners import run_legacy_rag_evaluation
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
 
@@ -357,10 +357,10 @@ class TestBothModesAndHighLevelRunners(unittest.TestCase):
         for r in results:
             self.assertEqual(r.mode, "legacy")
 
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_run_tool_use_evaluation(self, mock_kcwt):
         """高层 run_tool_use_evaluation 应能正常工作。"""
-        from backend.evaluation.runners import run_tool_use_evaluation
+        from evaluation.runners import run_tool_use_evaluation
 
         mock_kcwt.return_value = _mock_knowledge_check_result("tooluse")
 
@@ -384,11 +384,11 @@ class TestBothModesAndHighLevelRunners(unittest.TestCase):
 class TestErrorHandling(unittest.TestCase):
     """评估流程中的异常处理。"""
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_legacy_error_case_produces_error_result(self, mock_kc):
         """Legacy 模式中 LLM 异常应产生 error 结果而非崩溃。"""
-        from backend.evaluation.runners import run_case_legacy
-        from backend.evaluation.datasets import load_gold_cases, RagGoldCase
+        from evaluation.runners import run_case_legacy
+        from evaluation.datasets import load_gold_cases, RagGoldCase
 
         mock_kc.side_effect = RuntimeError("LLM service unavailable")
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
@@ -402,11 +402,11 @@ class TestErrorHandling(unittest.TestCase):
         self.assertIsNotNone(result.error)
         self.assertIn("LLM service unavailable", result.error)
 
-    @patch("backend.evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check_with_tools", new_callable=AsyncMock)
     def test_tooluse_error_case_produces_error_result(self, mock_kcwt):
         """Tool Use 模式中 LLM 异常应产生 error 结果而非崩溃。"""
-        from backend.evaluation.runners import run_case_tooluse
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.runners import run_case_tooluse
+        from evaluation.datasets import load_gold_cases
 
         mock_kcwt.side_effect = RuntimeError("Tool service unavailable")
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
@@ -432,7 +432,7 @@ class TestCLIInvocation(unittest.TestCase):
         env["RAG_EVAL_MOCK_LLM"] = "1"  # Signal to use mock if supported
 
         cmd = [
-            sys.executable, "-m", "backend.evaluation.rag_eval",
+            sys.executable, "-m", "evaluation.rag_eval",
             "--mode", mode,
             "--limit", str(limit),
             "--output-dir", tempfile.mkdtemp(),
@@ -451,7 +451,7 @@ class TestCLIInvocation(unittest.TestCase):
         "Set RAG_EVAL_RUN_INTEGRATION=1 to run CLI integration tests (requires LLM API)",
     )
     def test_cli_legacy_mode(self):
-        """CLI: python -m backend.evaluation.rag_eval --mode legacy --limit 3"""
+        """CLI: python -m evaluation.rag_eval --mode legacy --limit 3"""
         result = self._run_cli("legacy", 3)
         self.assertEqual(result.returncode, 0, f"CLI failed:\nstdout: {result.stdout}\nstderr: {result.stderr}")
         self.assertIn("Evaluation completed", result.stdout)
@@ -461,7 +461,7 @@ class TestCLIInvocation(unittest.TestCase):
         "Set RAG_EVAL_RUN_INTEGRATION=1 to run CLI integration tests (requires LLM API)",
     )
     def test_cli_tooluse_mode(self):
-        """CLI: python -m backend.evaluation.rag_eval --mode tooluse --limit 3"""
+        """CLI: python -m evaluation.rag_eval --mode tooluse --limit 3"""
         result = self._run_cli("tooluse", 3)
         self.assertEqual(result.returncode, 0, f"CLI failed:\nstdout: {result.stdout}\nstderr: {result.stderr}")
         self.assertIn("Evaluation completed", result.stdout)
@@ -476,7 +476,7 @@ class TestCLIInvocation(unittest.TestCase):
         """CLI mock 模式应生成 JSON 和 Markdown 报告文件。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             cmd = [
-                sys.executable, "-m", "backend.evaluation.rag_eval",
+                sys.executable, "-m", "evaluation.rag_eval",
                 "--mode", "mock",
                 "--limit", "2",
                 "--output-dir", tmpdir,
@@ -511,12 +511,12 @@ class TestCLIInvocation(unittest.TestCase):
 class TestReportStructure(unittest.TestCase):
     """验证评估报告的结构完整性。"""
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_report_contains_all_metric_sections(self, mock_kc):
         """报告应包含所有关键指标部分。"""
-        from backend.evaluation.datasets import load_gold_cases
-        from backend.evaluation.runners import run_evaluation, filter_cases_by_split
-        from backend.evaluation.report import generate_json_report
+        from evaluation.datasets import load_gold_cases
+        from evaluation.runners import run_evaluation, filter_cases_by_split
+        from evaluation.report import generate_json_report
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
 
@@ -545,12 +545,12 @@ class TestReportStructure(unittest.TestCase):
         self.assertIn("passed", report["thresholds"])
         self.assertIn("violations", report["thresholds"])
 
-    @patch("backend.evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
+    @patch("evaluation.runners.run_knowledge_check", new_callable=AsyncMock)
     def test_markdown_report_contains_expected_sections(self, mock_kc):
         """Markdown 报告应包含关键章节。"""
-        from backend.evaluation.datasets import load_gold_cases
-        from backend.evaluation.runners import run_evaluation, filter_cases_by_split
-        from backend.evaluation.report import generate_json_report, generate_markdown_report
+        from evaluation.datasets import load_gold_cases
+        from evaluation.runners import run_evaluation, filter_cases_by_split
+        from evaluation.report import generate_json_report, generate_markdown_report
 
         mock_kc.return_value = _mock_knowledge_check_result("legacy")
 
@@ -581,8 +581,8 @@ class TestQueryTypeClassification(unittest.TestCase):
 
     def test_classify_query_type(self):
         """查询类型分类应正确反映 gold case 属性。"""
-        from backend.evaluation.runners import classify_query_type
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.runners import classify_query_type
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
 
@@ -597,8 +597,8 @@ class TestQueryTypeClassification(unittest.TestCase):
 
     def test_group_cases_by_query_type(self):
         """分组函数应返回三个分组。"""
-        from backend.evaluation.runners import group_cases_by_query_type
-        from backend.evaluation.datasets import load_gold_cases
+        from evaluation.runners import group_cases_by_query_type
+        from evaluation.datasets import load_gold_cases
 
         cases = load_gold_cases(DEFAULT_GOLD_CASES_PATH)
         groups = group_cases_by_query_type(cases)

@@ -40,6 +40,7 @@ def adapter():
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_flag_false_uses_legacy(mock_settings, mock_legacy, eval_context, adapter):
     """ENABLE_TOOL_USE=false 时调用 run_knowledge_check"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = False
 
     mock_legacy.return_value = {
@@ -67,6 +68,7 @@ async def test_flag_false_uses_legacy(mock_settings, mock_legacy, eval_context, 
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_flag_true_uses_tool_use(mock_settings, mock_tool_use, eval_context, adapter):
     """ENABLE_TOOL_USE=true 时调用 run_knowledge_check_with_tools"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = True
 
     mock_tool_use.return_value = {
@@ -96,6 +98,7 @@ async def test_flag_true_uses_tool_use(mock_settings, mock_tool_use, eval_contex
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_fallback_on_error(mock_settings, mock_tool_use, mock_legacy, eval_context, adapter):
     """Tool Use 异常 + FALLBACK=true → 回退旧路径"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = True
     mock_settings.TOOL_USE_FALLBACK_TO_LEGACY = True
 
@@ -126,6 +129,7 @@ async def test_fallback_on_error(mock_settings, mock_tool_use, mock_legacy, eval
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_no_fallback_raises(mock_settings, mock_tool_use, eval_context, adapter):
     """Tool Use 异常 + FALLBACK=false → 抛出异常"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = True
     mock_settings.TOOL_USE_FALLBACK_TO_LEGACY = False
 
@@ -140,6 +144,7 @@ async def test_no_fallback_raises(mock_settings, mock_tool_use, eval_context, ad
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_trace_in_envelope(mock_settings, mock_tool_use, eval_context, adapter):
     """tool_trace 正确传入 AgentResultEnvelope.trace"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = True
 
     tool_trace_data = [
@@ -176,6 +181,7 @@ async def test_trace_in_envelope(mock_settings, mock_tool_use, eval_context, ada
 @patch("app.orchestration.adapters.knowledge.settings")
 async def test_parse_result_score_none(mock_settings, mock_tool_use, eval_context, adapter):
     """score=None 时 status=insufficient"""
+    mock_settings.ENABLE_REACT_KNOWLEDGE = False
     mock_settings.ENABLE_TOOL_USE = True
 
     mock_tool_use.return_value = {

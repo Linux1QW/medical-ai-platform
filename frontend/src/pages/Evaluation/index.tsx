@@ -2,18 +2,12 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Card, Typography, Progress, Row, Col, Collapse, Button, Spin, message, Tag, Badge } from 'antd';
 import { FileTextOutlined, RobotOutlined, MedicineBoxOutlined, ReadOutlined, HeartOutlined, CheckCircleOutlined, ExperimentOutlined, BulbOutlined, TrophyOutlined, WarningOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { getEvaluation, createEvaluation } from '../../api/evaluation';
 import { getConsultationDetail } from '../../api/consultation';
 import type { Evaluation, ConsultationDetail, Citation } from '../../types';
+import { ScoreDisplay, DimensionRadar, getScoreColor, getScoreLevel } from '../../components';
 
 const { Title, Paragraph, Text } = Typography;
-
-const scoreColor = (score: number) => {
-  if (score >= 80) return '#52c41a';
-  if (score >= 60) return '#faad14';
-  return '#ff4d4f';
-};
 
 const EvaluationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -182,13 +176,13 @@ const EvaluationPage: React.FC = () => {
 
   const isNeedsReview = evaluation.evaluation_status === 'needs_review' || evaluation.human_review_needed === true;
 
-  const radarData = [
-    { subject: '病史采集', score: evaluation.inquiry_score, fullMark: 100 },
-    { subject: '医学知识', score: isNeedsReview ? null : (evaluation.knowledge_score ?? null), fullMark: 100 },
-    { subject: '人文关怀', score: evaluation.humanistic_score, fullMark: 100 },
-    { subject: '诊断结果', score: evaluation.diagnosis_score, fullMark: 100 },
-    { subject: '治疗方案', score: evaluation.treatment_score, fullMark: 100 },
-  ].filter(item => item.score !== null);
+  const radarScores = {
+    病史采集: evaluation.inquiry_score,
+    医学知识: isNeedsReview ? null : (evaluation.knowledge_score ?? null),
+    人文关怀: evaluation.humanistic_score,
+    诊断结果: evaluation.diagnosis_score,
+    治疗方案: evaluation.treatment_score,
+  };
 
   const dimensionItems = [
     { key: 'inquiry', label: '病史采集', score: evaluation.inquiry_score, analysis: evaluation.inquiry_analysis, icon: <ReadOutlined /> },
@@ -198,12 +192,6 @@ const EvaluationPage: React.FC = () => {
     { key: 'humanistic', label: '人文关怀', score: evaluation.humanistic_score, analysis: evaluation.humanistic_analysis, icon: <HeartOutlined /> },
   ];
 
-  const scoreLevel = (score: number) => {
-    const color = scoreColor(score);
-    if (score >= 80) return { text: '优秀', color };
-    if (score >= 60) return { text: '良好', color };
-    return { text: '待提升', color };
-  };
 
   const parseSuggestions = (text: string) => {
     if (!text) return [];
@@ -250,7 +238,7 @@ const EvaluationPage: React.FC = () => {
                       type="dashboard" 
                       percent={evaluation.total_score ?? 0} 
                       size={160} 
-                      strokeColor={scoreColor(evaluation.total_score ?? 0)} 
+                      strokeColor={getScoreColor(evaluation.total_score ?? 0)} 
                       format={(p) => <span style={{ fontSize: 36, fontWeight: 700 }}>{p}</span>} 
                     />
                     <div style={{ marginTop: 8, fontSize: 18, fontWeight: 600 }}>综合评分</div>
@@ -258,21 +246,7 @@ const EvaluationPage: React.FC = () => {
                 )}
               </Col>
               <Col span={16} style={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="subject" />
-                    <PolarRadiusAxis angle={30} domain={[0, 100]} />
-                    <Tooltip />
-                    <Radar
-                      name="评估得分"
-                      dataKey="score"
-                      stroke="#1677ff"
-                      fill="#1677ff"
-                      fillOpacity={0.6}
-                    />
-                  </RadarChart>
-                </ResponsiveContainer>
+                <DimensionRadar scores={radarScores} />
               </Col>
             </Row>
           </Card>
@@ -282,14 +256,14 @@ const EvaluationPage: React.FC = () => {
       {/* 五维度分数概览卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {dimensionItems.map(item => {
-          const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : scoreLevel(item.score ?? 0);
+          const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : getScoreLevel(item.score ?? 0);
           return (
             <Col xs={12} sm={8} lg={Math.floor(24 / 5)} key={item.key} style={{ minWidth: 140 }}>
               <Card size="small" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, color: '#555', marginBottom: 4 }}>{item.icon}</div>
                 <div style={{ fontSize: 13, color: '#888' }}>{item.label}</div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: level.color }}>
-                  {item.isReview ? <Tag color="orange">待复核</Tag> : (item.score ?? '-')}
+                  {item.isReview ? <Tag color="orange">待复核</Tag> : <ScoreDisplay score={item.score ?? 0} size="large" />}
                 </div>
                 <Tag color={level.color} style={{ borderRadius: 10 }}>{level.text}</Tag>
               </Card>
@@ -303,7 +277,7 @@ const EvaluationPage: React.FC = () => {
         <Collapse
           accordion
           items={dimensionItems.map(item => {
-            const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : scoreLevel(item.score ?? 0);
+            const level = item.isReview ? { text: '待复核', color: '#fa8c16' } : getScoreLevel(item.score ?? 0);
             return {
               key: item.key,
               label: (

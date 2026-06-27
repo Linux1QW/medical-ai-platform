@@ -8,12 +8,16 @@
 4. 预警机制：预算即将耗尽时触发预警
 5. 动态调整：根据运行状态动态调整预算分配
 """
+from __future__ import annotations
 
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from enum import Enum
+
+if TYPE_CHECKING:
+    from .budget import ToolBudget
 
 logger = logging.getLogger(__name__)
 

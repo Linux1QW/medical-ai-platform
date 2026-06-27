@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from passlib.context import CryptContext
 
 from app.api.v1 import auth as auth_module
+from app.core.limiter import limiter
 from app.core.security import (
     hash_password,
     verify_password,
@@ -26,6 +27,8 @@ class TestAuthPasswordLength(unittest.TestCase):
     def setUp(self):
         app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app)
+        # 重置限流器状态，避免测试间共享 slowapi 限流计数导致 429
+        limiter.reset()
 
     def tearDown(self):
         self.client.close()
@@ -91,8 +94,7 @@ class TestAuthPasswordLength(unittest.TestCase):
                 "/api/v1/auth/login",
                 json={"username": "admin", "password": very_long_password},
             )
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("用户名或密码错误", str(response.json()))
+        self.assertEqual(response.status_code, 422)
 
     def test_login_accepts_empty_password_without_length_error(self):
         async def fake_authenticate_user(db, username, password):

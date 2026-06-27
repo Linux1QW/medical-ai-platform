@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.v1 import auth as auth_module
+from app.core.limiter import limiter
 from app.db.session import get_db
 from app.main import app
 
@@ -17,6 +18,8 @@ class TestAuthErrorHandling(unittest.TestCase):
     def setUp(self):
         app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app, raise_server_exceptions=False)
+        # 重置限流器状态，避免测试间共享 slowapi 限流计数导致 429
+        limiter.reset()
 
     def tearDown(self):
         self.client.close()

@@ -29,6 +29,8 @@ async def record_audit_log(
         resource_id: 关联资源ID
         detail: 操作详情（禁止记录密码等敏感信息）
     """
+    if db is None:
+        return
     if not settings.AUDIT_LOG_ENABLED:
         return
 

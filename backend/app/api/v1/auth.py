@@ -46,7 +46,8 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
             db, user_id=None, action="login", request=request,
             detail=f"登录失败: username={data.username}",
         )
-        await db.commit()
+        if db is not None:
+            await db.commit()
         raise HTTPException(
             status_code=401,
             detail={"error_code": "AUTH_INVALID_CREDENTIALS", "message": "用户名或密码错误"},
@@ -57,7 +58,8 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
         db, user_id=user.id, action="login", request=request,
         detail=f"登录成功: username={user.username}",
     )
-    await db.commit()
+    if db is not None:
+        await db.commit()
     return Token(access_token=access_token, user=UserOut.model_validate(user))
 
 

@@ -21,13 +21,17 @@ from app.services.llm_cache import LLMResponseCache, _build_cache_key
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def reset_stats():
-    """每个测试前重置统计计数器"""
+async def reset_redis_and_stats():
+    """每个测试前重置 Redis 客户端和统计计数器"""
+    # 重置全局 Redis 客户端，确保 _get_redis() 重新初始化
+    llm_cache_module._redis_client = None
+    # 重置统计计数器
     llm_cache_module._cache_hits = 0
     llm_cache_module._cache_misses = 0
     llm_cache_module._cache_errors = 0
-    llm_cache_module._redis_client = None
     yield
+    # 清理后也重置，避免影响后续测试
+    llm_cache_module._redis_client = None
 
 
 @pytest.fixture

@@ -2,16 +2,15 @@
 LLMResponseCache 单元测试
 
 测试策略：
-- 使用 fakeredis 模拟 Redis（无需真实 Redis 实例）
-- 如果 fakeredis 不可用，则通过 mock 模拟 Redis 行为
+- 通过 conftest.py 中的 session 级别 fixture 全局 mock Redis
+- 每个测试通过 reset_redis_and_stats fixture 清空 store 并重置状态
 - 覆盖所有核心路径：命中、未命中、temperature>0 跳过、禁用跳过、异常降级、统计指标
 """
 
-import asyncio
 import hashlib
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 # ── 被测模块 ──────────────────────────────────────────────────────────────────
 import app.services.llm_cache as llm_cache_module
@@ -22,54 +21,21 @@ from app.services.llm_cache import LLMResponseCache, _build_cache_key
 
 @pytest.fixture(autouse=True)
 def reset_redis_and_stats():
-    """每个测试前重置 Redis 客户端和统计计数器"""
-    # 重置全局 Redis 客户端，确保 _get_redis() 重新初始化
+    """每个测试前重置 Redis 客户端、统计计数器和 mock store"""
+    # 重置全局 Redis 客户端（conftest 的 session fixture 已 mock _get_redis）
     llm_cache_module._redis_client = None
     # 重置统计计数器
     llm_cache_module._cache_hits = 0
     llm_cache_module._cache_misses = 0
     llm_cache_module._cache_errors = 0
+    # 清空 mock Redis 的内存 store
+    if hasattr(llm_cache_module, '_mock_redis_store'):
+        llm_cache_module._mock_redis_store.clear()
+
     yield
+
     # 清理后也重置，避免影响后续测试
     llm_cache_module._redis_client = None
-
-
-@pytest.fixture
-def mock_redis():
-    """创建一个模拟的 Redis 客户端（内存字典存储）"""
-    store = {}
-
-    async def mock_get(key):
-        return store.get(key)
-
-    async def mock_setex(key, ttl, value):
-        store[key] = value
-
-    async def mock_ping():
-        return True
-
-    async def mock_scan(cursor, match, count):
-        import fnmatch
-        matched = [k for k in store.keys() if fnmatch.fnmatch(k, match)]
-        return 0, matched
-
-    async def mock_delete(*keys):
-        for k in keys:
-            store.pop(k, None)
-
-    async def mock_ttl(key):
-        return 3600 if key in store else -2
-
-    redis_mock = AsyncMock()
-    redis_mock.get = mock_get
-    redis_mock.setex = mock_setex
-    redis_mock.ping = mock_ping
-    redis_mock.scan = mock_scan
-    redis_mock.delete = mock_delete
-    redis_mock.ttl = mock_ttl
-    redis_mock._store = store
-
-    return redis_mock
 
 
 SAMPLE_MESSAGES = [
@@ -125,33 +91,30 @@ class TestCacheReadWrite:
     """测试缓存写入和读取"""
 
     @pytest.mark.asyncio
-    async def test_set_then_get(self, mock_redis):
+    async def test_set_then_get(self):
         """写入缓存后可以读取"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
-            )
-            result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
-            assert result == SAMPLE_RESPONSE
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
+        )
+        result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        assert result == SAMPLE_RESPONSE
 
     @pytest.mark.asyncio
-    async def test_cache_miss(self, mock_redis):
+    async def test_cache_miss(self):
         """缓存未命中时返回 None"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
-            assert result is None
+        result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_different_model_no_cross_contamination(self, mock_redis):
+    async def test_different_model_no_cross_contamination(self):
         """不同模型之间缓存不交叉污染"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, "model-A", 0.0, "response-A"
-            )
-            result_a = await LLMResponseCache.get(SAMPLE_MESSAGES, "model-A", 0.0)
-            result_b = await LLMResponseCache.get(SAMPLE_MESSAGES, "model-B", 0.0)
-            assert result_a == "response-A"
-            assert result_b is None
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, "model-A", 0.0, "response-A"
+        )
+        result_a = await LLMResponseCache.get(SAMPLE_MESSAGES, "model-A", 0.0)
+        result_b = await LLMResponseCache.get(SAMPLE_MESSAGES, "model-B", 0.0)
+        assert result_a == "response-A"
+        assert result_b is None
 
 
 # ── 测试 temperature > 0 不缓存 ────────────────────────────────────────────────
@@ -160,27 +123,25 @@ class TestTemperatureFilter:
     """temperature > 0 时不启用缓存"""
 
     @pytest.mark.asyncio
-    async def test_get_with_positive_temperature(self, mock_redis):
+    async def test_get_with_positive_temperature(self):
         """temperature > 0 时 get 返回 None（不查缓存）"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            # 先写入缓存
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
-            )
-            # temperature=0.5 时不应命中缓存
-            result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.5)
-            assert result is None
+        # 先写入缓存
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
+        )
+        # temperature=0.5 时不应命中缓存
+        result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.5)
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_set_with_positive_temperature(self, mock_redis):
+    async def test_set_with_positive_temperature(self):
         """temperature > 0 时 set 不写入缓存"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.5, SAMPLE_RESPONSE
-            )
-            # 即使写入，temperature=0 时也读不到（因为 key 包含 temperature）
-            result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
-            assert result is None
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.5, SAMPLE_RESPONSE
+        )
+        # 即使写入，temperature=0 时也读不到（因为 key 包含 temperature）
+        result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        assert result is None
 
 
 # ── 测试缓存禁用 ──────────────────────────────────────────────────────────────
@@ -189,15 +150,14 @@ class TestCacheDisabled:
     """LLM_CACHE_ENABLED=False 时不写入缓存"""
 
     @pytest.mark.asyncio
-    async def test_set_when_disabled(self, mock_redis):
+    async def test_set_when_disabled(self):
         """缓存禁用时 set 不写入"""
         with patch.object(llm_cache_module.settings, 'LLM_CACHE_ENABLED', False):
-            with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-                await LLMResponseCache.set(
-                    SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
-                )
-                # store 应该为空
-                assert len(mock_redis._store) == 0
+            await LLMResponseCache.set(
+                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
+            )
+            # store 应该为空
+            assert len(llm_cache_module._mock_redis_store) == 0
 
 
 # ── 测试异常降级 ──────────────────────────────────────────────────────────────
@@ -217,32 +177,40 @@ class TestGracefulDegradation:
             assert llm_cache_module._cache_misses == 1
 
     @pytest.mark.asyncio
-    async def test_get_redis_exception_returns_none(self, mock_redis):
+    async def test_get_redis_exception_returns_none(self):
         """Redis get 操作异常时返回 None（不抛异常）"""
+        mock_redis = llm_cache_module._mock_redis
+        original_get = mock_redis.get
+
         async def failing_get(key):
             raise ConnectionError("Redis connection lost")
 
         mock_redis.get = failing_get
-
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
+        try:
             result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
             assert result is None
             assert llm_cache_module._cache_errors == 1
+        finally:
+            mock_redis.get = original_get
 
     @pytest.mark.asyncio
-    async def test_set_redis_exception_silent(self, mock_redis):
+    async def test_set_redis_exception_silent(self):
         """Redis set 操作异常时静默处理"""
+        mock_redis = llm_cache_module._mock_redis
+        original_setex = mock_redis.setex
+
         async def failing_setex(key, ttl, value):
             raise ConnectionError("Redis connection lost")
 
         mock_redis.setex = failing_setex
-
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
+        try:
             # 不应抛出异常
             await LLMResponseCache.set(
                 SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
             )
             assert llm_cache_module._cache_errors == 1
+        finally:
+            mock_redis.setex = original_setex
 
 
 # ── 测试统计指标 ──────────────────────────────────────────────────────────────
@@ -260,65 +228,66 @@ class TestStats:
         assert stats["hit_rate"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_stats_after_hit(self, mock_redis):
+    async def test_stats_after_hit(self):
         """缓存命中后统计正确"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            # 先写入
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
-            )
-            # 命中
-            await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        # 先写入
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
+        )
+        # 命中
+        await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
 
-            stats = await LLMResponseCache.get_stats()
-            assert stats["cache_hits"] == 1
-            assert stats["cache_misses"] == 0
-            assert stats["hit_rate"] == 100.0
+        stats = await LLMResponseCache.get_stats()
+        assert stats["cache_hits"] == 1
+        assert stats["cache_misses"] == 0
+        assert stats["hit_rate"] == 100.0
 
     @pytest.mark.asyncio
-    async def test_stats_after_miss(self, mock_redis):
+    async def test_stats_after_miss(self):
         """缓存未命中后统计正确"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
 
-            stats = await LLMResponseCache.get_stats()
-            assert stats["cache_hits"] == 0
-            assert stats["cache_misses"] == 1
-            assert stats["hit_rate"] == 0.0
+        stats = await LLMResponseCache.get_stats()
+        assert stats["cache_hits"] == 0
+        assert stats["cache_misses"] == 1
+        assert stats["hit_rate"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_stats_hit_rate_mixed(self, mock_redis):
+    async def test_stats_hit_rate_mixed(self):
         """混合命中/未命中时命中率计算正确"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            # 写入并命中一次
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
-            )
-            await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
+        # 写入并命中一次
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, SAMPLE_RESPONSE
+        )
+        await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
 
-            # 未命中一次（不同消息）
-            other_msgs = [{"role": "user", "content": "另一个问题"}]
-            await LLMResponseCache.get(other_msgs, SAMPLE_MODEL, 0.0)
+        # 未命中一次（不同消息）
+        other_msgs = [{"role": "user", "content": "另一个问题"}]
+        await LLMResponseCache.get(other_msgs, SAMPLE_MODEL, 0.0)
 
-            stats = await LLMResponseCache.get_stats()
-            assert stats["cache_hits"] == 1
-            assert stats["cache_misses"] == 1
-            assert stats["hit_rate"] == 50.0
+        stats = await LLMResponseCache.get_stats()
+        assert stats["cache_hits"] == 1
+        assert stats["cache_misses"] == 1
+        assert stats["hit_rate"] == 50.0
 
     @pytest.mark.asyncio
-    async def test_stats_error_count(self, mock_redis):
+    async def test_stats_error_count(self):
         """异常次数统计正确"""
+        mock_redis = llm_cache_module._mock_redis
+        original_get = mock_redis.get
+
         async def failing_get(key):
             raise ConnectionError("fail")
 
         mock_redis.get = failing_get
-
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
+        try:
             await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
             await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
 
             stats = await LLMResponseCache.get_stats()
             assert stats["cache_errors"] == 2
+        finally:
+            mock_redis.get = original_get
 
 
 # ── 测试 clear ────────────────────────────────────────────────────────────────
@@ -327,15 +296,14 @@ class TestClear:
     """测试缓存清除"""
 
     @pytest.mark.asyncio
-    async def test_clear_removes_all_keys(self, mock_redis):
+    async def test_clear_removes_all_keys(self):
         """clear 清除所有 llm_cache:* 键"""
-        with patch.object(llm_cache_module, '_get_redis', return_value=mock_redis):
-            await LLMResponseCache.set(
-                SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, "resp1"
-            )
-            msgs2 = [{"role": "user", "content": "另一个问题"}]
-            await LLMResponseCache.set(msgs2, SAMPLE_MODEL, 0.0, "resp2")
+        await LLMResponseCache.set(
+            SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0, "resp1"
+        )
+        msgs2 = [{"role": "user", "content": "另一个问题"}]
+        await LLMResponseCache.set(msgs2, SAMPLE_MODEL, 0.0, "resp2")
 
-            assert len(mock_redis._store) == 2
-            await LLMResponseCache.clear()
-            assert len(mock_redis._store) == 0
+        assert len(llm_cache_module._mock_redis_store) == 2
+        await LLMResponseCache.clear()
+        assert len(llm_cache_module._mock_redis_store) == 0

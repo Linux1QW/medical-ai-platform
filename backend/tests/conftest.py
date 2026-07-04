@@ -56,7 +56,7 @@ def mock_llm_cache_redis():
     全局 mock LLM 缓存的 Redis 连接（session 级别）
 
     在所有测试开始前就将 _get_redis 替换为返回 mock 客户端的异步函数，
-    确保 CI 中有真实 Redis 服务时也不会被测试代码连接。
+    确保 CI 上有真实 Redis 服务时也不会被测试代码连接。
     """
     redis_mock, store = _build_mock_redis()
 
@@ -71,6 +71,14 @@ def mock_llm_cache_redis():
     llm_cache_module._get_redis = mocked_get_redis
     llm_cache_module._redis_client = redis_mock
 
+    # Mock 掉 _enforce_max_size，防止随机触发 1% 概率清理导致测试不稳定
+    original_enforce_max_size = llm_cache_module._enforce_max_size
+
+    async def noop_enforce_max_size(r):
+        pass
+
+    llm_cache_module._enforce_max_size = noop_enforce_max_size
+
     # 将 store 和 mock 暴露到模块上，方便测试 fixture 清空和方法覆盖
     llm_cache_module._mock_redis_store = store
     llm_cache_module._mock_redis = redis_mock
@@ -80,6 +88,7 @@ def mock_llm_cache_redis():
     # 恢复原始状态
     llm_cache_module._get_redis = original_get_redis
     llm_cache_module._redis_client = original_redis_client
+    llm_cache_module._enforce_max_size = original_enforce_max_size
     if hasattr(llm_cache_module, '_mock_redis_store'):
         delattr(llm_cache_module, '_mock_redis_store')
     if hasattr(llm_cache_module, '_mock_redis'):

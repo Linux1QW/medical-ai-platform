@@ -22,8 +22,8 @@ from app.services.llm_cache import LLMResponseCache, _build_cache_key
 @pytest.fixture(autouse=True)
 def reset_redis_and_stats():
     """每个测试前重置 Redis 客户端、统计计数器和 mock store"""
-    # 重置全局 Redis 客户端（conftest 的 session fixture 已 mock _get_redis）
-    llm_cache_module._redis_client = None
+    # 重置为 mock Redis 实例（不是 None！None 会导致 _get_redis 连接真实 Redis）
+    llm_cache_module._redis_client = llm_cache_module._mock_redis
     # 重置统计计数器
     llm_cache_module._cache_hits = 0
     llm_cache_module._cache_misses = 0
@@ -34,8 +34,8 @@ def reset_redis_and_stats():
 
     yield
 
-    # 清理后也重置，避免影响后续测试
-    llm_cache_module._redis_client = None
+    # 清理后也重置为 mock
+    llm_cache_module._redis_client = llm_cache_module._mock_redis
 
 
 SAMPLE_MESSAGES = [

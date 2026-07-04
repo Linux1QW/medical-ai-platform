@@ -49,6 +49,17 @@ const EvaluationPage: React.FC = () => {
     setLoading(false);
   }, [id]);
 
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  // 加载完成后若无评估记录，自动生成评估
+  const [autoTriggered, setAutoTriggered] = useState(false);
+  useEffect(() => {
+    if (!loading && !evaluation && !generating && !autoTriggered && id) {
+      setAutoTriggered(true);
+      handleGenerate();
+    }
+  }, [loading, evaluation, generating, autoTriggered, id]);
+
   const handleGenerate = async (isAutoRetry = false) => {
     if (!id) return;
     setGenerating(true);
@@ -128,8 +139,6 @@ const EvaluationPage: React.FC = () => {
     }
   };
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
   if (loading) return <Spin style={{ display: 'block', margin: '100px auto' }} size="large" />;
 
   if (generating) {
@@ -155,8 +164,8 @@ const EvaluationPage: React.FC = () => {
     return (
       <div style={{ textAlign: 'center', padding: 80 }}>
         <RobotOutlined style={{ fontSize: 64, color: '#bbb', marginBottom: 24 }} />
-        <Title level={4}>暂无评估报告</Title>
-        <Paragraph type="secondary">点击下方按钮，七个 AI 智能体将协同分析您的问诊表现（五维评估 + 综合评分 + 改进建议）</Paragraph>
+        <Title level={4}>评估生成失败</Title>
+        <Paragraph type="secondary">评估报告生成遇到问题，请稍后重试或联系管理员</Paragraph>
         {consultation?.diagnosis ? (
           <Card style={{ maxWidth: 500, margin: '16px auto', textAlign: 'left' }} size="small">
             <Text strong>已提交的诊断：</Text>
@@ -167,8 +176,8 @@ const EvaluationPage: React.FC = () => {
         ) : (
           <Paragraph type="warning">提示：您尚未提交诊断结果和治疗方案，相关维度评估可能不完整</Paragraph>
         )}
-        <Button type="primary" size="large" onClick={() => handleGenerate()} loading={generating} icon={<FileTextOutlined />} style={{ marginTop: 16 }}>
-          生成评估报告
+        <Button type="primary" size="large" onClick={() => { setAutoTriggered(false); handleGenerate(); }} icon={<FileTextOutlined />} style={{ marginTop: 16 }}>
+          重新生成评估报告
         </Button>
       </div>
     );

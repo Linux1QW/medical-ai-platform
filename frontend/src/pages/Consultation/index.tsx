@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, Input, Button, List, Avatar, Typography, Tag, Space, Spin, message, Modal, Form, Popconfirm, Divider, Progress } from 'antd';
-import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined, LoadingOutlined } from '@ant-design/icons';
+import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined, LoadingOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getConsultationDetail, sendMessageStream, submitDiagnosis, endConsultation, extendRounds } from '../../api/consultation';
 import type { SSEProgressEvent } from '../../api/consultation';
 import { getPatient } from '../../api/patient';
-import type { Message, VirtualPatient } from '../../types';
+import { getEvaluation } from '../../api/evaluation';
+import type { Message, VirtualPatient, Evaluation } from '../../types';
+import { ScoreDisplay, getScoreColor, getScoreLevel } from '../../components';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -29,6 +31,8 @@ const ConsultationPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [maxRounds, setMaxRounds] = useState(20);
   const [progressInfo, setProgressInfo] = useState<SSEProgressEvent | null>(null);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [evalLoading, setEvalLoading] = useState(false);
   const [form] = Form.useForm();
   const listRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -176,6 +180,17 @@ const ConsultationPage: React.FC = () => {
   const currentRounds = messages.filter(m => m.role === 'doctor').length;
   const isRoundLimitReached = currentRounds >= maxRounds;
 
+  // 问诊结束后加载评估结果
+  useEffect(() => {
+    if (id && isEnded) {
+      setEvalLoading(true);
+      getEvaluation(Number(id))
+        .then(setEvaluation)
+        .catch(() => setEvaluation(null))
+        .finally(() => setEvalLoading(false));
+    }
+  }, [id, isEnded]);
+
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 180px)' }}>
       <Card style={{ width: 280, flexShrink: 0, overflow: 'auto' }} title="患者信息">
@@ -287,6 +302,70 @@ const ConsultationPage: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {/* 评估结果摘要 */}
+      {isEnded && (
+        <Card
+          style={{ width: 300, flexShrink: 0, overflow: 'auto' }}
+          title={
+            <span>
+              <TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />
+              评估结果
+            </span>
+          }
+        >
+          {evalLoading ? (
+            <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+          ) : evaluation ? (
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                <Progress
+                  type="dashboard"
+                  percent={evaluation.total_score ?? 0}
+                  size={100}
+                  strokeColor={getScoreColor(evaluation.total_score ?? 0)}
+                  format={(p) => <span style={{ fontSize: 24, fontWeight: 700 }}>{p}</span>}
+                />
+                <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>
+                  综合评分 — {getScoreLevel(evaluation.total_score ?? 0).text}
+                </div>
+              </div>
+              <Divider style={{ margin: '8px 0' }} />
+              {[
+                { label: '病史采集', score: evaluation.inquiry_score },
+                { label: '诊断结果', score: evaluation.diagnosis_score },
+                { label: '治疗方案', score: evaluation.treatment_score },
+                { label: '人文关怀', score: evaluation.humanistic_score },
+              ].map((item) => (
+                <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13 }}>{item.label}</Text>
+                  <ScoreDisplay score={item.score ?? 0} size="small" />
+                </div>
+              ))}
+              {evaluation.knowledge_score != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13 }}>医学知识</Text>
+                  <Tag color={evaluation.evaluation_status === 'needs_review' ? 'orange' : 'blue'}>
+                    {evaluation.evaluation_status === 'needs_review' ? '待复核' : evaluation.knowledge_score}
+                  </Tag>
+                </div>
+              )}
+              <Divider style={{ margin: '8px 0' }} />
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/evaluation/${id}`)}>
+                查看完整评估报告 →
+              </Button>
+            </Space>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 24 }}>
+              <Text type="secondary">暂无评估数据</Text>
+              <br />
+              <Button type="primary" size="small" style={{ marginTop: 12 }} onClick={() => navigate(`/evaluation/${id}`)}>
+                前往生成评估
+              </Button>
+            </div>
+          )}
+        </Card>
+      )}
 
       <Modal
         title="提交诊断结果与治疗方案"

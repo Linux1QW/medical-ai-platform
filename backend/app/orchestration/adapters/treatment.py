@@ -1,36 +1,13 @@
 """治疗方案评估 Agent 适配器"""
 
-import json
-import re
 import logging
 
 from app.orchestration.adapters.base import BaseAgentAdapter
 from app.orchestration.state import AgentResultEnvelope, EvaluationContext
 from app.services.agents.treatment_agent import run_treatment_evaluation
+from app.utils.json_parser import extract_json_from_text
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_json_from_text(text: str) -> dict:
-    """从 LLM 返回文本中提取 JSON"""
-    if not text or not text.strip():
-        return {}
-    try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return {}
 
 
 class TreatmentAdapter(BaseAgentAdapter):
@@ -40,13 +17,20 @@ class TreatmentAdapter(BaseAgentAdapter):
         patient_info = self._build_patient_info(context)
         doctor_diagnosis = context.doctor_diagnosis or ""
         treatment_plan = context.treatment_plan or ""
+        knowledge_citations = getattr(context, "knowledge_citations", None) or None
         return await run_treatment_evaluation(
-            context.conversation_text, patient_info, doctor_diagnosis, treatment_plan
+            context.conversation_text,
+            patient_info,
+            doctor_diagnosis,
+            treatment_plan,
+            knowledge_citations=knowledge_citations,
         )
 
     def _parse_result(self, raw: dict) -> AgentResultEnvelope:
         raw_response = raw.get("raw_response", "")
-        data = _extract_json_from_text(raw_response) if isinstance(raw_response, str) else raw_response
+        data = extract_json_from_text(
+            raw_response, default={}, raise_on_failure=False
+        ) if isinstance(raw_response, str) else raw_response
 
         score = data.get("score")
         analysis = data.get("analysis", "")

@@ -422,7 +422,7 @@ class TestAgentSignatures:
 
         sig = inspect.signature(run_diagnosis_evaluation)
         params = list(sig.parameters.keys())
-        assert params == ["conversation_text", "patient_info", "doctor_diagnosis"], (
+        assert params == ["conversation_text", "patient_info", "doctor_diagnosis", "knowledge_citations"], (
             f"run_diagnosis_evaluation 参数已变更: {params}"
         )
 
@@ -434,7 +434,7 @@ class TestAgentSignatures:
         params = list(sig.parameters.keys())
         assert params == [
             "conversation_text", "patient_info",
-            "doctor_diagnosis", "treatment_plan",
+            "doctor_diagnosis", "treatment_plan", "knowledge_citations",
         ], f"run_treatment_evaluation 参数已变更: {params}"
 
     def test_scoring_agent_signature(self):

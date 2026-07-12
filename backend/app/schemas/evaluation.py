@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CitationOut(BaseModel):
@@ -41,8 +41,7 @@ class EvaluationOut(BaseModel):
     rag_trace_data: Optional[dict] = None
     evaluation_status: str = "completed"
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EvaluationRequest(BaseModel):

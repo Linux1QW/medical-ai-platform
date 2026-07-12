@@ -18,14 +18,16 @@ from typing import Dict, List, Optional
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.embeddings import get_embedding, get_embeddings
 from app.services.rag.bm25_search import get_bm25_index
+from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
 from app.services.rag.reranker import rerank_documents
 from app.services.rag.types import (
-    EvidenceItem, RetrievalBundle, RetrievalQuery,
+    EvidenceItem, RetrievalBundle, RetrievalQuery, RetrievalConfidence,
     MIN_CANDIDATE_COUNT, MIN_QUERY_TYPE_COVERAGE, MIN_RRF_SCORE, MIN_SOURCE_COUNT,
     MIN_VECTOR_SCORE,
     MAX_MQE_EXPANSIONS, MAX_HYDE_CALLS, MAX_RAG_CANDIDATES,
 )
 from app.core.config import settings
+from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -665,43 +667,67 @@ def _dict_to_evidence(
     return items
 
 
+def _assess_confidence(
+    candidates: list,
+    query_types_covered: int,
+    source_count: int,
+    max_vector_score: float,
+    max_rrf_score: float,
+) -> RetrievalConfidence:
+    """评估检索置信度
+
+    Returns:
+        RetrievalConfidence.HIGH: 多来源高分，直接使用
+        RetrievalConfidence.MEDIUM: 部分满足，尝试增强
+        RetrievalConfidence.LOW: 严重不足，准备拒答
+    """
+    if not candidates:
+        return RetrievalConfidence.LOW
+
+    # HIGH: 充分证据
+    if (
+        len(candidates) >= 5
+        and source_count >= 3
+        and max_vector_score >= 0.7
+        and query_types_covered >= 2
+    ):
+        return RetrievalConfidence.HIGH
+
+    # MEDIUM: 有一定证据但不充分
+    if (
+        len(candidates) >= 3
+        and source_count >= 2
+        and (max_vector_score >= 0.5 or max_rrf_score >= 0.015)
+    ):
+        return RetrievalConfidence.MEDIUM
+
+    # LOW: 证据严重不足
+    return RetrievalConfidence.LOW
+
+
 def _assess_retrieval(
     candidates: list,
     query_types_with_hits: set,
     all_query_types: set,
 ) -> str:
-    """综合判断召回是否充分
-
-    Returns:
-        "sufficient" | "insufficient" | "unavailable"
-    """
+    """兼容包装，返回 'sufficient' 或 'insufficient'"""
     if not candidates:
         return "unavailable"
 
-    # 候选数量
-    if len(candidates) < MIN_CANDIDATE_COUNT:
-        return "insufficient"
-
-    # 查询类型覆盖率
-    if len(query_types_with_hits) < MIN_QUERY_TYPE_COVERAGE:
-        return "insufficient"
-
-    # 来源多样性
     sources = set(c.source for c in candidates)
-    if len(sources) < MIN_SOURCE_COUNT:
-        return "insufficient"
+    max_vector = max((c.vector_score or 0) for c in candidates)
+    max_rrf = max((c.rrf_score or 0) for c in candidates)
 
-    # 分数检查 — 分别判断各通道分数
-    has_good_vector = any(
-        (c.vector_score or 0) >= MIN_VECTOR_SCORE for c in candidates
+    confidence = _assess_confidence(
+        candidates=candidates,
+        query_types_covered=len(query_types_with_hits),
+        source_count=len(sources),
+        max_vector_score=max_vector,
+        max_rrf_score=max_rrf,
     )
-    has_good_rrf = any(
-        (c.rrf_score or 0) >= MIN_RRF_SCORE for c in candidates
-    )
-    if not has_good_vector and not has_good_rrf:
-        return "insufficient"
-
-    return "sufficient"
+    return "sufficient" if confidence in (
+        RetrievalConfidence.HIGH, RetrievalConfidence.MEDIUM
+    ) else "insufficient"
 
 
 def _merge_evidence(
@@ -783,6 +809,14 @@ async def tiered_retrieve(
             trace={"error": "empty_queries"},
         )
 
+    # ── 缓存检查 ──
+    queries_text = "|".join(sorted(q.text for q in queries))
+    index_version = settings.ACTIVE_INDEX_VERSION
+    cached = await get_cached_bundle(queries_text, index_version)
+    if cached is not None:
+        logger.info(f"tiered_retrieve 缓存命中: {index_version}")
+        return RetrievalBundle.model_validate(cached)
+
     start = time.monotonic()
     trace = {
         "index_version": settings.ACTIVE_INDEX_VERSION,
@@ -807,11 +841,51 @@ async def tiered_retrieve(
     query_types_with_hits: set = set()
     all_candidates: list = []
     level_used = "base"
+    decisions: list = []  # 每级决策记录
+
+    def _compute_confidence(cands: list, qtypes_hits: set) -> RetrievalConfidence:
+        """从候选列表计算置信度"""
+        if not cands:
+            return RetrievalConfidence.LOW
+        sources = set(c.source for c in cands)
+        max_vec = max((c.vector_score or 0) for c in cands)
+        max_rrf = max((c.rrf_score or 0) for c in cands)
+        return _assess_confidence(
+            candidates=cands,
+            query_types_covered=len(qtypes_hits),
+            source_count=len(sources),
+            max_vector_score=max_vec,
+            max_rrf_score=max_rrf,
+        )
+
+    def _build_confidence_trace(conf: RetrievalConfidence) -> dict:
+        """构建标准化置信度 trace 片段"""
+        sources = set(c.source for c in all_candidates) if all_candidates else set()
+        max_vec = max((c.vector_score or 0) for c in all_candidates) if all_candidates else 0
+        max_rrf = max((c.rrf_score or 0) for c in all_candidates) if all_candidates else 0
+        return {
+            "confidence": conf.value,
+            "scores": {
+                "vector": round(max_vec, 4),
+                "rrf": round(max_rrf, 4),
+                "source_count": len(sources),
+                "candidate_count": len(all_candidates),
+                "query_types_covered": len(query_types_with_hits),
+            },
+            "thresholds": {
+                "min_vector": 0.5,
+                "min_rrf": 0.015,
+                "min_candidates": 3,
+                "min_sources": 2,
+            },
+        }
 
     # ── Level 1: 基础混合召回 ──
     trace["levels_attempted"].append("base")
     for query in queries:
-        vector_results, bm25_results = await hybrid_recall(query.text, top_k=top_k_per_query)
+        # 实体归一化：将别名映射为规范名，增强 BM25 匹配
+        normalized_text = _entity_normalize_query(query.text)
+        vector_results, bm25_results = await hybrid_recall(normalized_text, top_k=top_k_per_query)
 
         # RRF 融合
         if vector_results and bm25_results:
@@ -837,21 +911,28 @@ async def tiered_retrieve(
 
         all_candidates = _merge_evidence(all_candidates, evidence_items)
 
-    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
-    if status == "sufficient":
+    confidence = _compute_confidence(all_candidates, query_types_with_hits)
+    decisions.append({"level": "base", "confidence": confidence.value, "candidates": len(all_candidates)})
+    if confidence == RetrievalConfidence.HIGH:
         elapsed = time.monotonic() - start
         trace["total_ms"] = round(elapsed * 1000, 1)
         trace["timing"]["retrieval_ms"] = trace["total_ms"]
         trace["retrieval_level"] = "base"
         trace["candidate_count"] = len(all_candidates[:candidate_limit])
         trace["retrieval_status"] = "candidate"
-        return RetrievalBundle(
+        trace.update(_build_confidence_trace(confidence))
+        trace["decisions"] = decisions
+        result = RetrievalBundle(
             status="candidate",
             level_used="base",
             queries=queries,
             candidates=all_candidates[:candidate_limit],
+            confidence=confidence.value,
             trace=trace,
         )
+        await set_cached_bundle(queries_text, index_version, result.model_dump())
+        return result
+    # MEDIUM / LOW → 继续 L2 MQE
 
     # ── Level 2: MQE ──
     trace["levels_attempted"].append("mqe")
@@ -891,8 +972,9 @@ async def tiered_retrieve(
             if len(all_candidates) >= candidate_limit:
                 break
 
-    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
-    if status == "sufficient":
+    confidence = _compute_confidence(all_candidates, query_types_with_hits)
+    decisions.append({"level": "mqe", "confidence": confidence.value, "candidates": len(all_candidates)})
+    if confidence in (RetrievalConfidence.HIGH, RetrievalConfidence.MEDIUM):
         elapsed = time.monotonic() - start
         trace["total_ms"] = round(elapsed * 1000, 1)
         trace["timing"]["retrieval_ms"] = trace["total_ms"]
@@ -900,13 +982,19 @@ async def tiered_retrieve(
         trace["retrieval_level"] = "mqe"
         trace["candidate_count"] = len(all_candidates[:candidate_limit])
         trace["retrieval_status"] = "candidate"
-        return RetrievalBundle(
+        trace.update(_build_confidence_trace(confidence))
+        trace["decisions"] = decisions
+        result = RetrievalBundle(
             status="candidate",
             level_used="mqe",
             queries=queries,
             candidates=all_candidates[:candidate_limit],
+            confidence=confidence.value,
             trace=trace,
         )
+        await set_cached_bundle(queries_text, index_version, result.model_dump())
+        return result
+    # LOW → 继续 L3 HyDE
 
     # ── Level 3: HyDE（每次评估最多 1 次）──
     trace["levels_attempted"].append("hyde")
@@ -926,7 +1014,8 @@ async def tiered_retrieve(
         logger.warning(f"HyDE 检索失败: {e}")
 
     # 最终评估
-    status = _assess_retrieval(all_candidates, query_types_with_hits, all_query_types)
+    confidence = _compute_confidence(all_candidates, query_types_with_hits)
+    decisions.append({"level": "hyde", "confidence": confidence.value, "candidates": len(all_candidates)})
     elapsed = time.monotonic() - start
     trace["total_ms"] = round(elapsed * 1000, 1)
     trace["timing"]["retrieval_ms"] = trace["total_ms"]
@@ -934,12 +1023,21 @@ async def tiered_retrieve(
     trace["hyde_calls"] = 1 if hyde_success else 0
     trace["retrieval_level"] = "hyde"
     trace["candidate_count"] = len(all_candidates[:candidate_limit])
-    trace["retrieval_status"] = "candidate" if status == "sufficient" else status
+    final_status = "candidate" if confidence != RetrievalConfidence.LOW else "insufficient"
+    trace["retrieval_status"] = final_status
+    trace.update(_build_confidence_trace(confidence))
+    trace["decisions"] = decisions
 
-    return RetrievalBundle(
-        status="candidate" if status == "sufficient" else status,
+    result = RetrievalBundle(
+        status=final_status,
         level_used=level_used,
         queries=queries,
         candidates=all_candidates[:candidate_limit],
+        confidence=confidence.value,
         trace=trace,
     )
+
+    # ── 写入缓存 ──
+    await set_cached_bundle(queries_text, index_version, result.model_dump())
+
+    return result

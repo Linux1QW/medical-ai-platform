@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Typography, List, Tag, Button, Select, Space } from 'antd';
+import { Card, Col, Row, Statistic, Typography, List, Tag, Button, Select, Space, message } from 'antd';
 import {
   MessageOutlined,
   TeamOutlined,
@@ -29,7 +29,9 @@ const DashboardPage: React.FC = () => {
   const [days, setDays] = useState(30);
 
   useEffect(() => {
-    getConsultations().then(setConsultations).catch(() => {});
+    getConsultations().then(setConsultations).catch(() => {
+      message.error('加载问诊数据失败');
+    });
   }, []);
 
   const inProgress = consultations.filter((c) => c.status === 'in_progress').length;

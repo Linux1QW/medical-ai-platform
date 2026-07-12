@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PatientCreate(BaseModel):
@@ -30,7 +30,9 @@ class PatientUpdate(BaseModel):
     difficulty_level: int | None = Field(default=None, ge=1, le=5)
 
 
-class PatientOut(BaseModel):
+class DoctorPatientOut(BaseModel):
+    """医生可见的患者信息（不含标准答案与系统提示词）"""
+
     id: int
     name: str
     age: int
@@ -39,10 +41,14 @@ class PatientOut(BaseModel):
     chief_complaint: str
     medical_history: str
     symptoms: str
-    expected_diagnosis: str
-    system_prompt: str = ""
     difficulty_level: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PatientOut(DoctorPatientOut):
+    """管理员可见的完整患者信息"""
+
+    expected_diagnosis: str
+    system_prompt: str = ""

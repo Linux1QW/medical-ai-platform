@@ -7,7 +7,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -21,6 +20,7 @@ from app.orchestration.checkpointer import init_checkpointer, close_checkpointer
 from app.orchestration.adapters import register_all as register_all_adapters
 from app.services.qwen_client import get_llm_metrics
 from app.services.llm_cache import LLMResponseCache, close_cache_redis
+from app.services.rag.retrieval_cache import close_retrieval_cache_redis, get_retrieval_cache_stats
 import app.models  # noqa: F401
 
 logging.basicConfig(
@@ -60,6 +60,8 @@ async def lifespan(app: FastAPI):
     await close_checkpointer()
     # 关闭 LLM 缓存 Redis 连接
     await close_cache_redis()
+    # 关闭检索缓存 Redis 连接
+    await close_retrieval_cache_redis()
 
 
 app = FastAPI(
@@ -71,7 +73,6 @@ app = FastAPI(
 
 # ── 速率限制中间件 ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -99,16 +100,25 @@ def _get_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "-")
 
 
-def _error_response(request: Request, status_code: int, error_code: str, message: str) -> JSONResponse:
+def _error_response(
+    request: Request,
+    status_code: int,
+    error_code: str,
+    message: str,
+    error_type: str | None = None,
+) -> JSONResponse:
     request_id = _get_request_id(request)
+    content: dict = {
+        "error_code": error_code,
+        "message": message,
+        "detail": message,
+        "request_id": request_id,
+    }
+    if error_type:
+        content["error_type"] = error_type
     return JSONResponse(
         status_code=status_code,
-        content={
-            "error_code": error_code,
-            "message": message,
-            "detail": message,
-            "request_id": request_id,
-        },
+        content=content,
         headers={"X-Request-ID": request_id},
     )
 
@@ -139,10 +149,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(detail, dict):
         error_code = detail.get("error_code", f"HTTP_{exc.status_code}")
         message = detail.get("message", "请求失败")
+        error_type = detail.get("error_type")
     else:
         error_code = f"HTTP_{exc.status_code}"
         message = str(detail)
-    return _error_response(request, exc.status_code, error_code, message)
+        error_type = None
+    return _error_response(request, exc.status_code, error_code, message, error_type=error_type)
 
 
 @app.exception_handler(RequestValidationError)
@@ -190,6 +202,7 @@ async def health_check():
         "version": settings.VERSION,
         "llm": get_llm_metrics(),
         "llm_cache": await LLMResponseCache.get_stats(),
+        "retrieval_cache": await get_retrieval_cache_stats(),
         "langgraph_enabled": settings.LANGGRAPH_ENABLED,
         "checkpointer": langgraph_status,
     }

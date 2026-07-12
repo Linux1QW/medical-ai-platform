@@ -9,7 +9,8 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.deps import get_current_user
+from app.core.config import settings
+from app.core.deps import get_current_admin
 from app.models.user import User
 from app.services.rag.build_medical_index import (
     PDF_DIR,
@@ -60,7 +61,7 @@ async def _run_rebuild_task():
     """后台全量重建任务（加锁防止并发）"""
     async with _rebuild_lock:
         _rebuild_status.update({"running": True, "progress": "开始全量重建...", "error": ""})
-        target_version = "rag-v2"
+        target_version = settings.ACTIVE_INDEX_VERSION
         try:
             from app.services.rag.build_medical_index import build_medical_index, switch_index_version
             clear_embed_cache()
@@ -80,7 +81,7 @@ async def _run_rebuild_task():
 # ── 路由 ───────────────────────────────────────────────────────────────────────
 
 @router.get("/stats", response_model=KBStatsResponse, summary="获取知识库统计信息")
-async def get_kb_stats(_: User = Depends(get_current_user)):
+async def get_kb_stats(_: User = Depends(get_current_admin)):
     """返回知识库文档总量、已索引来源列表及 Embedding 缓存状态。"""
     store = get_medical_store()
     total_chunks = store.count()
@@ -96,7 +97,7 @@ async def get_kb_stats(_: User = Depends(get_current_user)):
 @router.post("/add-pdf", response_model=AddPDFResponse, summary="增量添加单个 PDF")
 async def add_pdf(
     body: AddPDFRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_admin),
 ):
     """对 data/ 目录下的单个 PDF 执行增量索引。
 
@@ -148,7 +149,7 @@ async def add_pdf(
 )
 async def delete_source(
     source_name: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_admin),
 ):
     """删除指定来源文件的全部文档块索引。source_name 为文件名，如 '内科学第10版.pdf'。"""
     store = get_medical_store()
@@ -176,7 +177,7 @@ async def delete_source(
 @router.post("/rebuild", summary="触发全量重建（后台异步执行）")
 async def rebuild_index(
     background_tasks: BackgroundTasks,
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_current_admin),
 ):
     """触发后台全量重建任务。重建期间可通过 GET /stats 查看进度。"""
     if _rebuild_status["running"]:
@@ -186,13 +187,13 @@ async def rebuild_index(
 
 
 @router.get("/rebuild/status", summary="查询重建任务状态")
-async def get_rebuild_status(_: User = Depends(get_current_user)):
+async def get_rebuild_status(_: User = Depends(get_current_admin)):
     """返回后台重建任务的当前状态。"""
     return _rebuild_status
 
 
 @router.post("/cache/clear", summary="清空 Embedding 缓存")
-async def clear_cache(_: User = Depends(get_current_user)):
+async def clear_cache(_: User = Depends(get_current_admin)):
     """清空内存中的 Embedding LRU 缓存（重建索引后可调用以释放内存）。"""
     clear_embed_cache()
     return {"message": "Embedding 缓存已清空"}

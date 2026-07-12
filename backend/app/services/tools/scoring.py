@@ -7,12 +7,12 @@
 - 所有工具均为只读，不修改任何评分状态
 """
 
-import json
 import logging
 from typing import Optional
 from pydantic import BaseModel, Field
 
 from .base import BaseTool, ToolContext
+from app.utils.json_parser import extract_json_from_text
 from .registry import ToolRegistry
 from ..scoring.policies import ScoringPolicy, get_default_policy
 from ..qwen_client import call_qwen_chat
@@ -272,33 +272,7 @@ class GenerateImprovementPlan(BaseTool):
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回文本中提取 JSON"""
-    import re
-    
-    if not text or not text.strip():
-        raise ValueError("LLM 返回内容为空")
-    
-    # 尝试直接解析
-    try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-    
-    # 去除 markdown 代码块
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    
-    # 尝试提取 JSON 对象
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    
-    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+    return extract_json_from_text(text)
 
 
 # ── 注册函数 ──────────────────────────────────────────────────────────────────

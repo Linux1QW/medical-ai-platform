@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +9,7 @@ from app.core.deps import get_current_user, get_current_admin
 from app.core.audit import record_audit_log
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.patient import PatientCreate, PatientUpdate, PatientOut
+from app.schemas.patient import PatientCreate, PatientUpdate, PatientOut, DoctorPatientOut
 from app.services.patient_service import (
     create_patient,
     get_patient_by_id,
@@ -21,26 +21,36 @@ from app.services.patient_service import (
 router = APIRouter()
 
 
-@router.get("/", response_model=List[PatientOut])
+def _serialize_patient(patient, user: User):
+    if user.role == "admin":
+        return PatientOut.model_validate(patient)
+    return DoctorPatientOut.model_validate(patient)
+
+
+PatientResponse = Union[DoctorPatientOut, PatientOut]
+
+
+@router.get("/", response_model=List[PatientResponse])
 async def get_patients(
     personality_type: Optional[str] = None,
     difficulty_level: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    return await list_patients(db, personality_type, difficulty_level)
+    patients = await list_patients(db, personality_type, difficulty_level)
+    return [_serialize_patient(p, current_user) for p in patients]
 
 
-@router.get("/{patient_id}", response_model=PatientOut)
+@router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     patient = await get_patient_by_id(db, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="患者不存在")
-    return patient
+    return _serialize_patient(patient, current_user)
 
 
 @router.post("/", response_model=PatientOut)

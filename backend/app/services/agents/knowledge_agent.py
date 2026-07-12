@@ -18,12 +18,14 @@ import logging
 from typing import Optional
 
 from app.core.config import settings
+from app.utils.json_parser import extract_json_from_text
 from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.rag.types import (
     RetrievalQuery,
     ClinicalFacts,
     EvidenceItem,
     RetrievalBundle,
+    RetrievalConfidence,
     Citation,
     KnowledgeAssessment,
 )
@@ -315,35 +317,11 @@ def _build_treatment_query(facts: ClinicalFacts) -> str:
     return "，".join(parts) if parts else "治疗方案查询"
 
 
-# ── JSON 解析（三层策略）─────────────────────────────────────────────────────
+# ── JSON 解析（委托公共模块）─────────────────────────────────────────────────────
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON（三层解析策略）"""
-    if not text or not text.strip():
-        raise ValueError("LLM 返回内容为空")
-
-    # 1. 尝试直接解析
-    try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # 2. 尝试移除 markdown 代码块后解析
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # 3. 尝试正则提取第一个 JSON 对象
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-
-    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+    return extract_json_from_text(text)
 
 
 # ── 评分映射 ─────────────────────────────────────────────────────────────────
@@ -505,12 +483,19 @@ async def run_knowledge_check(
         if retrieval_status == "candidate":
             retrieval_status = "sufficient"
 
-        # ── Step 8: 拒答逻辑 ──
+        # ── Step 8: 拒答逻辑（结合检索置信度）──
+        retrieval_confidence = bundle.confidence  # "high" | "medium" | "low"
         needs_review = False
         review_reason: Optional[str] = None
+        should_refuse = False
         score: Optional[int] = None
 
-        if retrieval_status in ("insufficient", "unavailable", "error"):
+        # 低置信度 → 直接标记拒答
+        if retrieval_confidence == RetrievalConfidence.LOW.value:
+            should_refuse = True
+            needs_review = True
+            review_reason = "insufficient_evidence"
+        elif retrieval_status in ("insufficient", "unavailable", "error"):
             needs_review = True
             review_reason = f"检索状态: {retrieval_status}"
         elif evidence_stance == "mixed" and confidence < 0.5:
@@ -557,6 +542,8 @@ async def run_knowledge_check(
             "human_review_needed": needs_review,
             "review_reason": review_reason,
             "confidence": confidence,
+            "retrieval_confidence": retrieval_confidence,
+            "should_refuse": should_refuse,
             "rag_trace": bundle.trace,
             "degraded": bundle.degraded or rerank_degraded,
         }

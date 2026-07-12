@@ -22,9 +22,10 @@ from pydantic import BaseModel, Field
 
 from app.services.tools.base import BaseTool, ToolContext
 from app.services.tools.registry import ToolRegistry
-from app.services.rag.types import EvidenceItem
+from app.services.rag.types import EvidenceItem, RetrievalQuery, RetrievalBundle
 from app.services.rag.retriever import (
     hybrid_retrieve,
+    tiered_retrieve,
     expand_queries,
     _generate_hypothetical_document,
 )
@@ -94,7 +95,7 @@ class SearchMedicalKB(BaseTool):
     critical = True
 
     async def execute(self, args: SearchMedicalKBArgs, context: ToolContext) -> dict:
-        """调用 hybrid_retrieve 检索医学证据，转为统一格式并缓存"""
+        """调用 tiered_retrieve 分级检索医学证据，转为统一格式并缓存"""
         # ── 安全边界检查 ──
         sanitized_query = _sanitize_query(args.query)
         if not sanitized_query:
@@ -106,12 +107,19 @@ class SearchMedicalKB(BaseTool):
                 "error": "查询为空或无效",
             }
 
+        # 将 query_type 映射为 RetrievalQuery 支持的类型
+        rq_type = args.query_type if args.query_type in ("case", "diagnosis", "treatment") else "case"
+
         start_time = time.monotonic()
         try:
-            raw_results = await hybrid_retrieve(
-                query=sanitized_query,
-                top_k=args.top_k,
-                enable_rerank=False,  # 重排交给独立工具
+            retrieval_query = RetrievalQuery(
+                query_type=rq_type,
+                text=sanitized_query,
+                source="clinical_facts",
+            )
+            bundle: RetrievalBundle = await tiered_retrieve(
+                queries=[retrieval_query],
+                top_k_per_query=args.top_k,
             )
         except Exception as e:
             elapsed = (time.monotonic() - start_time) * 1000
@@ -127,9 +135,10 @@ class SearchMedicalKB(BaseTool):
 
         elapsed = (time.monotonic() - start_time) * 1000
 
-        # ── 结果验证 ──
-        if not isinstance(raw_results, list):
-            logger.warning(f"search_medical_kb 返回类型异常: {type(raw_results)}")
+        # ── 从 RetrievalBundle 提取候选证据 ──
+        candidates = bundle.candidates
+        if not isinstance(candidates, list):
+            logger.warning(f"search_medical_kb candidates 类型异常: {type(candidates)}")
             return {
                 "evidence": [],
                 "retrieval_level": "error",
@@ -139,49 +148,50 @@ class SearchMedicalKB(BaseTool):
                 "elapsed_ms": round(elapsed, 2),
             }
 
-        evidence_list = []
-        for i, doc in enumerate(raw_results):
-            # 验证单条结果结构
-            if not isinstance(doc, dict):
-                logger.warning(f"search_medical_kb 第 {i} 条结果类型异常: {type(doc)}")
-                continue
+        # 将 rag_trace 记录到 context 供后续使用
+        if bundle.trace:
+            context.extras["rag_trace"] = bundle.trace
 
-            citation_id = _build_citation_id(doc, i)
-            snippet = doc.get("text", "")[:300]
+        evidence_list = []
+        for i, item in enumerate(candidates):
+            citation_id = _build_citation_id_from_evidence(item, i)
+            snippet = item.text[:300]
 
             evidence_entry = {
                 "citation_id": citation_id,
-                "title": doc.get("source", "未知"),
-                "section": doc.get("heading_path", ""),
+                "title": item.source,
+                "section": item.heading_path or "",
                 "snippet": snippet,
-                "score": round(doc.get("score", 0) or 0, 4),
-                "source_type": _infer_source_type(doc),
+                "score": round(item.rrf_score or item.vector_score or 0, 4),
+                "source_type": _infer_source_type_from_evidence(item),
                 "metadata": {
-                    "organization": doc.get("organization"),
-                    "year": doc.get("year"),
-                    "departments": doc.get("departments"),
+                    "organization": item.organization,
+                    "year": item.year,
+                    "departments": item.departments,
                 },
             }
             evidence_list.append(evidence_entry)
 
             # 缓存完整 EvidenceItem 供后续工具使用
-            context.evidence_cache[citation_id] = _doc_to_evidence_item(doc, i)
+            context.evidence_cache[citation_id] = item
 
-        # 判断检索级别
-        retrieval_level = "level1" if len(raw_results) >= args.top_k else "level0"
+        # 判断检索级别：基于 tiered_retrieve 实际到达的层级
+        level_map = {"base": "level1", "mqe": "level2", "hyde": "level3"}
+        retrieval_level = level_map.get(bundle.level_used, "level1")
 
         logger.info(
             f"search_medical_kb: query='{sanitized_query[:50]}...', "
             f"found={len(evidence_list)}, level={retrieval_level}, "
-            f"elapsed={elapsed:.0f}ms"
+            f"status={bundle.status}, elapsed={elapsed:.0f}ms"
         )
 
         return {
             "evidence": evidence_list,
             "retrieval_level": retrieval_level,
-            "total_found": len(raw_results),
-            "degraded": False,
+            "total_found": len(candidates),
+            "degraded": bundle.degraded,
             "elapsed_ms": round(elapsed, 2),
+            "rag_trace": bundle.trace,
         }
 
 
@@ -354,14 +364,33 @@ class RerankEvidence(BaseTool):
 
 
 def _build_citation_id(doc: dict, index: int) -> str:
-    """为检索结果构建稳定的 citation_id"""
+    """为检索结果 dict 构建稳定的 citation_id（保留兼容旧路径）"""
     doc_id = doc.get("doc_id", "")
     source = doc.get("source", "未知")
     page = doc.get("page", 0)
     if doc_id:
-        # 优先使用 doc_id（ChromaDB ID）
         return f"rag:{source}:{page}:{doc_id[-8:]}"
     return f"rag:{source}:{page}:{index}"
+
+
+def _build_citation_id_from_evidence(item: EvidenceItem, index: int) -> str:
+    """为 EvidenceItem 构建稳定的 citation_id"""
+    source = item.source or "未知"
+    page = item.page or 0
+    if item.doc_id:
+        return f"rag:{source}:{page}:{item.doc_id[-8:]}"
+    return f"rag:{source}:{page}:{index}"
+
+
+def _infer_source_type_from_evidence(item: EvidenceItem) -> str:
+    """从 EvidenceItem 元数据推断来源类型"""
+    if item.content_type and "recommendation" in item.content_type:
+        return "recommendation"
+    if item.document_type and ("guideline" in item.document_type.lower() or "指南" in item.document_type):
+        return "guideline"
+    if "指南" in item.source or "NCCN" in item.source or "CSCO" in item.source:
+        return "guideline"
+    return "textbook"
 
 
 def _infer_source_type(doc: dict) -> str:

@@ -137,7 +137,15 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
 async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
     """
     Run a single case using the Tool Use knowledge check.
-    
+
+    This exercises the **ReAct (Reason + Act) main path**:
+    ``run_knowledge_check_with_tools`` drives an LLM agent that
+    iteratively reasons over the consultation, selects retrieval /
+    calculation tools, observes results, and produces a final answer.
+    The evaluation captures both ``tool_trace`` (each ReAct step with
+    tool name / input / output) and ``rag_trace`` (retrieval pipeline
+    details such as queries and retrieved document ids).
+
     Args:
         case: The gold case to evaluate
         
@@ -156,7 +164,12 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
         diagnosis_text = case.doctor_diagnosis or ""
         treatment_text = case.treatment_plan or ""
         
-        # Run the Tool Use knowledge check
+        # -- ReAct main path entry point --
+        # run_knowledge_check_with_tools internally:
+        #   1. Builds a ReAct agent with retrieval & calculation tools
+        #   2. Loops: Thought -> Action(tool call) -> Observation -> ...
+        #   3. Returns final_answer, tool_trace (per-step records),
+        #      and rag_trace (retrieval pipeline details)
         result = await run_knowledge_check_with_tools(
             consultation=consultation,
             diagnosis_text=diagnosis_text,
@@ -188,7 +201,7 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
         if not isinstance(rag_trace_data, dict):
             rag_trace_data = {}
         
-        # Handle tool trace
+        # Handle tool trace (ReAct step-by-step records)
         tool_trace = result.get('tool_trace', [])
         if not isinstance(tool_trace, list):
             tool_trace = []
@@ -196,12 +209,13 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
         # Extract final answer if available
         final_answer_text = result.get('final_answer', result.get('response', None))
         
-        # Extract actual tool calls
+        # Extract actual tool calls from the ReAct trajectory
         actual_tool_calls = result.get('actual_tool_calls', [])
         if not isinstance(actual_tool_calls, list):
             actual_tool_calls = []
         
-        # Create the evaluation result
+        # Create the evaluation result — tool_trace and rag_trace_data
+        # together provide full observability into the ReAct reasoning chain
         eval_result = RagEvalResult(
             case_id=case.case_id,
             mode="tooluse",

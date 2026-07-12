@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 import logging
 from typing import Optional, List
 
@@ -21,6 +20,7 @@ from app.services.agents.scoring_agent import run_scoring
 from app.services.agents.suggestion_agent import run_suggestion
 from app.core.websocket import manager
 from app.core.config import settings
+from app.utils.json_parser import extract_json_from_text
 
 
 class EvaluationValidationError(Exception):
@@ -33,32 +33,10 @@ class EvaluationValidationError(Exception):
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON，解析失败时抛出 ValidationError"""
-    if not text or not text.strip():
-        raise EvaluationValidationError("LLM 返回内容为空", text)
-        
-    # 1. 尝试直接解析
     try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # 2. 尝试移除 markdown 代码块后解析
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-        
-    # 3. 尝试正则提取第一个 JSON 对象
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    
-    # 4. 解析失败，抛出带原始返回体的异常
-    raise EvaluationValidationError("评估格式异常，无法解析 JSON", text)
+        return extract_json_from_text(text)
+    except ValueError:
+        raise EvaluationValidationError("评估格式异常，无法解析 JSON", text)
 
 
 async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
@@ -483,9 +461,9 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
+                "error_code": "EVALUATION_VALIDATION_ERROR",
                 "error_type": "ValidationError",
                 "message": "评估格式异常，请稍后重试",
-                "raw_response": e.raw_response
             }
         )
     except Exception as e:

@@ -1,7 +1,7 @@
 import logging
 import os
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "医学问诊评估平台"
     VERSION: str = "1.0.0"
     API_V1_PREFIX: str = "/api/v1"
+    ENVIRONMENT: str = "development"  # development | production
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
@@ -90,11 +91,19 @@ class Settings(BaseSettings):
     REFLECTION_CONSISTENCY_THRESHOLD: float = 0.3 # 评分一致性偏差阈值（超过则标记矛盾）
     REFLECTION_EVIDENCE_MIN_SCORE: float = 60.0   # 反思时认为证据充足的最低分数
 
+    # Retrieval Cache
+    RETRIEVAL_CACHE_ENABLED: bool = True
+    RETRIEVAL_CACHE_TTL: int = 86400            # 24 hours
+    RETRIEVAL_CACHE_MAX_SIZE: int = 5000
+
     # LLM 响应缓存
     LLM_CACHE_ENABLED: bool = True                # 是否启用 LLM 响应缓存
     LLM_CACHE_TTL: int = 86400                    # 缓存过期时间（秒），24小时
     LLM_CACHE_SIMILARITY_THRESHOLD: float = 0.95  # 语义相似度阈值（保留，当前使用精确哈希匹配）
     LLM_CACHE_MAX_SIZE: int = 10000               # 最大缓存条目数
+
+    # Testing mode (skip real connections in tests)
+    TESTING: bool = False                         # 测试模式，避免连接真实服务
 
     # LLM 建议生成
     ENABLE_LLM_SUGGESTION: bool = True            # 启用 LLM 建议生成（false 时回退规则建议）
@@ -102,13 +111,17 @@ class Settings(BaseSettings):
     # 审计日志
     AUDIT_LOG_ENABLED: bool = True
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     def check_security(self) -> None:
         """启动时安全检查配置"""
+        if self.TESTING:
+            return
         if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
+            if self.ENVIRONMENT == "production":
+                raise RuntimeError(
+                    "SECRET_KEY 未设置！生产环境必须通过环境变量 SECRET_KEY 配置安全密钥。"
+                )
             logger.warning(
                 "SECURITY WARNING: SECRET_KEY 仍为默认值！"
                 "请在生产环境中设置安全的随机密钥（环境变量 SECRET_KEY）。"

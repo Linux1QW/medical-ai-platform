@@ -6,9 +6,9 @@
 """
 
 import json
-import re
 import logging
 from app.services.qwen_client import call_qwen_chat
+from app.utils.json_parser import extract_json_from_text
 from app.services.scoring.policies import get_default_policy, ScoringPolicy
 from app.services.scoring.calculator import ScoreCalculator, DimensionResult
 from app.services.scoring.summary import SummaryGenerator
@@ -24,28 +24,7 @@ _DIMENSION_NAMES = get_default_policy().dimension_names
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON"""
-    if not text or not text.strip():
-        raise ValueError("LLM 返回内容为空")
-
-    try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-
-    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+    return extract_json_from_text(text)
 
 
 def calculate_total(scores: dict) -> int | None:

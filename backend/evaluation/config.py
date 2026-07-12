@@ -3,7 +3,7 @@ Configuration for RAG evaluation system.
 """
 from typing import Optional
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class EvalConfig(BaseModel):
@@ -26,8 +26,7 @@ class EvalConfig(BaseModel):
     recall_k: int = 5
     ndcg_k: int = 5
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 DEFAULT_CONFIG = EvalConfig()

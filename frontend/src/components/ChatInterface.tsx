@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Card, Input, Button, List, Avatar, Typography, Tag, Space } from 'antd';
-import { SendOutlined, UserOutlined, MedicineBoxOutlined, LoadingOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import type { Message, VirtualPatient, Evaluation } from '../types';
+import { SendOutlined, UserOutlined, MedicineBoxOutlined, LoadingOutlined } from '@ant-design/icons';
+import type { Message, VirtualPatient } from '../types';
 
-const { Text, Title, Paragraph } = Typography;
+const { Text, Title } = Typography;
 const { TextArea } = Input;
 
 interface ChatInterfaceProps {
@@ -13,7 +13,6 @@ interface ChatInterfaceProps {
   status: string;
   sending: boolean;
   onSendMessage: (content: string) => void;
-  onEvaluationComplete?: (evaluation: Evaluation) => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -22,14 +21,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   status,
   sending,
   onSendMessage,
-  onEvaluationComplete,
 }) => {
   const [input, setInput] = useState('');
-  const [evaluationData, _setEvaluationData] = useState<Evaluation | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
@@ -49,13 +45,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       handleSend();
     }
   };
-
-  // Notify parent when evaluation data changes
-  useEffect(() => {
-    if (evaluationData) {
-      onEvaluationComplete?.(evaluationData);
-    }
-  }, [evaluationData, onEvaluationComplete]);
 
   const isEnded = status !== 'in_progress';
   const currentRounds = messages.filter(m => m.role === 'doctor').length;
@@ -80,7 +69,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
       styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' } }}
     >
-      {/* Messages area */}
       <div
         ref={messagesRef}
         style={{ flex: 1, overflow: 'auto', padding: '16px 24px' }}
@@ -129,25 +117,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div ref={endRef} />
       </div>
 
-      {/* Evaluation result */}
-      {evaluationData && (
-        <Card
-          size="small"
-          style={{ margin: '0 16px 8px', background: '#f6ffed', borderColor: '#b7eb8f' }}
-          title={
-            <span>
-              <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 8 }} />
-              评估结果
-            </span>
-          }
-        >
-          <Paragraph style={{ margin: 0 }}>
-            综合评分：{evaluationData.total_score ?? '—'}分
-          </Paragraph>
-        </Card>
-      )}
-
-      {/* Input area */}
       {!isEnded && (
         <div style={{ padding: 16, borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
           <TextArea

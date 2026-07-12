@@ -1,5 +1,7 @@
-export { default as ScoreDisplay, getScoreColor, getScoreLevel } from './ScoreDisplay';
+export { default as ScoreDisplay } from './ScoreDisplay';
 export type { ScoreDisplayProps } from './ScoreDisplay';
+
+export { getScoreColor, getScoreLevel, getScoreAntTagColor } from '../utils/score';
 
 export { default as PersonalityTag } from './PersonalityTag';
 export type { PersonalityTagProps, PersonalityType } from './PersonalityTag';

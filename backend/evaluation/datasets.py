@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
 
 
@@ -76,8 +76,7 @@ class RagGoldCase(BaseModel):
     # Metadata
     notes: Optional[str] = None
     
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class RagEvalResult(BaseModel):
@@ -113,8 +112,7 @@ class RagEvalResult(BaseModel):
     system_refused: bool = False
     false_acceptance: bool = False
     
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class RagEvalMetrics(BaseModel):
@@ -289,4 +287,4 @@ def save_gold_cases(cases: List[RagGoldCase], cases_path: Path) -> None:
     """Save gold cases to JSONL file."""
     with open(cases_path, 'w', encoding='utf-8') as f:
         for case in cases:
-            f.write(json.dumps(case.dict(), ensure_ascii=False) + '\n')
+            f.write(json.dumps(case.model_dump(), ensure_ascii=False) + '\n')

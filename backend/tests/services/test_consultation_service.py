@@ -416,6 +416,13 @@ class TestSubmitDiagnosis:
 class TestDeleteConsultation:
     """测试 delete_consultation"""
 
+    @staticmethod
+    def _user(user_id: int, role: str = "doctor"):
+        user = MagicMock()
+        user.id = user_id
+        user.role = role
+        return user
+
     @pytest.mark.asyncio
     async def test_delete_own_consultation_returns_true(self, mock_db, sample_consultation):
         """删除本人问诊返回 True"""
@@ -425,7 +432,7 @@ class TestDeleteConsultation:
         mock_result.scalar_one_or_none.return_value = sample_consultation
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        result = await delete_consultation(mock_db, 1, doctor_id=10)
+        result = await delete_consultation(mock_db, 1, self._user(10))
         assert result is True
         mock_db.delete.assert_called_once()
         mock_db.commit.assert_called_once()
@@ -439,9 +446,22 @@ class TestDeleteConsultation:
         mock_result.scalar_one_or_none.return_value = sample_consultation
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        result = await delete_consultation(mock_db, 1, doctor_id=99)
+        result = await delete_consultation(mock_db, 1, self._user(99))
         assert result is False
         mock_db.delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_delete_other_doctor_consultation(self, mock_db, sample_consultation):
+        """管理员可删除他人问诊"""
+        from app.services.consultation_service import delete_consultation
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_consultation
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        result = await delete_consultation(mock_db, 1, self._user(99, role="admin"))
+        assert result is True
+        mock_db.delete.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_consultation_returns_false(self, mock_db):
@@ -452,7 +472,7 @@ class TestDeleteConsultation:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        result = await delete_consultation(mock_db, 999, doctor_id=10)
+        result = await delete_consultation(mock_db, 999, self._user(10))
         assert result is False
 
 

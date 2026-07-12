@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Any
 
 
@@ -10,9 +10,9 @@ class ToolContext(BaseModel):
     budgets: dict[str, int] = {}  # {"search_medical_kb": 3, "expand_query": 2, ...}
     allowed_citation_ids: set[str] = set()  # 合法 citation_id 白名单
     evidence_cache: dict[str, Any] = {}  # 缓存已检索的 evidence
+    extras: dict[str, Any] = {}  # 扩展字段（如 rag_trace）
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class BaseTool(ABC):

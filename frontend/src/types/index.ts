@@ -24,7 +24,7 @@ export interface VirtualPatient {
   chief_complaint: string;
   medical_history: string;
   symptoms: string;
-  expected_diagnosis: string;
+  expected_diagnosis?: string;
   system_prompt?: string;
   difficulty_level: number;
   created_at: string;

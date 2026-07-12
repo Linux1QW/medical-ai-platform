@@ -26,6 +26,7 @@ setup(
         "langgraph==1.2.6",
         "langgraph-checkpoint-redis==0.4.1",
         "redis==7.4.1",
+        "slowapi>=0.1.9",
     ],
     author="Medical AI Platform Team",
     description="A medical AI platform for clinical consultation evaluation",

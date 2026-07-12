@@ -1,26 +1,59 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import limiter
-
+from app.core.access import require_consultation_access
 from app.core.deps import get_current_user
 from app.core.audit import record_audit_log
-from app.db.session import get_db
+from app.core.security import decode_access_token
+from app.db.session import AsyncSessionLocal, get_db
 from app.models.user import User
 from app.schemas.evaluation import EvaluationOut, EvaluationRequest
 from app.services.evaluation_service import run_evaluation, get_evaluation_by_consultation
+from app.services.evaluation_lock_service import (
+    try_acquire_lock,
+    update_lock_status,
+    get_lock_status,
+)
+from app.services.user_service import get_user_by_id
 from app.core.websocket import manager
 
 router = APIRouter()
 
 
 @router.websocket("/ws/{consultation_id}")
-async def evaluation_progress_ws(websocket: WebSocket, consultation_id: int):
-    """评估进度推送 WebSocket"""
+async def evaluation_progress_ws(
+    websocket: WebSocket,
+    consultation_id: int,
+    token: str = Query(...),
+):
+    """评估进度推送 WebSocket（需 JWT 鉴权）"""
+    payload = decode_access_token(token)
+    if payload is None:
+        await websocket.close(code=1008, reason="无效的认证凭据")
+        return
+
+    user_id_str = payload.get("sub")
+    try:
+        user_id = int(user_id_str)
+    except (TypeError, ValueError):
+        await websocket.close(code=1008, reason="无效的认证凭据")
+        return
+
+    async with AsyncSessionLocal() as db:
+        user = await get_user_by_id(db, user_id)
+        if user is None:
+            await websocket.close(code=1008, reason="用户不存在")
+            return
+        try:
+            await require_consultation_access(db, consultation_id, user)
+        except HTTPException:
+            await websocket.close(code=1008, reason="无权访问该问诊记录")
+            return
+
     await manager.connect(websocket, consultation_id)
     try:
         while True:
-            # 保持连接，等待客户端消息或断开
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, consultation_id)
@@ -34,26 +67,83 @@ async def create_evaluation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    existing = await get_evaluation_by_consultation(db, data.consultation_id)
-    if existing:
-        raise HTTPException(status_code=400, detail="该问诊已有评估记录")
-    result = await run_evaluation(db, data.consultation_id)
+    await require_consultation_access(db, data.consultation_id, current_user)
 
-    await record_audit_log(
-        db, user_id=current_user.id, action="trigger_evaluation",
-        request=request, resource_id=str(data.consultation_id),
-        detail=f"触发评估: consultation_id={data.consultation_id}",
-    )
-    await db.commit()
-    return result
+    # 1. 快速检查已有评估
+    existing = await get_evaluation_by_consultation(db, data.consultation_id)
+    if existing and existing.evaluation_status in ("completed", "needs_review", "reviewed"):
+        raise HTTPException(status_code=400, detail="该问诊已有评估记录")
+
+    # 2. 获取评估锁（防并发竞态）
+    acquired, lock = await try_acquire_lock(db, data.consultation_id)
+    if not acquired:
+        if lock and lock.status in ("pending", "running"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "EVALUATION_IN_PROGRESS",
+                    "message": "评估正在进行中，请勿重复提交",
+                    "status": lock.status,
+                    "locked_at": lock.locked_at.isoformat() if lock.locked_at else None,
+                },
+            )
+
+    # 3. 执行评估
+    try:
+        await update_lock_status(db, data.consultation_id, "running")
+        await db.commit()
+
+        result = await run_evaluation(db, data.consultation_id)
+
+        # 4. 更新锁状态
+        final_status = result.evaluation_status
+        if final_status == "needs_review":
+            await update_lock_status(db, data.consultation_id, "needs_review")
+        else:
+            await update_lock_status(db, data.consultation_id, "completed")
+        await db.commit()
+
+        await record_audit_log(
+            db, user_id=current_user.id, action="trigger_evaluation",
+            request=request, resource_id=str(data.consultation_id),
+            detail=f"触发评估: consultation_id={data.consultation_id}",
+        )
+        await db.commit()
+        return result
+
+    except Exception as e:
+        try:
+            await update_lock_status(
+                db, data.consultation_id, "failed",
+                error_message=str(e)[:500],
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        raise
+
+
+@router.get("/{consultation_id}/lock-status")
+async def get_evaluation_lock_status(
+    consultation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询评估任务状态（前端轮询用）"""
+    await require_consultation_access(db, consultation_id, current_user)
+    status = await get_lock_status(db, consultation_id)
+    if not status:
+        return {"is_active": False, "status": None}
+    return status
 
 
 @router.get("/{consultation_id}", response_model=EvaluationOut)
 async def get_evaluation(
     consultation_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await require_consultation_access(db, consultation_id, current_user)
     evaluation = await get_evaluation_by_consultation(db, consultation_id)
     if not evaluation:
         raise HTTPException(status_code=404, detail="评估记录不存在")

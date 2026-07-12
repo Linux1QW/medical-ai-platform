@@ -6,6 +6,9 @@ from app.api.v1.consultations import router as consultations_router
 from app.api.v1.evaluations import router as evaluations_router
 from app.api.v1.stats import router as stats_router
 from app.api.v1.knowledge_base import router as knowledge_base_router
+from app.api.v1.admin import router as admin_router
+from app.api.v1.cases import router as cases_router
+from app.api.v1.review import router as review_router
 
 router = APIRouter()
 
@@ -15,3 +18,6 @@ router.include_router(consultations_router, prefix="/consultations", tags=["问�
 router.include_router(evaluations_router, prefix="/evaluations", tags=["评估"])
 router.include_router(stats_router, prefix="/stats", tags=["数据统计"])
 router.include_router(knowledge_base_router, prefix="/knowledge-base", tags=["知识库管理"])
+router.include_router(admin_router, prefix="/admin", tags=["管理"])
+router.include_router(cases_router, prefix="/cases", tags=["病例推荐"])
+router.include_router(review_router)

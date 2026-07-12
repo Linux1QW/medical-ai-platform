@@ -6,8 +6,18 @@
 的结构化接口，替代原有的 dict + raw_response 模式。
 """
 
+from enum import Enum
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
+
+
+# ── 检索置信度 ─────────────────────────────────────────────────────────────────
+
+class RetrievalConfidence(str, Enum):
+    """检索置信度级别，驱动检索决策和拒答逻辑"""
+    HIGH = "high"        # 多来源、高分、充分覆盖 → 直接用
+    MEDIUM = "medium"    # 部分满足 → 触发 MQE/HyDE 增强
+    LOW = "low"          # 严重不足 → 拒答/人工复核
 
 
 # ── 查询类型 ─────────────────────────────────────────────────────────────────
@@ -95,6 +105,7 @@ class RetrievalBundle(BaseModel):
     queries: list[RetrievalQuery] = Field(default_factory=list)
     candidates: list[EvidenceItem] = Field(default_factory=list)
     degraded: bool = False
+    confidence: str = "medium"  # RetrievalConfidence.value，默认 medium 向后兼容
     trace: dict = Field(default_factory=dict)
 
 

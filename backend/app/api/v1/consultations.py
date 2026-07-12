@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 from datetime import datetime
 
@@ -6,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import limiter
-
+from app.core.access import require_consultation_access
 from app.core.deps import get_current_user
 from app.core.audit import record_audit_log
 from app.core.validation import sanitize_text
@@ -22,7 +23,6 @@ from app.schemas.consultation import (
 )
 from app.services.consultation_service import (
     create_consultation,
-    get_consultation,
     list_consultations,
     get_messages,
     send_doctor_message,
@@ -32,7 +32,17 @@ from app.services.consultation_service import (
     delete_consultation,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _check_round_limit(consultation, messages) -> None:
+    current_rounds = len([m for m in messages if m.role == "doctor"])
+    if current_rounds >= consultation.max_rounds:
+        raise HTTPException(
+            status_code=403,
+            detail="已达到最大问诊轮次，请提交评估或延长轮次",
+        )
 
 
 @router.post("/", response_model=ConsultationOut)
@@ -90,11 +100,9 @@ async def get_all_consultations(
 async def get_consultation_detail(
     consultation_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    consultation = await require_consultation_access(db, consultation_id, current_user)
     messages = await get_messages(db, consultation_id)
     return ConsultationDetail(
         **ConsultationOut.model_validate(consultation).model_dump(),
@@ -111,27 +119,25 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    consultation = await require_consultation_access(db, consultation_id, current_user)
     if consultation.status != "in_progress":
         raise HTTPException(status_code=400, detail="该问诊已结束")
 
-    # 输入清理：移除 HTML 标签
     data.content = sanitize_text(data.content)
     if not data.content:
         raise HTTPException(status_code=422, detail="消息内容不能为空")
 
-    # 检查轮次限制 (医生+患者各算一条，所以总消息数 / 2 为当前轮次)
     messages = await get_messages(db, consultation_id)
-    current_rounds = len([m for m in messages if m.role == 'doctor'])
-    if current_rounds >= consultation.max_rounds:
-        raise HTTPException(status_code=403, detail="已达到最大问诊轮次，请提交评估或延长轮次")
+    _check_round_limit(consultation, messages)
 
     try:
         doctor_msg, patient_msg = await send_doctor_message(db, consultation_id, data.content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"问诊对话失败: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception("问诊对话失败 consultation_id=%s", consultation_id)
+        raise HTTPException(
+            status_code=500,
+            detail={"error_code": "CONSULTATION_FAILED", "message": "问诊对话失败，请稍后重试"},
+        )
     return [
         MessageOut.model_validate(doctor_msg),
         MessageOut.model_validate(patient_msg),
@@ -147,29 +153,17 @@ async def send_message_stream(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """SSE 流式发送消息并获取患者回复进度
-
-    事件类型：
-    - progress: 处理进度更新（包含 step/message/progress 字段）
-    - complete: 处理完成（包含 doctor_msg/patient_msg）
-    - error: 处理出错（包含 message 字段）
-    """
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    """SSE 流式发送消息并获取患者回复进度"""
+    consultation = await require_consultation_access(db, consultation_id, current_user)
     if consultation.status != "in_progress":
         raise HTTPException(status_code=400, detail="该问诊已结束")
 
-    # 输入清理
     data.content = sanitize_text(data.content)
     if not data.content:
         raise HTTPException(status_code=422, detail="消息内容不能为空")
 
-    # 检查轮次限制
     messages = await get_messages(db, consultation_id)
-    current_rounds = len([m for m in messages if m.role == 'doctor'])
-    if current_rounds >= consultation.max_rounds:
-        raise HTTPException(status_code=403, detail="已达到最大问诊轮次，请提交评估或延长轮次")
+    _check_round_limit(consultation, messages)
 
     async def event_generator():
         async for event in send_doctor_message_stream(db, consultation_id, data.content):
@@ -181,7 +175,7 @@ async def send_message_stream(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -190,12 +184,10 @@ async def send_message_stream(
 async def extend_consultation_rounds(
     consultation_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """延长问诊轮次限制"""
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    consultation = await require_consultation_access(db, consultation_id, current_user)
     consultation.max_rounds += 10
     await db.commit()
     await db.refresh(consultation)
@@ -211,13 +203,10 @@ async def submit_diagnosis_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     """提交诊断结果和治疗方案，同时结束问诊"""
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    consultation = await require_consultation_access(db, consultation_id, current_user)
     if consultation.status != "in_progress":
         raise HTTPException(status_code=400, detail="该问诊已结束")
 
-    # 输入清理
     data.diagnosis = sanitize_text(data.diagnosis)
     data.treatment_plan = sanitize_text(data.treatment_plan)
 
@@ -236,11 +225,9 @@ async def submit_diagnosis_endpoint(
 async def finish_consultation(
     consultation_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    consultation = await get_consultation(db, consultation_id)
-    if not consultation:
-        raise HTTPException(status_code=404, detail="问诊记录不存在")
+    await require_consultation_access(db, consultation_id, current_user)
     return await end_consultation(db, consultation_id)
 
 
@@ -250,7 +237,7 @@ async def remove_consultation(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ok = await delete_consultation(db, consultation_id, current_user.id)
+    ok = await delete_consultation(db, consultation_id, current_user)
     if not ok:
         raise HTTPException(status_code=404, detail="问诊记录不存在或无权删除")
     return {"detail": "删除成功"}

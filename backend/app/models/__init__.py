@@ -6,3 +6,6 @@ from app.models.evaluation import Evaluation  # noqa: F401
 from app.models.evaluation_run import EvaluationRun  # noqa: F401
 from app.models.evaluation_node_result import EvaluationNodeResult  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
+from app.models.review_record import ReviewRecord  # noqa: F401
+from app.models.evaluation_checkpoint import EvaluationCheckpoint  # noqa: F401
+from app.models.evaluation_lock import EvaluationLock  # noqa: F401

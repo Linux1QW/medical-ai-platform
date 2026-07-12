@@ -57,5 +57,7 @@ class Evaluation(Base):
     applicable_dimensions = Column(JSON, nullable=True, comment="适用维度列表")
     scoring_policy_version = Column(String(50), nullable=True, comment="评分策略版本")
     graph_version = Column(String(50), nullable=True, comment="编排图版本")
+    review_completed_by = Column(String(50), nullable=True, comment="复核完成人ID")
+    review_completed_at = Column(DateTime, nullable=True, comment="复核完成时间")
 
     created_at = Column(DateTime, default=datetime.utcnow)

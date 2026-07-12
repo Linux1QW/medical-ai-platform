@@ -2,9 +2,9 @@
 """问诊分析智能体 — 基于结构化建模与可计算指标的问诊过程评估"""
 
 import json
-import re
 import logging
 from app.services.qwen_client import call_qwen_chat
+from app.utils.json_parser import extract_json_from_text
 
 # ── 临床 Schema 定义 ──
 CLINICAL_SCHEMA = {
@@ -220,31 +220,7 @@ LOGIC_EFFICIENCY_FEWSHOT_ASSISTANT = """{
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON"""
-    if not text or not text.strip():
-        raise ValueError("LLM 返回内容为空")
-    
-    # 1. 尝试直接解析
-    try:
-        return json.loads(text.strip())
-    except (json.JSONDecodeError, ValueError):
-        pass
-    
-    # 2. 尝试移除 markdown 代码块后解析
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    
-    # 3. 尝试正则提取第一个 JSON 对象
-    try:
-        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    
-    raise ValueError(f"无法解析 JSON: {text[:200]}...")
+    return extract_json_from_text(text)
 
 
 def _calculate_coverage(slot_data: dict) -> float:

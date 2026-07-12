@@ -463,10 +463,12 @@ async def submit_diagnosis(
     return consultation
 
 
-async def delete_consultation(db: AsyncSession, consultation_id: int, doctor_id: int) -> bool:
-    """删除问诊记录（仅允许删除本人的记录），同时删除消息与评估"""
+async def delete_consultation(db: AsyncSession, consultation_id: int, user) -> bool:
+    """删除问诊记录（本人或管理员），同时删除消息与评估"""
     consultation = await get_consultation(db, consultation_id)
-    if not consultation or consultation.doctor_id != doctor_id:
+    if not consultation:
+        return False
+    if user.role != "admin" and consultation.doctor_id != user.id:
         return False
     await db.execute(delete(ConsultationMessage).where(ConsultationMessage.consultation_id == consultation_id))
     await db.execute(delete(Evaluation).where(Evaluation.consultation_id == consultation_id))

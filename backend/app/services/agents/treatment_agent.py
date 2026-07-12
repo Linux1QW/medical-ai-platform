@@ -3,9 +3,9 @@
 
 from app.services.qwen_client import call_qwen_chat
 
-SYSTEM_PROMPT = """你是一名资深临床治疗方案评估专家。你的任务是对照临床指南，评估医生提交的治疗方案。
+SYSTEM_PROMPT = """你是一名资深临床治疗方案评估专家。你的任务是对照临床指南，评估医生提交的治疗方案的合理性与规范性。
 
-系统会为你提供与当前病例相似的【参照病例】（来自真实门诊数据库），其中包含标准处方。这些参照处方可作为评估基准，帮助你判断医生用药是否合理、是否有遗漏。注意：参照处方仅供参考，请结合患者的具体临床情况综合判断。
+系统会为你提供知识检索获得的【指南证据】（来自医学知识库的检索结果）。这些证据可作为评估基准，帮助你判断医生用药是否合理、是否有遗漏。如果没有提供指南证据，请仅基于当前问诊对话和你的医学知识进行评估，并明确指出缺乏指南支持。注意：指南证据仅供参考，请结合患者的具体临床情况综合判断。
 
 评估维度：
 1. 方案合理性：治疗方案是否与诊断结果匹配，是否符合临床指南推荐的一线治疗
@@ -126,14 +126,38 @@ FEWSHOT_ASSISTANT_2 = """{
 }"""
 
 
+def _build_evidence_text(knowledge_citations: list[dict] | None) -> str:
+    """将 knowledge citations 格式化为指南证据段落"""
+    if not knowledge_citations:
+        return "【指南证据】\n本次未检索到相关指南证据，请仅基于你的医学知识进行评估，并在分析中明确指出缺乏指南支持。"
+
+    lines = ["【指南证据】\n以下是从医学知识库中检索到的相关证据："]
+    for i, cit in enumerate(knowledge_citations, 1):
+        source = cit.get("source", "未知来源")
+        content = cit.get("content", cit.get("text", ""))
+        if content:
+            lines.append(f"{i}. [{source}] {content}")
+        else:
+            lines.append(f"{i}. [{source}]")
+    lines.append("\n请结合以上指南证据进行评估。")
+    return "\n".join(lines)
+
+
 async def run_treatment_evaluation(
-    conversation_text: str, patient_info: str, doctor_diagnosis: str, treatment_plan: str
+    conversation_text: str,
+    patient_info: str,
+    doctor_diagnosis: str,
+    treatment_plan: str,
+    knowledge_citations: list[dict] | None = None,
 ) -> dict:
+    evidence_text = _build_evidence_text(knowledge_citations)
+
     user_content = (
         f"【患者标准信息】\n{patient_info}\n\n"
         f"【问诊对话记录】\n{conversation_text}\n\n"
         f"【医生提交的诊断结果】\n{doctor_diagnosis}\n\n"
         f"【医生提交的治疗方案】\n{treatment_plan}\n\n"
+        f"{evidence_text}\n\n"
         "请对医生的治疗方案进行评估。"
     )
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ConsultationCreate(BaseModel):
@@ -25,8 +25,7 @@ class MessageOut(BaseModel):
     sequence: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConsultationOut(BaseModel):
@@ -48,8 +47,7 @@ class ConsultationOut(BaseModel):
     max_rounds: int = 20
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConsultationDetail(ConsultationOut):

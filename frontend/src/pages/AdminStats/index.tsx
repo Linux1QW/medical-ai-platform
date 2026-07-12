@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Typography, Spin, Table, Tag } from 'antd';
+import { Card, Col, Row, Statistic, Typography, Spin, Table, Tag, message } from 'antd';
 import {
   BarChartOutlined,
   MessageOutlined,
@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { getStats } from '../../api/evaluation';
 import { useAuth } from '../../store/useAuth';
+import { getScoreAntTagColor } from '../../components';
 import type { StatsSummary, UserStatItem } from '../../types';
 
 const { Title } = Typography;
@@ -19,7 +20,7 @@ const AdminStatsPage: React.FC = () => {
   useEffect(() => {
     getStats()
       .then(setStats)
-      .catch(() => {})
+      .catch(() => message.error('加载统计数据失败'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -33,12 +34,6 @@ const AdminStatsPage: React.FC = () => {
     { key: '4', dimension: '诊断结果', avg: stats.avg_diagnosis_score },
     { key: '5', dimension: '治疗方案', avg: stats.avg_treatment_score },
   ];
-
-  const tagColor = (score: number) => {
-    if (score >= 80) return 'success';
-    if (score >= 60) return 'warning';
-    return 'error';
-  };
 
   const isPlatformStats = isAdmin;
   return (
@@ -72,7 +67,7 @@ const AdminStatsPage: React.FC = () => {
                   key: 'avg',
                   render: (v: number) => (
                     <span>
-                      <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>
+                      <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>
                       <span style={{ color: '#999', fontSize: 12 }}>/ 100</span>
                     </span>
                   ),
@@ -167,7 +162,7 @@ const AdminStatsPage: React.FC = () => {
                 key: 'avg_inquiry_score',
                 width: 90,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_inquiry_score - b.avg_inquiry_score,
-                render: (v: number) => <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>,
               },
               {
                 title: '医学知识',
@@ -175,7 +170,7 @@ const AdminStatsPage: React.FC = () => {
                 key: 'avg_knowledge_score',
                 width: 90,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_knowledge_score - b.avg_knowledge_score,
-                render: (v: number) => <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>,
               },
               {
                 title: '沟通交流',
@@ -183,7 +178,7 @@ const AdminStatsPage: React.FC = () => {
                 key: 'avg_humanistic_score',
                 width: 90,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_humanistic_score - b.avg_humanistic_score,
-                render: (v: number) => <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>,
               },
               {
                 title: '诊断结果',
@@ -191,7 +186,7 @@ const AdminStatsPage: React.FC = () => {
                 key: 'avg_diagnosis_score',
                 width: 90,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_diagnosis_score - b.avg_diagnosis_score,
-                render: (v: number) => <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>,
               },
               {
                 title: '治疗方案',
@@ -199,7 +194,7 @@ const AdminStatsPage: React.FC = () => {
                 key: 'avg_treatment_score',
                 width: 90,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_treatment_score - b.avg_treatment_score,
-                render: (v: number) => <Tag color={tagColor(v)}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)}>{v.toFixed(1)}</Tag>,
               },
               {
                 title: '综合评分',
@@ -208,7 +203,7 @@ const AdminStatsPage: React.FC = () => {
                 width: 90,
                 defaultSortOrder: 'descend' as const,
                 sorter: (a: UserStatItem, b: UserStatItem) => a.avg_total_score - b.avg_total_score,
-                render: (v: number) => <Tag color={tagColor(v)} style={{ fontWeight: 600 }}>{v.toFixed(1)}</Tag>,
+                render: (v: number) => <Tag color={getScoreAntTagColor(v)} style={{ fontWeight: 600 }}>{v.toFixed(1)}</Tag>,
               },
             ]}
           />

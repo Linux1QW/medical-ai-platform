@@ -20,6 +20,8 @@ class EvaluationContext(BaseModel):
     symptoms: list[str] = Field(default_factory=list)
     doctor_diagnosis: str | None = None
     treatment_plan: str | None = None
+    # Knowledge Agent 检索到的指南证据（由图流程注入，供 Diagnosis/Treatment Agent 使用）
+    knowledge_citations: list[dict] = Field(default_factory=list)
 
 
 # ── 提交标志 ────────────────────────────────────────────────────────────────
@@ -221,7 +223,16 @@ class EvaluationState(TypedDict, total=False):
     # 反思结果
     reflection_result: ReflectionResult | None
 
+    # Knowledge Agent 检索到的指南证据（供 Diagnosis/Treatment Agent 使用）
+    knowledge_citations: list[dict]
+
     # 最终状态
-    evaluation_status: Literal["running", "completed", "needs_review", "failed"]
+    evaluation_status: Literal["running", "completed", "needs_review", "pending_review", "review_completed", "failed"]
     human_review_needed: bool
     review_reason: str | None
+
+    # 人工复核相关字段
+    review_feedback: str | None
+    review_completed_by: str | None
+    review_completed_at: str | None
+    evaluation_id: str | None

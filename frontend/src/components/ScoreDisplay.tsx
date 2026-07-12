@@ -1,26 +1,8 @@
 import React from 'react';
 import { Progress, Tag, Typography } from 'antd';
+import { getScoreColor, getScoreLevel } from '../utils/score';
 
 const { Text } = Typography;
-
-/**
- * 统一评分色彩体系
- * >= 85: 绿色  |  >= 70: 蓝色  |  >= 60: 橙色  |  < 60: 红色
- */
-export const getScoreColor = (score: number): string => {
-  if (score >= 85) return '#52c41a';
-  if (score >= 70) return '#1890ff';
-  if (score >= 60) return '#faad14';
-  return '#ff4d4f';
-};
-
-export const getScoreLevel = (score: number): { text: string; color: string } => {
-  const color = getScoreColor(score);
-  if (score >= 85) return { text: '优秀', color };
-  if (score >= 70) return { text: '良好', color };
-  if (score >= 60) return { text: '及格', color };
-  return { text: '待提升', color };
-};
 
 export interface ScoreDisplayProps {
   /** 分数 0-100 */
@@ -88,7 +70,6 @@ const ScoreDisplay: React.FC<ScoreDisplayProps> = ({
     );
   }
 
-  // default: number mode
   return (
     <div style={{ textAlign: 'center' }}>
       {dimension && <div style={{ fontSize: 13, color: '#888', marginBottom: 4 }}>{dimension}</div>}

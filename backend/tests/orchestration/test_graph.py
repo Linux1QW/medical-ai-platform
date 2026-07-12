@@ -146,11 +146,12 @@ class TestSafetyGate:
 
 
 class TestReviewGate:
-    """测试 review_gate 条件路由"""
+    """测试 review_gate_node 节点 + review_gate_router 条件路由"""
 
-    def test_review_gate_completes_when_all_scored(self):
+    @pytest.mark.asyncio
+    async def test_review_gate_completes_when_all_scored(self):
         """所有维度都 scored 且无需复核时应该完成"""
-        from app.orchestration.graph import review_gate
+        from app.orchestration.graph import review_gate_node, review_gate_router
 
         state: EvaluationState = {
             "run_id": "test-6",
@@ -180,12 +181,17 @@ class TestReviewGate:
                 )
             ],
         }
-        result = review_gate(state)
-        assert result == "completed"
+        result = await review_gate_node(state)
+        # 无需复核时，review_gate_node 不设置 pending_review
+        # 应用返回的更新到 state（模拟 LangGraph 行为）
+        state.update(result)
+        route = review_gate_router(state)
+        assert route == "completed"
 
-    def test_review_gate_needs_review_on_error_dimension(self):
+    @pytest.mark.asyncio
+    async def test_review_gate_needs_review_on_error_dimension(self):
         """有 error 维度时应该需要复核"""
-        from app.orchestration.graph import review_gate
+        from app.orchestration.graph import review_gate_node, review_gate_router
 
         state: EvaluationState = {
             "run_id": "test-7",
@@ -202,12 +208,15 @@ class TestReviewGate:
             },
             "agent_results": [],
         }
-        result = review_gate(state)
-        assert result == "needs_review"
+        updates = await review_gate_node(state)
+        state.update(updates)
+        route = review_gate_router(state)
+        assert route == "needs_review"
 
-    def test_review_gate_needs_review_on_insufficient_dimension(self):
+    @pytest.mark.asyncio
+    async def test_review_gate_needs_review_on_insufficient_dimension(self):
         """有 insufficient 维度时应该需要复核"""
-        from app.orchestration.graph import review_gate
+        from app.orchestration.graph import review_gate_node, review_gate_router
 
         state: EvaluationState = {
             "run_id": "test-8",
@@ -224,12 +233,15 @@ class TestReviewGate:
             },
             "agent_results": [],
         }
-        result = review_gate(state)
-        assert result == "needs_review"
+        updates = await review_gate_node(state)
+        state.update(updates)
+        route = review_gate_router(state)
+        assert route == "needs_review"
 
-    def test_review_gate_needs_review_on_human_review_needed(self):
+    @pytest.mark.asyncio
+    async def test_review_gate_needs_review_on_human_review_needed(self):
         """Agent 标记 human_review_needed 时应该需要复核"""
-        from app.orchestration.graph import review_gate
+        from app.orchestration.graph import review_gate_node, review_gate_router
 
         state: EvaluationState = {
             "run_id": "test-9",
@@ -247,8 +259,10 @@ class TestReviewGate:
                 )
             ],
         }
-        result = review_gate(state)
-        assert result == "needs_review"
+        updates = await review_gate_node(state)
+        state.update(updates)
+        route = review_gate_router(state)
+        assert route == "needs_review"
 
 
 # ── Aggregate Results 测试 ────────────────────────────────────────────────

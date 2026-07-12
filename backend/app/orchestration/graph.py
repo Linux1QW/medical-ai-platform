@@ -21,6 +21,8 @@ from app.orchestration.state import (
     ReflectionResult,
     ReflectionIssue,
 )
+import json
+
 from app.services.agents.safety_agent import run_safety_check
 from app.services.scoring.policies import get_default_policy
 from app.services.scoring.calculator import ScoreCalculator, DimensionResult as CalcDimResult
@@ -42,6 +44,8 @@ class RunAgentState(TypedDict, total=False):
     step_id: str
     context: EvaluationContext
     run_id: str
+    # Knowledge Agent 检索到的指南证据（第二波执行时由 extract_knowledge_citations 注入）
+    knowledge_citations: list[dict]
 
 
 # ── 节点函数 ──────────────────────────────────────────────────────────────
@@ -201,6 +205,10 @@ async def validate_plan(state: EvaluationState) -> dict[str, Any]:
     }
 
 
+# 第一波执行的 Agent（knowledge 必须先完成，以便其 citations 可传递给 diagnosis/treatment）
+_WAVE1_AGENTS = {"knowledge", "inquiry", "humanistic"}
+
+
 def plan_valid_gate(state: EvaluationState) -> list[Send] | str:
     """计划校验条件边 + Fan-out 路由
 
@@ -210,13 +218,14 @@ def plan_valid_gate(state: EvaluationState) -> list[Send] | str:
     if not state.get("plan_valid", False):
         return "needs_review"
 
-    # 校验通过 → 构建 Send 列表（fan-out）
+    # 校验通过 → 构建 Wave-1 Send 列表（knowledge + inquiry + humanistic）
     context = state["context"]
     run_id = state.get("run_id", "unknown")
 
     plan: EvaluationPlan | None = state.get("evaluation_plan")
     if plan is not None:
-        steps = plan.agent_steps
+        # Wave-1: 仅发送 knowledge/inquiry/humanistic
+        steps = [s for s in plan.agent_steps if s.agent_name in _WAVE1_AGENTS]
     else:
         # 回退到旧版 route_plan
         route_plan = state.get("route_plan")
@@ -225,11 +234,16 @@ def plan_valid_gate(state: EvaluationState) -> list[Send] | str:
         steps = [
             PlanStep(step_id=f"step_{name}", agent_name=name)
             for name in route_plan.selected_agents
+            if name in _WAVE1_AGENTS
         ]
+
+    # 如果没有 Wave-1 步骤（例如 communication 场景不需要 knowledge），直接跳到 Wave-2
+    if not steps:
+        return "skip_to_remaining"
 
     return [
         Send(
-            "run_agent",
+            "run_agent_wave1",
             {
                 "agent_name": step.agent_name,
                 "step_id": step.step_id,
@@ -241,7 +255,87 @@ def plan_valid_gate(state: EvaluationState) -> list[Send] | str:
     ]
 
 
-# ── Execute 阶段（Send fan-out / fan-in） ────────────────────────────────
+# ── Execute 阶段（Send fan-out / fan-in） ────────────────────────────
+
+
+async def extract_knowledge_citations(state: EvaluationState) -> dict[str, Any]:
+    """从 Knowledge Agent 结果中提取指南证据，存入 state 供下游 Agent 使用
+
+    在第一波 Agent 执行完成后，从 agent_results / execution_results 中
+    找到 knowledge 的结果，提取 citations 写入 state.knowledge_citations。
+    """
+    citations: list[dict] = []
+
+    # 优先从 execution_results 提取
+    for exec_result in state.get("execution_results", []):
+        if exec_result.agent_name == "knowledge" and exec_result.envelope:
+            citations = exec_result.envelope.citations
+            break
+
+    # 回退：从 agent_results 提取
+    if not citations:
+        for result in state.get("agent_results", []):
+            if result.agent_name == "knowledge":
+                citations = result.citations
+                break
+
+    return {
+        "knowledge_citations": citations,
+        "progress_events": [
+            ProgressEvent(
+                progress=55,
+                message=f"知识证据提取完成: {len(citations)} 条引用",
+                node_name="extract_knowledge_citations",
+            )
+        ],
+    }
+
+
+def dispatch_remaining_agents(state: EvaluationState) -> list[Send]:
+    """第二波 Fan-out 路由 — 发送非 Wave-1 的 Agent 步骤（携带 knowledge citations）
+
+    从 evaluation_plan 中筛选出不在 _WAVE1_AGENTS 中的步骤，
+    为每个步骤创建 Send，并将 knowledge_citations 注入 RunAgentState。
+    """
+    context = state["context"]
+    run_id = state.get("run_id", "unknown")
+    knowledge_citations = state.get("knowledge_citations", [])
+
+    plan: EvaluationPlan | None = state.get("evaluation_plan")
+    route_plan = state.get("route_plan")
+
+    if plan is not None:
+        steps = [s for s in plan.agent_steps if s.agent_name not in _WAVE1_AGENTS]
+    elif route_plan is not None:
+        steps = [
+            PlanStep(step_id=f"step_{name}", agent_name=name)
+            for name in route_plan.selected_agents
+            if name not in _WAVE1_AGENTS
+        ]
+    else:
+        return []
+
+    return [
+        Send(
+            "run_agent",
+            {
+                "agent_name": step.agent_name,
+                "step_id": step.step_id,
+                "context": context,
+                "run_id": f"{run_id}_{step.agent_name}",
+                "knowledge_citations": knowledge_citations,
+            },
+        )
+        for step in steps
+    ]
+
+
+async def run_agent_wave1(state: RunAgentState) -> dict[str, Any]:
+    """Wave-1 工作器节点 — 执行第一波 Agent（knowledge/inquiry/humanistic）
+
+    与 run_agent 逻辑相同，但作为独立节点以便图结构区分两波执行。
+    """
+    return await run_agent(state)
 
 
 async def run_agent(state: RunAgentState) -> dict[str, Any]:
@@ -256,6 +350,11 @@ async def run_agent(state: RunAgentState) -> dict[str, Any]:
     agent_name = state["agent_name"]
     step_id = state.get("step_id", f"step_{agent_name}")
     context = state["context"]
+
+    # 注入 knowledge_citations 到 context（如果 RunAgentState 中有提供）
+    knowledge_citations = state.get("knowledge_citations")
+    if knowledge_citations and agent_name != "knowledge":
+        context = context.model_copy(update={"knowledge_citations": knowledge_citations})
 
     try:
         adapter = get_adapter(agent_name)
@@ -577,26 +676,100 @@ async def reflection_check(state: EvaluationState) -> dict[str, Any]:
         }
 
 
-def review_gate(state: EvaluationState) -> str:
-    """审核门控条件边
+async def review_gate_node(state: EvaluationState) -> dict[str, Any]:
+    """人工复核门控节点
 
-    检查维度结果、agent 结果和反思结果，决定是否需要人工复核。
+    检查是否需要人工复核。如果需要，标记为 pending_review 并保存 checkpoint 到 Redis，
+    图执行将在此暂停，等待外部 API 调用恢复。
     """
+    needs_review = False
+    review_reasons: list[str] = []
+
     # 检查是否有维度需要 review
     for dim in state.get("dimension_results", {}).values():
         if dim.status in ("error", "insufficient"):
-            return "needs_review"
+            needs_review = True
+            review_reasons.append(f"{dim.dimension}: {dim.status}")
 
     # 检查 agent_results 中是否有 human_review_needed
     for result in state.get("agent_results", []):
         if result.human_review_needed:
-            return "needs_review"
+            needs_review = True
+            review_reasons.append(f"{result.agent_name}: {result.review_reason}")
 
     # 检查反思结果是否标记需要复核
     reflection = state.get("reflection_result")
     if reflection is not None and reflection.needs_review:
-        return "needs_review"
+        needs_review = True
+        review_reasons.extend(reflection.review_reasons)
 
+    if needs_review:
+        reason_text = "; ".join(review_reasons) if review_reasons else "需要人工复核"
+        state_updates: dict[str, Any] = {
+            "evaluation_status": "pending_review",
+            "human_review_needed": True,
+            "review_reason": reason_text,
+        }
+
+        # 保存 checkpoint 到 Redis
+        eval_id = state.get("evaluation_id") or state.get("run_id")
+        if eval_id:
+            try:
+                from app.services.llm_cache import _get_redis
+                redis = await _get_redis()
+                if redis:
+                    key = f"eval_checkpoint:{eval_id}"
+                    # 构建可序列化的状态快照
+                    snapshot = {
+                        "evaluation_id": eval_id,
+                        "run_id": state.get("run_id"),
+                        "consultation_id": state.get("consultation_id"),
+                        "evaluation_status": "pending_review",
+                        "needs_review": True,
+                        "review_reason": reason_text,
+                        "total_score": state.get("total_score"),
+                        "dimension_results": {
+                            k: {"dimension": v.dimension, "status": v.status, "score": v.score, "analysis": v.analysis}
+                            for k, v in state.get("dimension_results", {}).items()
+                        },
+                        "human_review_needed": True,
+                    }
+                    await redis.set(
+                        key,
+                        json.dumps(snapshot, ensure_ascii=False, default=str),
+                        ex=604800,  # 7 天 TTL
+                    )
+                    logger.info(f"Checkpoint saved for evaluation {eval_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save checkpoint: {e}")
+
+        state_updates["progress_events"] = [
+            ProgressEvent(
+                progress=88,
+                message=f"需要人工复核: {reason_text[:80]}",
+                node_name="review_gate",
+            )
+        ]
+        return state_updates
+
+    return {
+        "progress_events": [
+            ProgressEvent(
+                progress=88,
+                message="复核检查通过，无需人工介入",
+                node_name="review_gate",
+            )
+        ],
+    }
+
+
+def review_gate_router(state: EvaluationState) -> str:
+    """审核门控条件边路由
+
+    根据 review_gate_node 设置的状态决定路由方向。
+    """
+    if state.get("evaluation_status") == "pending_review":
+        return "needs_review"
     return "completed"
 
 
@@ -792,13 +965,13 @@ async def finalize_needs_review(state: EvaluationState) -> dict[str, Any]:
 def build_evaluation_graph() -> StateGraph:
     """构建评估状态图
 
-    状态图结构（Plan-Execute + Send fan-out/fan-in + ReAct Reflection）：
+    状态图结构（Plan-Execute + Send fan-out/fan-in + ReAct Reflection + Checkpoint Review）：
     START → load_context → classify_consultation → safety_check → safety_gate
       → plan_evaluation → validate_plan → plan_valid_gate
         → [Send fan-out] → run_agent × N → [fan-in] → aggregate_results
-        → deterministic_scoring → reflection_check → review_gate
-        → generate_suggestion → finalize_completed → END
-                                       → finalize_needs_review → END
+        → deterministic_scoring → reflection_check → review_gate_node
+        → review_gate_router → generate_suggestion → finalize_completed → END
+                              → finalize_needs_review → END（暂停等待复核恢复）
     """
     graph = StateGraph(EvaluationState)
 
@@ -808,11 +981,14 @@ def build_evaluation_graph() -> StateGraph:
     graph.add_node("safety_check", safety_check)
     graph.add_node("plan_evaluation", plan_evaluation)
     graph.add_node("validate_plan", validate_plan)
+    graph.add_node("run_agent_wave1", run_agent_wave1)
     graph.add_node("run_agent", run_agent)
     graph.add_node("dispatch_and_run", dispatch_and_run)
+    graph.add_node("extract_knowledge_citations", extract_knowledge_citations)
     graph.add_node("aggregate_results", aggregate_results)
     graph.add_node("deterministic_scoring", deterministic_scoring)
     graph.add_node("reflection_check", reflection_check)
+    graph.add_node("review_gate_node", review_gate_node)
     graph.add_node("generate_suggestion", generate_suggestion)
     graph.add_node("finalize_completed", finalize_completed)
     graph.add_node("finalize_needs_review", finalize_needs_review)
@@ -832,22 +1008,33 @@ def build_evaluation_graph() -> StateGraph:
         },
     )
 
-    # Plan → Validate → 校验条件边 + Fan-out/Fan-in
+    # Plan → Validate → 校验条件边 + 两波 Fan-out/Fan-in
     graph.add_edge("plan_evaluation", "validate_plan")
 
     # validate_plan 的条件边：
-    # - 校验通过 → 返回 list[Send] fan-out 到 run_agent
+    # - 校验通过 → 返回 list[Send] fan-out 到 run_agent_wave1（Wave-1: knowledge/inquiry/humanistic）
     # - 校验失败 → 返回 "needs_review" 字符串
+    # - 无 Wave-1 步骤 → 返回 "skip_to_remaining" 直接到 Wave-2
     graph.add_conditional_edges(
         "validate_plan",
         plan_valid_gate,
         {
             "needs_review": "finalize_needs_review",
-            # "run_agent" 由 Send 列表动态路由
+            "run_agent": "run_agent_wave1",
+            "skip_to_remaining": "extract_knowledge_citations",
+        },
+    )
+    # Wave-1 完成后 → 提取 knowledge citations
+    graph.add_edge("run_agent_wave1", "extract_knowledge_citations")
+    # 提取完成后 → Wave-2 fan-out (diagnosis/treatment，携带 citations)
+    graph.add_conditional_edges(
+        "extract_knowledge_citations",
+        dispatch_remaining_agents,
+        {
             "run_agent": "run_agent",
         },
     )
-    # Fan-in: run_agent → aggregate_results（所有 agent 汇聚）
+    # Wave-2 完成后 → 结果聚合
     graph.add_edge("run_agent", "aggregate_results")
 
     graph.add_edge("aggregate_results", "deterministic_scoring")
@@ -855,10 +1042,13 @@ def build_evaluation_graph() -> StateGraph:
     # 评分后 → 反思检查
     graph.add_edge("deterministic_scoring", "reflection_check")
 
-    # 反思检查后 → 审核门控
+    # 反思检查后 → 复核门控节点
+    graph.add_edge("reflection_check", "review_gate_node")
+
+    # 复核门控节点 → 条件路由
     graph.add_conditional_edges(
-        "reflection_check",
-        review_gate,
+        "review_gate_node",
+        review_gate_router,
         {
             "completed": "generate_suggestion",
             "needs_review": "finalize_needs_review",

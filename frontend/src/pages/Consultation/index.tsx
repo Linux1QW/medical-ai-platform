@@ -7,17 +7,10 @@ import type { SSEProgressEvent } from '../../api/consultation';
 import { getPatient } from '../../api/patient';
 import { getEvaluation } from '../../api/evaluation';
 import type { Message, VirtualPatient, Evaluation } from '../../types';
-import { ScoreDisplay, getScoreColor, getScoreLevel } from '../../components';
+import { ScoreDisplay, getScoreColor, getScoreLevel, PersonalityTag } from '../../components';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
-
-const personalityColorMap: Record<string, string> = {
-  配合型: 'green',
-  焦虑型: 'orange',
-  沉默型: 'blue',
-  对抗型: 'red',
-};
 
 const ConsultationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -39,16 +32,29 @@ const ConsultationPage: React.FC = () => {
 
   useEffect(() => {
     if (!id) return;
-    getConsultationDetail(Number(id)).then((data) => {
-      setMessages(data.messages);
-      setStatus(data.status);
-      setMaxRounds(data.max_rounds || 20);
-      getPatient(data.patient_id).then(setPatient).catch(() => {
-        message.error('加载患者信息失败');
-      });
-    }).catch(() => {
-      message.error('加载问诊详情失败');
-    });
+    (async () => {
+      try {
+        const data = await getConsultationDetail(Number(id));
+        setMessages(data.messages);
+        setStatus(data.status);
+        setMaxRounds(data.max_rounds || 20);
+        const tasks: Promise<void>[] = [
+          getPatient(data.patient_id)
+            .then(setPatient)
+            .catch(() => { message.error('加载患者信息失败'); }),
+        ];
+        if (data.status !== 'in_progress') {
+          tasks.push(
+            getEvaluation(Number(id))
+              .then(setEvaluation)
+              .catch(() => setEvaluation(null)),
+          );
+        }
+        await Promise.all(tasks);
+      } catch {
+        message.error('加载问诊详情失败');
+      }
+    })();
   }, [id]);
 
   useEffect(() => {
@@ -200,7 +206,7 @@ const ConsultationPage: React.FC = () => {
             <Text>年龄：{patient.age}岁</Text>
             <Text>性别：{patient.gender === 'male' ? '男' : '女'}</Text>
             <Text>主诉：{patient.chief_complaint}</Text>
-            <Tag color={personalityColorMap[patient.personality_type] || 'blue'}>{patient.personality_type}</Tag>
+            <PersonalityTag type={patient.personality_type} />
             <Divider style={{ margin: '8px 0' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>问诊轮次：{currentRounds} / {maxRounds}</Text>
             <Progress percent={parseFloat(Math.min(100, (currentRounds / maxRounds) * 100).toFixed(1))} size="small" status={isRoundLimitReached ? 'exception' : 'active'} />

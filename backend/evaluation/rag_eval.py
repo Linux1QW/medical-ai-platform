@@ -11,6 +11,7 @@ from .config import DEFAULT_CONFIG
 from .datasets import load_gold_cases
 from .runners import run_evaluation, filter_cases_by_split, create_mock_cases
 from .report import generate_json_report, write_json_report, write_markdown_report
+from .ab_compare import run_ab_comparison, write_ab_report
 
 
 async def main():
@@ -53,8 +54,45 @@ async def main():
         default=DEFAULT_CONFIG.fail_on_threshold,
         help="Exit with non-zero code if thresholds are not met"
     )
+    parser.add_argument(
+        "--compare-versions",
+        nargs=2,
+        metavar=("VERSION_A", "VERSION_B"),
+        help="对比两个索引版本的检索质量（A/B 测试）"
+    )
     
     args = parser.parse_args()
+    
+    # A/B 版本对比模式
+    if args.compare_versions:
+        version_a, version_b = args.compare_versions
+        print(f"Starting A/B comparison: {version_a} vs {version_b}")
+        
+        # 加载测试用例
+        if args.mode == "mock":
+            gold_cases = create_mock_cases(args.limit or 5)
+        else:
+            gold_cases = load_gold_cases(args.cases)
+            gold_cases = filter_cases_by_split(gold_cases, args.split)
+            if args.limit:
+                gold_cases = gold_cases[:args.limit]
+        
+        if not gold_cases:
+            print("No cases to evaluate!")
+            return 1
+        
+        # 运行 A/B 对比
+        report = await run_ab_comparison(
+            version_a=version_a,
+            version_b=version_b,
+            gold_cases=gold_cases,
+            mode=args.mode if args.mode != "mock" else "legacy",
+        )
+        
+        # 写入报告
+        write_ab_report(report, args.output_dir)
+        print(f"\nA/B comparison report written to: {args.output_dir}")
+        return 0
     
     print(f"Starting RAG evaluation in {args.mode} mode...")
     print(f"Dataset: {args.cases}")

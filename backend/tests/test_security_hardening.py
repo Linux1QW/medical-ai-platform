@@ -246,16 +246,30 @@ class TestSecurityConfig:
         """默认 SECRET_KEY 触发安全警告"""
         import logging
         with caplog.at_level(logging.WARNING):
-            settings = Settings(SECRET_KEY="change-this-to-a-secure-random-string")
+            settings = Settings(
+                SECRET_KEY="change-this-to-a-secure-random-string",
+                TESTING=False,
+                ENVIRONMENT="development",
+            )
             settings.check_security()
 
         assert any("SECURITY WARNING" in record.message for record in caplog.records)
+
+    def test_default_secret_key_raises_in_production(self):
+        """生产环境默认 SECRET_KEY 拒绝启动"""
+        settings = Settings(
+            SECRET_KEY="change-this-to-a-secure-random-string",
+            TESTING=False,
+            ENVIRONMENT="production",
+        )
+        with pytest.raises(RuntimeError, match="SECRET_KEY"):
+            settings.check_security()
 
     def test_custom_secret_key_no_warning(self, caplog):
         """自定义 SECRET_KEY 不触发警告"""
         import logging
         with caplog.at_level(logging.WARNING):
-            settings = Settings(SECRET_KEY="my-secure-random-key-12345")
+            settings = Settings(SECRET_KEY="my-secure-random-key-12345", TESTING=False)
             settings.check_security()
 
         assert not any("SECURITY WARNING" in record.message for record in caplog.records)

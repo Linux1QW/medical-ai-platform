@@ -1,19 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Card, Table, Tag, Select, Button, Space, Typography, Rate, message } from 'antd';
+import { Card, Table, Select, Button, Space, Typography, Rate, message } from 'antd';
 import { PlayCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { getPatients } from '../../api/patient';
 import { startConsultation } from '../../api/consultation';
+import { PersonalityTag } from '../../components';
 import type { VirtualPatient } from '../../types';
 
 const { Title } = Typography;
-
-const personalityMap: Record<string, { color: string; text: string }> = {
-  配合型: { color: 'green', text: '配合型' },
-  焦虑型: { color: 'orange', text: '焦虑型' },
-  沉默型: { color: 'blue', text: '沉默型' },
-  对抗型: { color: 'red', text: '对抗型' },
-};
 
 const PatientListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -54,10 +48,7 @@ const PatientListPage: React.FC = () => {
     },
     {
       title: '人格类型', dataIndex: 'personality_type', key: 'personality_type',
-      render: (v: string) => {
-        const item = personalityMap[v] || { color: 'default', text: v };
-        return <Tag color={item.color}>{item.text}</Tag>;
-      },
+      render: (v: string) => <PersonalityTag type={v} />,
     },
     { title: '主诉', dataIndex: 'chief_complaint', key: 'chief_complaint', ellipsis: true },
     {

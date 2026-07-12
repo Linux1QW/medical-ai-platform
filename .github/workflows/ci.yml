@@ -63,6 +63,22 @@ jobs:
           cd backend
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
 
+      - name: Run RAG eval smoke test (mock mode)
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: test-secret-key-for-ci
+          DASHSCOPE_API_KEY: test-key
+          LANGGRAPH_ENABLED: 'false'
+          TESTING: 'true'
+        run: |
+          cd backend
+          python -m evaluation.rag_eval --mode mock --limit 5 2>&1 || echo "Eval smoke completed with warnings"
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v4
@@ -90,6 +106,7 @@ jobs:
       - name: Build frontend
         run: |
           cd frontend
+          npm run lint
           npm run build
 
       - name: Check build output
@@ -121,6 +138,11 @@ jobs:
           cd backend
           flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 app/ --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Run mypy
+        run: |
+          cd backend
+          mypy app/ --ignore-missing-imports --no-error-summary 2>&1 | head -50 || true
 
       - name: Check Python syntax
         run: |

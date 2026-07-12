@@ -7,9 +7,12 @@ BM25 擅长精确术语匹配（药物名称、疾病编码、检查项目名称
 
 import logging
 import math
+import os
 import re
 from collections import Counter
 from typing import Dict, List, Optional
+
+import jieba
 
 logger = logging.getLogger(__name__)
 
@@ -129,46 +132,15 @@ class BM25Index:
         return score
 
 
-def tokenize_medical_text(text: str) -> List[str]:
-    """医学文本分词 — 适配中文医学文档的轻量级分词
-
-    策略：
-    1. 保留完整的英文术语和数字（如 NSCLC、EGFR、PD-L1、20mg）
-    2. 中文按字符级别分词（单字 + 二元组合 bigram）
-    3. 去除停用词和标点符号
-
-    Args:
-        text: 输入文本
-
-    Returns:
-        token 列表
-    """
-    if not text:
-        return []
-
-    text = text.lower().strip()
-    tokens = []
-
-    # 提取英文单词和数字（保留连字符，如 PD-L1）
-    english_pattern = re.compile(r'[a-z][a-z0-9\-]*[a-z0-9]|[a-z]|\d+\.?\d*')
-    english_tokens = english_pattern.findall(text)
-    tokens.extend(english_tokens)
-
-    # 提取中文字符
-    chinese_chars = re.findall(r'[\u4e00-\u9fff]', text)
-
-    # 单字 token
-    tokens.extend(chinese_chars)
-
-    # 二元组合 (bigram) — 提升短语匹配能力
-    for i in range(len(chinese_chars) - 1):
-        bigram = chinese_chars[i] + chinese_chars[i + 1]
-        tokens.append(bigram)
-
-    # 过滤停用词
-    tokens = [t for t in tokens if t not in MEDICAL_STOPWORDS and len(t) > 0]
-
-    return tokens
+# ── 加载医学自定义词典（模块级别，只执行一次）──
+_medical_dict_path = os.path.join(
+    os.path.dirname(__file__), '..', '..', '..', 'data', 'medical_dict.txt'
+)
+if os.path.exists(_medical_dict_path):
+    jieba.load_userdict(_medical_dict_path)
+    logger.info(f"jieba 医学词典已加载: {_medical_dict_path}")
+else:
+    logger.warning(f"医学词典文件不存在: {_medical_dict_path}，将使用 jieba 默认分词")
 
 
 # ── 医学文本停用词表（精简版）──
@@ -182,6 +154,58 @@ MEDICAL_STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "been",
     "and", "or", "of", "in", "on", "at", "to", "for", "with",
 }
+
+
+def tokenize_medical_text(text: str) -> List[str]:
+    """医学文本分词 — jieba 分词 + 英文术语提取 + bigram 兜底
+
+    策略：
+    1. 保留完整的英文术语和数字（如 NSCLC、EGFR、PD-L1、20mg）
+    2. 中文使用 jieba 分词（加载医学自定义词典提升复合术语召回）
+    3. 保留 bigram 作为 fallback（对 jieba 可能切错的长词兜底）
+    4. 去除停用词和标点符号
+
+    Args:
+        text: 输入文本
+
+    Returns:
+        token 列表
+    """
+    if not text:
+        return []
+
+    text = text.lower().strip()
+    tokens = []
+
+    # 1. 提取英文术语和数字（保留连字符，如 PD-L1）
+    english_pattern = re.compile(r'[a-z][a-z0-9\-]*[a-z0-9]|[a-z]|\d+\.?\d*')
+    english_tokens = english_pattern.findall(text)
+    tokens.extend(english_tokens)
+
+    # 2. jieba 中文分词（先移除英文/数字部分，避免干扰）
+    chinese_text = re.sub(r'[a-zA-Z0-9\.\-\_]+', ' ', text)
+    words = jieba.cut(chinese_text)
+
+    for word in words:
+        word = word.strip()
+        if not word:
+            continue
+        # 过滤停用词
+        if word in MEDICAL_STOPWORDS:
+            continue
+        # 过滤单字（除非是数字）
+        if len(word) == 1 and not word.isdigit():
+            continue
+        tokens.append(word)
+
+    # 3. 保留 bigram 作为补充（对 jieba 可能切错的长词提供 fallback）
+    chinese_chars = re.findall(r'[\u4e00-\u9fff]', text)
+    for i in range(len(chinese_chars) - 1):
+        bigram = chinese_chars[i] + chinese_chars[i + 1]
+        if bigram not in MEDICAL_STOPWORDS:
+            tokens.append(bigram)
+
+    return tokens
 
 
 # ── 全局 BM25 索引单例 ──

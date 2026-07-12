@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Card, Typography, Progress, Row, Col, Collapse, Button, Spin, message, Tag, Badge } from 'antd';
 import { FileTextOutlined, RobotOutlined, MedicineBoxOutlined, ReadOutlined, HeartOutlined, CheckCircleOutlined, ExperimentOutlined, BulbOutlined, TrophyOutlined, WarningOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getEvaluation, createEvaluation } from '../../api/evaluation';
+import { getEvaluation, createEvaluation, getEvaluationLockStatus } from '../../api/evaluation';
 import { getConsultationDetail } from '../../api/consultation';
 import type { Evaluation, ConsultationDetail, Citation } from '../../types';
 import { ScoreDisplay, DimensionRadar, getScoreColor, getScoreLevel } from '../../components';
@@ -18,6 +18,8 @@ const EvaluationPage: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
+  const [lockActive, setLockActive] = useState(false);
+  const pollingRef = useRef<number | null>(null);
 
   useEffect(() => {
     let timer: number;
@@ -51,6 +53,58 @@ const EvaluationPage: React.FC = () => {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // 页面加载时检查是否有进行中的评估
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    const checkLock = async () => {
+      try {
+        const status = await getEvaluationLockStatus(Number(id));
+        if (!cancelled && status.is_active && !evaluation) {
+          setLockActive(true);
+          setGenerating(true);
+          startPolling();
+        }
+      } catch {
+        // 接口不可用时降级
+      }
+    };
+
+    if (!evaluation) {
+      checkLock();
+    }
+
+    return () => {
+      cancelled = true;
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [id]);
+
+  const startPolling = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    pollingRef.current = window.setInterval(async () => {
+      try {
+        const data = await getEvaluation(Number(id));
+        if (data) {
+          setEvaluation(data);
+          setGenerating(false);
+          setLockActive(false);
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          message.success('评估报告已生成');
+        }
+      } catch {
+        // 评估尚未完成
+      }
+    }, 5000);
+  };
+
   const handleGenerate = async (isAutoRetry = false) => {
     if (!id) return;
     setGenerating(true);
@@ -59,7 +113,8 @@ const EvaluationPage: React.FC = () => {
     
     // 建立 WebSocket 连接以接收进度推送
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/evaluations/ws/${id}`;
+    const token = sessionStorage.getItem('token') || '';
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/evaluations/ws/${id}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(wsUrl);
     
     // 设置 WebSocket 事件处理
@@ -112,14 +167,13 @@ const EvaluationPage: React.FC = () => {
       setEvaluation(data);
       message.success('评估报告已生成');
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: { error_type?: string } } } };
-      const errorData = err.response?.data?.detail;
-      if (errorData?.error_type === 'ValidationError' && !isAutoRetry) {
+      const data = (error as { response?: { data?: { error_type?: string } } })?.response?.data;
+      if (data?.error_type === 'ValidationError' && !isAutoRetry) {
         message.warning('评估格式异常，正在尝试重新生成...');
         ws.close();
         handleGenerate(true);
         return;
-      } else if (errorData?.error_type === 'ValidationError' && isAutoRetry) {
+      } else if (data?.error_type === 'ValidationError' && isAutoRetry) {
         message.error('评估格式异常，请稍后重试');
       } else {
         message.error('生成评估报告失败');
@@ -127,6 +181,7 @@ const EvaluationPage: React.FC = () => {
     } finally {
       ws.close();
       setGenerating(false);
+      setLockActive(false);
     }
   };
 
@@ -167,9 +222,19 @@ const EvaluationPage: React.FC = () => {
         ) : (
           <Paragraph type="warning">提示：您尚未提交诊断结果和治疗方案，相关维度评估可能不完整</Paragraph>
         )}
-        <Button type="primary" size="large" onClick={() => handleGenerate()} icon={<FileTextOutlined />} style={{ marginTop: 16 }}>
-          生成评估报告
-        </Button>
+        {!lockActive && (
+          <Button type="primary" size="large" onClick={() => handleGenerate()} icon={<FileTextOutlined />} style={{ marginTop: 16 }} loading={generating}>
+            生成评估报告
+          </Button>
+        )}
+        {lockActive && (
+          <div style={{ marginTop: 16, textAlign: 'center' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 12, color: '#666', fontSize: 15 }}>
+              评估正在进行中，请稍候...
+            </div>
+          </div>
+        )}
       </div>
     );
   }

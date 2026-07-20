@@ -9,3 +9,4 @@ from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.review_record import ReviewRecord  # noqa: F401
 from app.models.evaluation_checkpoint import EvaluationCheckpoint  # noqa: F401
 from app.models.evaluation_lock import EvaluationLock  # noqa: F401
+from app.models.model_version import ModelVersion  # noqa: F401

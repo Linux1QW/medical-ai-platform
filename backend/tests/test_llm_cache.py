@@ -24,13 +24,13 @@ def reset_redis_and_stats():
     """每个测试前重置 Redis 客户端、统计计数器和 mock store"""
     # 重置为 mock Redis 实例（不是 None！None 会导致 _get_redis 连接真实 Redis）
     llm_cache_module._redis_client = llm_cache_module._mock_redis
-    # 重置统计计数器
-    llm_cache_module._cache_hits = 0
-    llm_cache_module._cache_misses = 0
+    # 重置统计计数器（错误计数器仍在进程内）
     llm_cache_module._cache_errors = 0
-    # 清空 mock Redis 的内存 store
+    # 清空 mock Redis 的内存 store 和计数器
     if hasattr(llm_cache_module, '_mock_redis_store'):
         llm_cache_module._mock_redis_store.clear()
+    if hasattr(llm_cache_module, '_mock_redis') and hasattr(llm_cache_module._mock_redis, '_counters'):
+        llm_cache_module._mock_redis._counters.clear()
 
     yield
 
@@ -174,7 +174,8 @@ class TestGracefulDegradation:
         with patch.object(llm_cache_module, '_get_redis', failing_get_redis):
             result = await LLMResponseCache.get(SAMPLE_MESSAGES, SAMPLE_MODEL, 0.0)
             assert result is None
-            assert llm_cache_module._cache_misses == 1
+            # 计数器现在在 Redis 中，但 Redis 不可用时计数器也无法递增
+            # 只验证函数安全返回 None（graceful degradation）
 
     @pytest.mark.asyncio
     async def test_get_redis_exception_returns_none(self):

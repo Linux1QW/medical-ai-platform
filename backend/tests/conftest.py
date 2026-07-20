@@ -17,8 +17,12 @@ import app.services.llm_cache as llm_cache_module
 def _build_mock_redis():
     """构建一个基于内存字典的 mock Redis 客户端"""
     store = {}
+    counters = {}  # 用于 INCR 操作的持久化计数器
 
     async def mock_get(key):
+        # 优先检查计数器（INCR 写入）
+        if key in counters:
+            return str(counters[key])
         return store.get(key)
 
     async def mock_setex(key, ttl, value):
@@ -38,6 +42,10 @@ def _build_mock_redis():
     async def mock_ttl(key):
         return 3600 if key in store else -2
 
+    async def mock_incr(key):
+        counters[key] = counters.get(key, 0) + 1
+        return counters[key]
+
     redis_mock = AsyncMock()
     redis_mock.get = mock_get
     redis_mock.setex = mock_setex
@@ -45,7 +53,9 @@ def _build_mock_redis():
     redis_mock.scan = mock_scan
     redis_mock.delete = mock_delete
     redis_mock.ttl = mock_ttl
+    redis_mock.incr = mock_incr
     redis_mock._store = store
+    redis_mock._counters = counters
 
     return redis_mock, store
 

@@ -11,6 +11,16 @@ from openai import AsyncOpenAI, APIError, APITimeoutError, APIConnectionError, R
 
 from app.core.config import settings
 from app.services.llm_cache import LLMResponseCache
+from app.services.token_tracker import token_tracker
+from app.services.observability.alerting import alert_manager
+from app.services.model_router import model_router
+from app.services.llm_failover import failover_manager
+from app.services.observability.langfuse_client import get_tracer
+from app.services.observability.metrics import (
+    LLM_CALLS_TOTAL,
+    LLM_REQUEST_DURATION,
+    LLM_TOKENS_TOTAL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,11 +233,59 @@ async def _execute_with_retry(
             )
             exec_elapsed = time.monotonic() - exec_start
             metrics.total_exec_time += exec_elapsed
+
+            # ── Prometheus 指标更新 ──
+            _model_name = model or settings.QWEN_MODEL
+            LLM_CALLS_TOTAL.labels(model=_model_name, status="success").inc()
+            LLM_REQUEST_DURATION.labels(model=_model_name).observe(exec_elapsed)
+
+            # ── Token 用量追踪（best-effort）──
+            try:
+                usage = getattr(response, 'usage', None)
+                if usage:
+                    prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0
+                    completion_tokens = getattr(usage, 'completion_tokens', 0) or 0
+                    await token_tracker.record_usage(
+                        model=_model_name,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                    # Prometheus token 计数
+                    if prompt_tokens:
+                        LLM_TOKENS_TOTAL.labels(model=_model_name, type="prompt").inc(prompt_tokens)
+                    if completion_tokens:
+                        LLM_TOKENS_TOTAL.labels(model=_model_name, type="completion").inc(completion_tokens)
+            except Exception as e:
+                logger.debug(f"Token 用量追踪异常: {e}")
+
+            # ── Langfuse trace（best-effort）──
+            try:
+                _content = response.choices[0].message.content or ""
+                _prompt_text = messages[-1].get("content", "") if messages else ""
+                _usage = getattr(response, 'usage', None)
+                _total_tokens = getattr(_usage, 'total_tokens', 0) if _usage else 0
+                get_tracer().trace_llm_call(
+                    trace_name="qwen_chat",
+                    model=_model_name,
+                    prompt=_prompt_text,
+                    completion=_content,
+                    tokens=_total_tokens,
+                    latency_ms=exec_elapsed * 1000,
+                )
+            except Exception as e:
+                logger.debug(f"Langfuse trace 异常: {e}")
+
+            # 报告成功（重置 failover 计数）
+            failover_manager.report_success()
+            alert_manager.record_llm_success()
             return response.choices[0].message.content
 
         except (APITimeoutError, APIConnectionError, RateLimitError, APIError) as e:
             exec_elapsed = time.monotonic() - exec_start
             metrics.total_exec_time += exec_elapsed
+
+            # 报告失败给 failover 管理器
+            failover_manager.report_failure()
 
             status_code = getattr(e, 'status_code', None)
             is_retryable = (
@@ -241,6 +299,13 @@ async def _execute_with_retry(
                 if isinstance(e, RateLimitError):
                     retry_delay = max(retry_delay, 5.0)
 
+                # 检查是否需要切换 Provider
+                if failover_manager.should_switch():
+                    new_provider = failover_manager.switch_to_next()
+                    logger.warning(
+                        f"Failover: 切换到 Provider '{new_provider['name']}'"
+                    )
+
                 logger.warning(
                     f"LLM调用失败(尝试 {attempt + 1}/{max_retries + 1}): "
                     f"{type(e).__name__}: {str(e)[:120]}，"
@@ -250,6 +315,10 @@ async def _execute_with_retry(
                 retry_delay *= 2
             else:
                 metrics.total_failures += 1
+                _model_name = model or settings.QWEN_MODEL
+                LLM_CALLS_TOTAL.labels(model=_model_name, status="error").inc()
+                # 触发 LLM 连续失败告警
+                await alert_manager.record_llm_error()
                 logger.error(
                     f"LLM调用最终失败: {type(e).__name__}: {str(e)}\n"
                     f"{traceback.format_exc()}"
@@ -260,6 +329,9 @@ async def _execute_with_retry(
             exec_elapsed = time.monotonic() - exec_start
             metrics.total_exec_time += exec_elapsed
             metrics.total_failures += 1
+            failover_manager.report_failure()
+            _model_name = model or settings.QWEN_MODEL
+            LLM_CALLS_TOTAL.labels(model=_model_name, status="error").inc()
             logger.error(f"LLM调用发生未知异常: {str(e)}\n{traceback.format_exc()}")
             raise
 
@@ -296,6 +368,19 @@ async def _call_qwen_api_with_tools(
             )
             exec_elapsed = time.monotonic() - exec_start
             metrics.total_exec_time += exec_elapsed
+
+            # ── Token 用量追踪（Tool Calling，best-effort）──
+            try:
+                usage = getattr(response, 'usage', None)
+                if usage:
+                    await token_tracker.record_usage(
+                        model=model,
+                        prompt_tokens=getattr(usage, 'prompt_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'completion_tokens', 0) or 0,
+                    )
+            except Exception as e:
+                logger.debug(f"Tool Calling Token 用量追踪异常: {e}")
+
             return response
 
         except (APITimeoutError, APIConnectionError, RateLimitError, APIError) as e:
@@ -322,6 +407,8 @@ async def _call_qwen_api_with_tools(
                 retry_delay *= 2
             else:
                 metrics.total_failures += 1
+                # 触发 LLM 连续失败告警
+                await alert_manager.record_llm_error()
                 logger.error(
                     f"Tool Calling LLM调用最终失败: {type(e).__name__}: {str(e)}\n"
                     f"{traceback.format_exc()}"

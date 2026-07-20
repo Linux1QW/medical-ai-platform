@@ -1,5 +1,6 @@
 # ============================================
 # Frontend Dockerfile - React + Vite + Nginx
+# 支持 HTTP（开发）/ HTTPS（生产）双模式
 # ============================================
 
 # Stage 1: Build
@@ -26,20 +27,19 @@ FROM nginx:1.27-alpine AS production
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Nginx 配置：反向代理 + SPA 路由
-RUN cat > /etc/nginx/conf.d/default.conf <<'NGINX'
-server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
+# 创建 SSL 证书目录（挂载点，运行时由 docker-compose 注入证书）
+RUN mkdir -p /etc/nginx/ssl
 
-    # Gzip 压缩
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
+# 入口脚本：根据证书是否存在动态生成 Nginx 配置
+RUN cat > /docker-entrypoint.d/40-ssl-config.sh <<'ENTRYSCRIPT'
+#!/bin/sh
+set -e
 
+SSL_CERT="/etc/nginx/ssl/server.crt"
+SSL_KEY="/etc/nginx/ssl/server.key"
+
+# 公共 location 块（API 代理 + SPA 路由 + 静态资源缓存）
+COMMON_LOCATIONS='
     # API 反向代理到 backend 服务
     location /api/ {
         proxy_pass http://backend:8000;
@@ -71,12 +71,76 @@ server {
         expires 30d;
         add_header Cache-Control "public, immutable";
     }
+'
+
+if [ -f "$SSL_CERT" ] && [ -f "$SSL_KEY" ]; then
+    echo "[nginx] SSL 证书已检测到，启用 HTTPS 模式"
+
+    cat > /etc/nginx/conf.d/default.conf <<EOF
+# HTTP → HTTPS 重定向
+server {
+    listen 80;
+    server_name _;
+    return 301 https://\$host\$request_uri;
 }
-NGINX
 
-EXPOSE 80
+# HTTPS 主服务
+server {
+    listen 443 ssl;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
 
+    # SSL 证书
+    ssl_certificate     $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+
+    # 安全 SSL 协议
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # HSTS（Strict-Transport-Security）
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Gzip 压缩
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
+$COMMON_LOCATIONS
+}
+EOF
+else
+    echo "[nginx] 未检测到 SSL 证书，使用 HTTP 模式（开发环境）"
+
+    cat > /etc/nginx/conf.d/default.conf <<EOF
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Gzip 压缩
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
+$COMMON_LOCATIONS
+}
+EOF
+fi
+ENTRYSCRIPT
+
+RUN chmod +x /docker-entrypoint.d/40-ssl-config.sh
+
+# 默认暴露 80 端口；HTTPS 启用时额外暴露 443
+EXPOSE 80 443
+
+# HTTP 模式：80 返回 200，wget 直接成功
+# HTTPS 模式：80 返回 301，wget 接受 3xx 为成功（--spider 不跟随重定向）
+# --no-check-certificate 确保自签名证书不会导致健康检查失败
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+    CMD wget --no-verbose --tries=1 --no-check-certificate --spider http://localhost:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

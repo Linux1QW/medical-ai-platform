@@ -2,7 +2,8 @@ import logging
 import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,15 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    CORS_HEADERS: List[str] = ["Content-Type", "Authorization", "X-Request-ID"]
 
     # JWT
     SECRET_KEY: str = "change-this-to-a-secure-random-string"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    JWT_TOKEN_BLACKLIST_ENABLED: bool = True
 
     # MySQL
     MYSQL_HOST: str = "localhost"
@@ -110,6 +115,64 @@ class Settings(BaseSettings):
 
     # 审计日志
     AUDIT_LOG_ENABLED: bool = True
+
+    # 数据留存策略
+    AUDIT_LOG_RETENTION_DAYS: int = 90        # 审计日志保留天数
+    EVALUATION_RUN_RETENTION_DAYS: int = 180  # 评估运行记录保留天数
+
+    # Token 用量管控
+    TOKEN_DAILY_LIMIT: int = 1_000_000       # 每日 Token 上限
+    COST_PER_1K_TOKENS: float = 0.02         # 每千 Token 成本（元），用于估算
+
+    # 告警配置
+    ALERT_WEBHOOK_URL: str = ""           # 钉钉/企微 Webhook URL
+    ALERT_WEBHOOK_TYPE: str = "dingtalk"  # dingtalk | wecom
+    LLM_ERROR_RATE_THRESHOLD: float = 0.1  # 10% 错误率告警
+
+    # Celery 异步任务队列
+    CELERY_BROKER_URL: str = "redis://localhost:6379/4"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/5"
+
+    # 模型路由（降级策略）
+    MODEL_CRITICAL: str = "qwen-max"        # 评估智能体（核心）
+    MODEL_STANDARD: str = "qwen-plus"       # 人文关怀评估
+    MODEL_LIGHTWEIGHT: str = "qwen-turbo"   # 输入清洗/格式化
+
+    # 跨 Provider LLM Fallback
+    LLM_PROVIDERS: str = "[]"               # JSON 格式，支持多个 Provider 配置
+    LLM_CIRCUIT_BREAKER_THRESHOLD: int = 3  # 连续失败 N 次后切换备用 Provider
+
+    # 日志配置
+    LOG_LEVEL: str = "INFO"          # 日志级别：DEBUG | INFO | WARNING | ERROR
+    LOG_FORMAT: str = "json"         # 日志格式：json | text
+
+    # Langfuse 链路追踪
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_ENABLED: bool = False
+
+    # 数据库连接池配置
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 3600     # 连接回收时间（秒）
+    DB_POOL_TIMEOUT: int = 30       # 获取连接超时（秒）
+
+    def get_llm_providers(self) -> list[dict]:
+        """解析 LLM_PROVIDERS JSON 配置"""
+        try:
+            providers = json.loads(self.LLM_PROVIDERS)
+            if isinstance(providers, list) and providers:
+                return providers
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # 默认返回当前单 Provider 配置
+        return [{
+            "name": "default",
+            "api_key": self.QWEN_API_KEY,
+            "base_url": self.QWEN_API_BASE_URL,
+            "model": self.QWEN_MODEL,
+        }]
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

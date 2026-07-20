@@ -1,9 +1,32 @@
 # ============================================
 # Backend Dockerfile - FastAPI Application
+# 多阶段构建：builder 包含编译工具，production 仅保留运行时依赖
 # ============================================
+
+# ── Stage 1: Builder（安装编译依赖 + Python 依赖） ──
+FROM python:3.10-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+
+# 安装编译工具（PyMuPDF 等需要 C 扩展的包）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 先复制依赖文件，利用 Docker 层缓存
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ── Stage 2: Production（仅包含运行时依赖） ──
 FROM python:3.10-slim AS base
 
-# 环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -11,38 +34,30 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 安装系统依赖（PyMuPDF 需要 libmupdf）
+# 仅安装运行时依赖（不含 build-essential）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Python 依赖
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 从 builder 阶段复制已安装的 Python 依赖
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # 复制应用代码
 COPY backend/ ./backend/
 COPY database/ ./database/
 
-# 复制 ChromaDB 持久化数据（如果存在）
-# 实际运行时通过 volume 挂载
-
 # 创建非 root 用户
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app
 
-# ============================================
-# Development stage
-# ============================================
+# ── Stage 3: Development ──
 FROM base AS development
 RUN pip install --no-cache-dir pytest pytest-asyncio
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
-# ============================================
-# Production stage
-# ============================================
+# ── Stage 4: Production ──
 FROM base AS production
 USER appuser
 EXPOSE 8000

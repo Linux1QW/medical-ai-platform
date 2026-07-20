@@ -28,6 +28,8 @@ from app.services.rag.types import (
 )
 from app.core.config import settings
 from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
+from app.services.observability.langfuse_client import get_tracer
+from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
 
 logger = logging.getLogger(__name__)
 
@@ -1039,5 +1041,19 @@ async def tiered_retrieve(
 
     # ── 写入缓存 ──
     await set_cached_bundle(queries_text, index_version, result.model_dump())
+
+    # ── Langfuse trace + Prometheus 指标 ──
+    _elapsed_ms = (time.monotonic() - start) * 1000
+    try:
+        _query_text = queries[0].text if queries else ""
+        get_tracer().trace_rag_retrieval(
+            trace_name="rag_tiered_retrieve",
+            query=_query_text,
+            results=[{"score": c.rrf_score or 0} for c in result.candidates[:5]],
+            latency_ms=_elapsed_ms,
+        )
+    except Exception as e:
+        logger.debug(f"Langfuse RAG trace 异常: {e}")
+    RAG_RETRIEVAL_DURATION.observe(_elapsed_ms / 1000)
 
     return result

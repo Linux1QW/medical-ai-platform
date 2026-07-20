@@ -150,7 +150,54 @@ services:
     networks:
       - backend-net
 
+  # ── Celery Worker（异步评估任务） ────────
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    container_name: medical-ai-celery-worker
+    restart: unless-stopped
+    command: celery -A app.celery_app worker --beat --loglevel=info --concurrency=2
+    environment:
+      # 数据库
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-medical_ai}
+      # Qwen API
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?请在 .env 中设置 DASHSCOPE_API_KEY}
+      QWEN_API_KEY: ${DASHSCOPE_API_KEY:?请在 .env 中设置 DASHSCOPE_API_KEY}
+      QWEN_API_BASE_URL: ${QWEN_API_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen3.7-max}
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/4
+      CELERY_RESULT_BACKEND: redis://redis:6379/5
+      # Redis
+      REDIS_CHECKPOINT_URL: redis://redis:6379/1
+      TZ: Asia/Shanghai
+    volumes:
+      - chroma_data:/app/backend/data
+      - ./data:/app/backend/data/medical_pdfs:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    networks:
+      - backend-net
+
   # ── Frontend（Nginx 托管 React SPA） ──────
+  # 支持 HTTP / HTTPS 双模式：
+  #   - 开发环境（无证书）：仅监听 80 端口
+  #   - 生产环境（有证书）：自动启用 443 HTTPS + 80→443 重定向
+  # 使用方式：将 SSL 证书放入 ./certs/ 目录（server.crt + server.key）
   frontend:
     build:
       context: .
@@ -158,13 +205,22 @@ services:
       target: production
     container_name: medical-ai-frontend
     restart: unless-stopped
+    environment:
+      # 是否启用 SSL（供外部脚本或健康检查判断，Nginx 配置由证书存在性自动决定）
+      SSL_ENABLED: ${SSL_ENABLED:-false}
     ports:
       - "${FRONTEND_PORT:-80}:80"
+      # HTTPS 端口：仅当 ./certs/ 下有证书时生效，否则容器内不监听 443
+      - "${FRONTEND_SSL_PORT:-443}:443"
+    volumes:
+      # SSL 证书挂载（只读）：将 ./certs/server.crt + server.key 注入容器
+      # 若目录不存在或为空，Nginx 自动回退到 HTTP 模式
+      - ./certs:/etc/nginx/ssl:ro
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--no-check-certificate", "--spider", "http://localhost:80/"]
       interval: 30s
       timeout: 5s
       retries: 3

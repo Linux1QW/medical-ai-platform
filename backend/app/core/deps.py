@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.user import User
+from app.services.jwt_blacklist import is_token_blacklisted
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -13,6 +14,14 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    # 先检查黑名单
+    if await is_token_blacklisted(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error_code": "AUTH_TOKEN_REVOKED", "message": "凭据已失效，请重新登录"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(

@@ -11,6 +11,7 @@ from app.core.access import require_consultation_access
 from app.core.deps import get_current_user
 from app.core.audit import record_audit_log
 from app.core.validation import sanitize_text
+from app.core.masking import mask_name
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.consultation import (
@@ -34,6 +35,20 @@ from app.services.consultation_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _mask_consultation_patient(data, user: User):
+    """对非 admin 用户脱敏问诊记录中的患者姓名（支持 dict 和 Pydantic model）"""
+    if user.role == "admin":
+        return data
+    if isinstance(data, dict):
+        if data.get("patient_name"):
+            data["patient_name"] = mask_name(data["patient_name"])
+        return data
+    # Pydantic model or ORM object
+    if hasattr(data, "patient_name") and data.patient_name:
+        data.patient_name = mask_name(data.patient_name)
+    return data
 
 
 def _check_round_limit(consultation, messages) -> None:
@@ -67,7 +82,8 @@ async def get_my_consultations(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await list_consultations(db, current_user.id)
+    consultations = await list_consultations(db, current_user.id)
+    return [_mask_consultation_patient(c, current_user) for c in consultations]
 
 
 @router.get("/all", response_model=List[ConsultationOut])
@@ -93,7 +109,7 @@ async def get_all_consultations(
         "start_time": start_time,
         "end_time": end_time
     }
-    return await list_consultations(db, doctor_id=None, filters=filters)
+    return [_mask_consultation_patient(c, current_user) for c in await list_consultations(db, doctor_id=None, filters=filters)]
 
 
 @router.get("/{consultation_id}", response_model=ConsultationDetail)
@@ -103,6 +119,7 @@ async def get_consultation_detail(
     current_user: User = Depends(get_current_user),
 ):
     consultation = await require_consultation_access(db, consultation_id, current_user)
+    consultation = _mask_consultation_patient(consultation, current_user)
     messages = await get_messages(db, consultation_id)
     return ConsultationDetail(
         **ConsultationOut.model_validate(consultation).model_dump(),

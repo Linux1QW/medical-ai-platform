@@ -1,0 +1,28 @@
+# ============================================
+# Docker Compose - Production Environment
+# ============================================
+# 使用方式: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ============================================
+
+services:
+  backend:
+    image: ghcr.io/${REPO}/backend:latest
+    build: !reset null
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+
+  frontend:
+    image: ghcr.io/${REPO}/frontend:latest
+    build: !reset null

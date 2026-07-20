@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.limiter import limiter
 from app.core.access import require_consultation_access
 from app.core.deps import get_current_user
+from app.core.permissions import require_permission
 from app.core.audit import record_audit_log
 from app.core.security import decode_access_token
 from app.db.session import AsyncSessionLocal, get_db
@@ -17,6 +18,7 @@ from app.services.evaluation_lock_service import (
 )
 from app.services.user_service import get_user_by_id
 from app.core.websocket import manager
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -65,7 +67,7 @@ async def create_evaluation(
     request: Request,
     data: EvaluationRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = require_permission("evaluation:create"),
 ):
     await require_consultation_access(db, data.consultation_id, current_user)
 
@@ -88,28 +90,46 @@ async def create_evaluation(
                 },
             )
 
-    # 3. 执行评估
+    # 3. 执行评估（根据配置选择同步或 Celery 异步）
     try:
         await update_lock_status(db, data.consultation_id, "running")
         await db.commit()
 
-        result = await run_evaluation(db, data.consultation_id)
+        if settings.TESTING:
+            # 测试模式：同步执行，不经过 Celery
+            result = await run_evaluation(db, data.consultation_id)
 
-        # 4. 更新锁状态
-        final_status = result.evaluation_status
-        if final_status == "needs_review":
-            await update_lock_status(db, data.consultation_id, "needs_review")
+            final_status = result.evaluation_status
+            if final_status == "needs_review":
+                await update_lock_status(db, data.consultation_id, "needs_review")
+            else:
+                await update_lock_status(db, data.consultation_id, "completed")
+            await db.commit()
+
+            await record_audit_log(
+                db, user_id=current_user.id, action="trigger_evaluation",
+                request=request, resource_id=str(data.consultation_id),
+                detail=f"触发评估: consultation_id={data.consultation_id}",
+            )
+            await db.commit()
+            return result
         else:
-            await update_lock_status(db, data.consultation_id, "completed")
-        await db.commit()
+            # 生产模式：通过 Celery 异步提交
+            from app.tasks.evaluation_task import run_evaluation_task
 
-        await record_audit_log(
-            db, user_id=current_user.id, action="trigger_evaluation",
-            request=request, resource_id=str(data.consultation_id),
-            detail=f"触发评估: consultation_id={data.consultation_id}",
-        )
-        await db.commit()
-        return result
+            task = run_evaluation_task.delay(
+                consultation_id=data.consultation_id,
+                run_id=lock.run_id,
+            )
+
+            await record_audit_log(
+                db, user_id=current_user.id, action="trigger_evaluation",
+                request=request, resource_id=str(data.consultation_id),
+                detail=f"异步提交评估任务: task_id={task.id}",
+            )
+            await db.commit()
+
+            return {"task_id": task.id, "status": "submitted"}
 
     except Exception as e:
         try:
@@ -148,3 +168,24 @@ async def get_evaluation(
     if not evaluation:
         raise HTTPException(status_code=404, detail="评估记录不存在")
     return evaluation
+
+
+@router.get("/task/{task_id}/status")
+async def get_task_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """查询 Celery 异步评估任务状态"""
+    from app.celery_app import celery_app
+    from celery.result import AsyncResult
+
+    result = AsyncResult(task_id, app=celery_app)
+    response = {
+        "task_id": task_id,
+        "status": result.status,
+    }
+    if result.status == "SUCCESS":
+        response["result"] = result.result
+    elif result.status == "FAILURE":
+        response["error"] = str(result.result)
+    return response

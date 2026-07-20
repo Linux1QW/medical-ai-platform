@@ -21,11 +21,24 @@ logger = logging.getLogger(__name__)
 
 _redis_client: Optional[aioredis.Redis] = None
 
-# ── 统计指标（进程内计数器，重启归零）─────────────────────────────────────────
+# ── 统计指标（Redis 持久化计数器，重启不丢失）─────────────────────────────────────
 
-_cache_hits: int = 0
-_cache_misses: int = 0
+# Redis Key 常量
+REDIS_KEY_HITS = "llm_cache:hits"
+REDIS_KEY_MISSES = "llm_cache:misses"
+
+# 进程内错误计数器（不持久化）
 _cache_errors: int = 0
+
+
+async def _incr_counter(key: str) -> None:
+    """原子递增 Redis 计数器（best-effort，失败静默）"""
+    try:
+        r = await _get_redis()
+        if r is not None:
+            await r.incr(key)
+    except Exception:
+        pass
 
 
 async def _get_redis() -> Optional[aioredis.Redis]:
@@ -93,11 +106,11 @@ class LLMResponseCache:
         Returns:
             缓存的 LLM 响应文本，未命中或异常时返回 None
         """
-        global _cache_hits, _cache_misses, _cache_errors
+        global _cache_errors
 
         # temperature > 0 不缓存
         if temperature > 0:
-            _cache_misses += 1
+            await _incr_counter(REDIS_KEY_MISSES)
             return None
 
         cache_key = _build_cache_key(messages, model, temperature)
@@ -105,16 +118,16 @@ class LLMResponseCache:
         try:
             r = await _get_redis()
             if r is None:
-                _cache_misses += 1
+                await _incr_counter(REDIS_KEY_MISSES)
                 return None
 
             value = await r.get(cache_key)
             if value is not None:
-                _cache_hits += 1
+                await _incr_counter(REDIS_KEY_HITS)
                 logger.debug(f"LLM 缓存命中: key={cache_key}")
                 return value
             else:
-                _cache_misses += 1
+                await _incr_counter(REDIS_KEY_MISSES)
                 logger.debug(f"LLM 缓存未命中: key={cache_key}")
                 return None
 
@@ -203,8 +216,19 @@ class LLMResponseCache:
         Returns:
             包含 cache_hits, cache_misses, cache_errors, hit_rate, cache_size 的字典
         """
-        total = _cache_hits + _cache_misses
-        hit_rate = (_cache_hits / total * 100) if total > 0 else 0.0
+        # 从 Redis 读取持久化计数器
+        cache_hits = 0
+        cache_misses = 0
+        try:
+            r = await _get_redis()
+            if r is not None:
+                cache_hits = int(await r.get(REDIS_KEY_HITS) or 0)
+                cache_misses = int(await r.get(REDIS_KEY_MISSES) or 0)
+        except Exception:
+            pass
+
+        total = cache_hits + cache_misses
+        hit_rate = (cache_hits / total * 100) if total > 0 else 0.0
 
         # 异步获取当前缓存条目数（近似值）
         cache_size = 0
@@ -225,8 +249,8 @@ class LLMResponseCache:
             pass
 
         return {
-            "cache_hits": _cache_hits,
-            "cache_misses": _cache_misses,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
             "cache_errors": _cache_errors,
             "hit_rate": round(hit_rate, 2),
             "cache_size": cache_size,

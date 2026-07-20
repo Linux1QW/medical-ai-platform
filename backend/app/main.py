@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from app.api.v1 import router as api_v1_router
 from app.core.config import settings
+from app.core.logging import setup_logging
 from app.db.session import engine
 from app.models.base import Base
 from app.orchestration.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer
@@ -21,12 +22,18 @@ from app.orchestration.adapters import register_all as register_all_adapters
 from app.services.qwen_client import get_llm_metrics
 from app.services.llm_cache import LLMResponseCache, close_cache_redis
 from app.services.rag.retrieval_cache import close_retrieval_cache_redis, get_retrieval_cache_stats
+from app.services.token_tracker import token_tracker
+from app.services.observability.metrics import (
+    HTTP_REQUESTS_TOTAL,
+    HTTP_REQUEST_DURATION,
+    CACHE_HIT_RATE,
+)
+from prometheus_client import generate_latest
+from app.services.jwt_blacklist import close_blacklist_redis
 import app.models  # noqa: F401
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+# 初始化结构化日志
+setup_logging()
 logger = logging.getLogger(__name__)
 
 from app.core.limiter import limiter
@@ -62,6 +69,8 @@ async def lifespan(app: FastAPI):
     await close_cache_redis()
     # 关闭检索缓存 Redis 连接
     await close_retrieval_cache_redis()
+    # 关闭 JWT 黑名单 Redis 连接
+    await close_blacklist_redis()
 
 
 app = FastAPI(
@@ -91,8 +100,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_METHODS,
+    allow_headers=settings.CORS_HEADERS,
 )
 
 
@@ -132,14 +141,34 @@ async def request_log_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         logger.error(
-            f"Request failed request_id={request_id} method={request.method} path={request.url.path}\n{traceback.format_exc()}"
+            "Request failed",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+            },
+            exc_info=True,
         )
         raise
     duration_ms = int((time.perf_counter() - start) * 1000)
+    duration_s = time.perf_counter() - start
     response.headers["X-Request-ID"] = request_id
     logger.info(
-        f"Request completed request_id={request_id} method={request.method} path={request.url.path} status={response.status_code} duration_ms={duration_ms}"
+        "Request completed",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": duration_ms,
+        },
     )
+    # ── Prometheus HTTP 指标 ──
+    _path = request.url.path
+    _method = request.method
+    _status = str(response.status_code)
+    HTTP_REQUESTS_TOTAL.labels(method=_method, path=_path, status=_status).inc()
+    HTTP_REQUEST_DURATION.labels(method=_method, path=_path).observe(duration_s)
     return response
 
 
@@ -197,12 +226,32 @@ async def health_check():
     else:
         langgraph_status = "disabled"
 
+    llm_cache_stats = await LLMResponseCache.get_stats()
+    retrieval_cache_stats = await get_retrieval_cache_stats()
+
+    # ── 更新 Prometheus 缓存命中率 Gauge ──
+    try:
+        CACHE_HIT_RATE.labels(cache="llm").set(llm_cache_stats.get("hit_rate", 0))
+        CACHE_HIT_RATE.labels(cache="retrieval").set(retrieval_cache_stats.get("hit_rate", 0))
+    except Exception:
+        pass
+
     return {
         "status": "ok",
         "version": settings.VERSION,
         "llm": get_llm_metrics(),
-        "llm_cache": await LLMResponseCache.get_stats(),
-        "retrieval_cache": await get_retrieval_cache_stats(),
+        "llm_cache": llm_cache_stats,
+        "retrieval_cache": retrieval_cache_stats,
+        "token_usage": await token_tracker.get_summary(),
         "langgraph_enabled": settings.LANGGRAPH_ENABLED,
         "checkpointer": langgraph_status,
     }
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus 指标导出端点"""
+    return Response(
+        content=generate_latest(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

@@ -6,10 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.limiter import limiter
 
 from app.core.deps import get_current_user, get_current_admin
+from app.core.permissions import require_permission
 from app.core.audit import record_audit_log
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.patient import PatientCreate, PatientUpdate, PatientOut, DoctorPatientOut
+from app.schemas.patient_masked import DoctorPatientMaskedOut
 from app.services.patient_service import (
     create_patient,
     get_patient_by_id,
@@ -24,7 +26,7 @@ router = APIRouter()
 def _serialize_patient(patient, user: User):
     if user.role == "admin":
         return PatientOut.model_validate(patient)
-    return DoctorPatientOut.model_validate(patient)
+    return DoctorPatientMaskedOut.model_validate(patient)
 
 
 PatientResponse = Union[DoctorPatientOut, PatientOut]
@@ -110,3 +112,13 @@ async def remove_patient(
     )
     await db.commit()
     return {"detail": "删除成功"}
+
+
+@router.get("/export", response_model=List[PatientOut])
+async def export_patients(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = require_permission("patient:export"),
+):
+    """导出所有患者数据（需要 patient:export 权限）"""
+    patients = await list_patients(db, None, None)
+    return [PatientOut.model_validate(p) for p in patients]

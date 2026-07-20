@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, Enum, Text
+from sqlalchemy import Column, Integer, String, DateTime, Enum, Text, JSON
 
 from app.models.base import Base
 
@@ -16,5 +16,6 @@ class User(Base):
     role = Column(Enum("doctor", "admin", name="user_role"), default="doctor", nullable=False)
     department = Column(String(100), default="")
     avatar = Column(String(255), default="")
+    permissions = Column(JSON, nullable=True, comment="细粒度权限列表")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

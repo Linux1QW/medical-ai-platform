@@ -9,6 +9,8 @@ from app.api.v1.knowledge_base import router as knowledge_base_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.cases import router as cases_router
 from app.api.v1.review import router as review_router
+from app.api.v1.model_versions import router as model_versions_router
+from app.api.v1.data_export import router as data_export_router
 
 router = APIRouter()
 
@@ -21,3 +23,5 @@ router.include_router(knowledge_base_router, prefix="/knowledge-base", tags=["�
 router.include_router(admin_router, prefix="/admin", tags=["管理"])
 router.include_router(cases_router, prefix="/cases", tags=["病例推荐"])
 router.include_router(review_router)
+router.include_router(model_versions_router, prefix="/model-versions", tags=["模型版本"])
+router.include_router(data_export_router, prefix="/users", tags=["数据导出"])

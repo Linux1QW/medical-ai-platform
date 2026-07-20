@@ -344,6 +344,24 @@ class ToolBudgetManager:
             except Exception as e:
                 logger.error(f"[BudgetManager] 预警回调失败: {e}")
 
+        # 异步触发 AlertManager 告警通知
+        try:
+            import asyncio
+            from app.services.observability.alerting import alert_manager
+
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                alert_manager.check_budget_alert(
+                    alert_level=level.value,
+                    session_id=session.session_id,
+                    tool_name=tool_name,
+                    total_calls=session.total_calls,
+                    total_cost=session.total_cost,
+                )
+            )
+        except RuntimeError:
+            pass  # 无事件循环时跳过（测试环境）
+
     def get_session_summary(self, session_id: str) -> dict | None:
         """获取会话预算摘要"""
         session = self._sessions.get(session_id)

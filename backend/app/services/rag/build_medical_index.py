@@ -996,6 +996,17 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
         except Exception as e:
             logger.warning(f"BM25 索引重建失败（非致命）: {e}")
 
+        # 重建 Sparse 索引（当 BGE-M3 启用时）
+        try:
+            from app.services.rag.sparse_search import rebuild_sparse_index
+            sparse_ok = await asyncio.to_thread(rebuild_sparse_index)
+            if sparse_ok:
+                logger.info(f"Sparse 索引已重建（版本: {new_version}）")
+            else:
+                logger.info("Sparse 索引跳过（BGE-M3 未启用或不可用）")
+        except Exception as e:
+            logger.warning(f"Sparse 索引重建失败（非致命）: {e}")
+
         # 健康检查
         if auto_rollback:
             healthy = await _health_check_index(timeout=10.0)
@@ -1012,6 +1023,8 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
                 try:
                     from app.services.rag.bm25_search import rebuild_bm25_index
                     await asyncio.to_thread(rebuild_bm25_index)
+                    from app.services.rag.sparse_search import rebuild_sparse_index
+                    await asyncio.to_thread(rebuild_sparse_index)
                 except Exception:
                     pass
                 return {"error": f"健康检查失败，已回滚到 {original_version}"}

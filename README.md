@@ -41,8 +41,19 @@
 
 ## RAG 检索系统
 
+### 三路融合检索管道
+- **BM25 关键词检索**（权重 0.30）：基于 `bm25s` 引擎，相较 `rank_bm25` 实现 10x 索引速度和 5x 内存效率提升
+- **Dense Vector 语义检索**（权重 0.45）：基于 BGE 系列模型的稠密向量检索
+- **Learned Sparse 检索**（权重 0.25，可选）：基于 BGE-M3 的稀疏表示检索
+- **加权 RRF 融合**：采用 Weighted Reciprocal Rank Fusion 算法，医学场景调优参数 k=35，实现三路检索结果的最优融合
+
+### BGE-M3 双表示模型（可选）
+- BGE-M3 模型同时提供 dense + learned sparse 双表示，一次推理即可生成两种检索信号
+- 通过 `BGE_M3_ENABLED` 环境变量控制开关
+- **降级策略**：`BGE_M3_ENABLED=False` 时自动降级为 BM25 + Dense 两路融合，确保系统在任何环境下稳定运行
+
 ### 分级检索架构
-- **L1 Base**: 混合检索（BM25 + 向量 + RRF 融合），基础召回
+- **L1 Base**: 三路融合检索（BM25 + Dense + Sparse + Weighted RRF），基础召回
 - **L2 MQE**: 查询扩展（Multi-Query Expansion），提升召回覆盖率
 - **L3 HyDE**: 假设性文档嵌入，处理复杂语义查询
 
@@ -147,7 +158,7 @@ pending → running → completed/needs_review/failed
 
 ### 迁移脚本
 - `init.sql`: 初始数据库结构
-- `migrate_v2-v9.sql`: 增量迁移脚本
+- `migrate_v2-v10.sql`: 增量迁移脚本（含模型版本注册表 + 细粒度权限）
 - 支持平滑升级和版本回滚
 
 ## 环境配置与部署
@@ -201,7 +212,7 @@ python init_admin.py
 
 ### 后端测试
 - **框架**: pytest
-- **测试数量**: 385 个测试用例全部通过
+- **测试数量**: 403 个测试用例全部通过（25 skipped）
 - **覆盖范围**: 单元测试、集成测试、端到端测试
 
 ### 前端构建
@@ -240,26 +251,70 @@ medical-ai-platform/
 ## 性能优化
 
 ### 检索性能
-- 通过 BM25 + 向量混合检索提升召回质量
-- 两阶段重排优化排序精度
-- Redis 缓存减少重复查询开销
+- 三路融合检索（BM25 + Dense + Sparse）+ 加权 RRF 融合，显著提升召回质量
+- `bm25s` 引擎替换 `rank_bm25`，索引速度提升 10x，内存效率提升 5x
+- 两阶段重排优化排序精度（DashScope gte-rerank 粗排 + LLM Cross-Encoder 精排）
+- Redis 缓存减少重复查询开销（TTL=24h，索引版本控制自动失效）
+- BGE-M3 可选双表示，支持自动降级保障可用性
 
 ### 系统性能
 - LangGraph 并行执行优化评估耗时
 - 数据库连接池和查询优化
 - 前端懒加载和代码分割提升加载速度
 
-## 安全特性
+## 安全与审计
 
 ### 访问控制
-- JWT Token 认证授权
-- 基于角色的权限控制
-- 问诊数据访问限制
+- JWT Refresh Token 双令牌认证授权
+- 细粒度 RBAC 权限控制（用户级 JSON 权限配置）
+- 数据脱敏（姓名/手机号/身份证号自动掩码）
+- HTTPS/TLS 传输加密
 
 ### 审计日志
 - 所有关键操作记录审计日志
 - 用户行为追踪和分析
 - 数据变更历史追溯
+
+## 企业工程化能力
+
+### 可观测性
+- 结构化 JSON 日志，统一日志格式便于集中收集与分析
+- Langfuse 链路追踪，端到端可视化 Agent 推理过程
+- Prometheus 指标暴露（HTTP 请求量、延迟分布、检索命中率等）
+- 告警管理器（AlertManager），支持阈值告警与异常通知
+
+### 安全性
+- HTTPS/TLS 传输加密
+- JWT Refresh Token 双令牌机制，Access Token 短过期 + Refresh Token 长过期
+- 数据脱敏（姓名、手机号、身份证号自动掩码）
+- 细粒度 RBAC 权限控制，支持用户级 JSON 权限配置
+
+### 高可用
+- Celery 异步任务队列，耗时评估任务异步执行
+- 数据库连接池管理，避免连接泄漏
+- 数据定期备份策略
+- 模型降级策略，BGE-M3 不可用时自动回退两路融合
+- 跨 Provider 熔断（LLMFailoverManager），主模型故障自动切换备用 Provider
+
+### CI/CD
+- Docker 镜像构建，确保环境一致性
+- 多环境部署支持（开发/测试/生产）
+- CD 流水线自动化发布
+
+### 代码质量
+- `pyproject.toml` 统一项目配置
+- `pre-commit` 钩子，提交前自动检查
+- `ruff` 高速 Python linter + formatter
+- `codecov` 代码覆盖率门禁
+
+### 数据治理
+- 数据留存策略，自动清理过期数据
+- 模型版本注册表（`model_versions`），追踪模型配置与状态
+- 数据导出 API，支持评估数据批量导出
+
+### 成本管控
+- Token 用量统计（TokenTracker），按模型/用户/维度精细统计
+- 每日预算限制，超出阈值自动告警
 
 ## 扩展性设计
 

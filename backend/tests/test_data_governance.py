@@ -303,7 +303,7 @@ class TestCleanupTask:
         mock_session.__aenter__ = AsyncMock(return_value=mock_db)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("app.tasks.data_cleanup.AsyncSessionLocal", return_value=mock_session):
+        with patch("app.db.session.AsyncSessionLocal", return_value=mock_session):
             result = await _do_cleanup()
 
         assert result["audit_logs_deleted"] == 5

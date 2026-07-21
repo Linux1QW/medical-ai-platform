@@ -18,6 +18,8 @@ from typing import Dict, List, Optional
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.embeddings import get_embedding, get_embeddings
 from app.services.rag.bm25_search import get_bm25_index
+from app.services.rag.sparse_search import get_sparse_search
+from app.services.rag.hybrid_fusion import weighted_rrf
 from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
 from app.services.rag.reranker import rerank_documents
 from app.services.rag.types import (
@@ -406,23 +408,30 @@ async def hybrid_recall(
     query: str,
     top_k: int = 10,
 ) -> tuple:
-    """基础混合召回：BM25 + 向量 + RRF，不含重排序
+    """三路混合检索融合：BM25 + Dense + (可选) Sparse via weighted_rrf
+
+    当 BGE_M3_ENABLED=True 时，并行执行三路检索并通过 weighted_rrf 融合；
+    否则降级为 BM25 + Dense 两路融合。
 
     Args:
         query: 查询文本
-        top_k: 返回条数
+        top_k: 每路召回条数
 
     Returns:
-        (vector_results, bm25_results) 原始双路结果
+        (fused_results, fusion_meta)
+        - fused_results: List[Dict] 融合后的文档列表（含 rrf_score / score 字段）
+        - fusion_meta: dict 融合元信息（sources 各路人马数量、weights、fused_count）
     """
     loop = asyncio.get_event_loop()
-    recall_k = top_k * 2  # 粗召回数量
+    recall_k = top_k * 3  # 粗召回数量（给融合留足候选）
+
+    # ── 定义三路检索函数 ──
 
     async def vector_search() -> List[Dict]:
         try:
             return await retrieve_medical_evidence(query, top_k=recall_k)
         except Exception as e:
-            logger.warning(f"hybrid_recall-向量通道失败: {e}")
+            logger.warning(f"hybrid_recall-Dense通道失败: {e}")
             return []
 
     def bm25_search_sync() -> List[Dict]:
@@ -433,12 +442,113 @@ async def hybrid_recall(
             logger.warning(f"hybrid_recall-BM25通道失败: {e}")
             return []
 
-    vector_results, bm25_results = await asyncio.gather(
-        vector_search(),
-        loop.run_in_executor(None, bm25_search_sync),
+    def sparse_search_sync() -> List[Dict]:
+        """BGE-M3 Learned Sparse 检索通道（可选降级）"""
+        try:
+            ss = get_sparse_search()
+            if ss is None or not ss.is_indexed:
+                return []
+            results = ss.search(query, top_k=recall_k)
+            return [{"_sparse_idx": idx, "sparse_score": score} for idx, score in results]
+        except Exception as e:
+            logger.warning(f"hybrid_recall-Sparse通道失败（降级）: {e}")
+            return []
+
+    # ── 并行执行三路检索 ──
+    if settings.BGE_M3_ENABLED:
+        vector_results, bm25_results, sparse_results = await asyncio.gather(
+            vector_search(),
+            loop.run_in_executor(None, bm25_search_sync),
+            loop.run_in_executor(None, sparse_search_sync),
+        )
+    else:
+        vector_results, bm25_results = await asyncio.gather(
+            vector_search(),
+            loop.run_in_executor(None, bm25_search_sync),
+        )
+        sparse_results = []
+
+    logger.info(
+        f"hybrid_recall 粗召回: BM25={len(bm25_results)}, "
+        f"Dense={len(vector_results)}, Sparse={len(sparse_results)}"
     )
 
-    return vector_results, bm25_results
+    # ── 构建 ranking 格式用于 weighted_rrf ──
+    # BM25 ranking: (doc_id, bm25_score)
+    bm25_ranking = [
+        (doc["doc_id"] if "doc_id" in doc else doc.get("id", f"bm25_{i}"),
+         doc.get("bm25_score", 0.0))
+        for i, doc in enumerate(bm25_results)
+    ]
+    # Dense ranking: (doc_id, vector_score)
+    dense_ranking = [
+        (doc.get("doc_id", f"dense_{i}"),
+         doc.get("score", doc.get("vector_score", 0.0)))
+        for i, doc in enumerate(vector_results)
+    ]
+    # Sparse ranking: (_sparse_idx, sparse_score)
+    sparse_ranking = [
+        (d["_sparse_idx"], d["sparse_score"])
+        for d in sparse_results
+    ]
+
+    # ── 加权 RRF 融合 ──
+    # 构建 doc_id -> 原始 dict 的映射（用于融合后还原完整文档）
+    doc_map: Dict = {}
+    for doc in bm25_results:
+        key = doc.get("doc_id") or doc.get("id", "")
+        if key:
+            doc_map[key] = doc
+    for doc in vector_results:
+        key = doc.get("doc_id", "")
+        if key and key not in doc_map:
+            doc_map[key] = doc
+        elif key in doc_map:
+            # 合并 vector_score 到已有记录
+            doc_map[key]["vector_score"] = doc.get("score", doc.get("vector_score", 0.0))
+
+    if sparse_ranking:
+        # 三路融合
+        fused = weighted_rrf(
+            rankings=[bm25_ranking, dense_ranking, sparse_ranking],
+            weights=[0.30, 0.45, 0.25],
+            k=35,
+        )
+        fusion_weights = [0.30, 0.45, 0.25]
+    else:
+        # 降级为两路融合
+        fused = weighted_rrf(
+            rankings=[bm25_ranking, dense_ranking],
+            weights=[0.40, 0.60],
+            k=35,
+        )
+        fusion_weights = [0.40, 0.60]
+
+    # ── 将融合后的 (doc_id, score) 还原为完整 dict ──
+    fused_results: List[Dict] = []
+    for doc_id, rrf_score in fused:
+        doc = doc_map.get(doc_id)
+        if doc is None:
+            # sparse-only 文档（无 BM25/Dense 匹配），尝试从 sparse 结果还原
+            continue
+        doc_copy = dict(doc)
+        doc_copy["rrf_score"] = round(rrf_score, 6)
+        doc_copy["score"] = doc_copy["rrf_score"]
+        fused_results.append(doc_copy)
+
+    fusion_meta = {
+        "method": "weighted_rrf",
+        "k": 35,
+        "sources": {
+            "bm25": len(bm25_ranking),
+            "dense": len(dense_ranking),
+            "sparse": len(sparse_ranking),
+        },
+        "weights": fusion_weights,
+        "fused_count": len(fused_results),
+    }
+
+    return fused_results, fusion_meta
 
 
 async def hybrid_retrieve(
@@ -837,6 +947,7 @@ async def tiered_retrieve(
         },
         "estimated_cost": 0.0,
         "degraded": False,
+        "retrieval": {"fusion": None},
     }
 
     all_query_types = set(q.query_type for q in queries)
@@ -882,21 +993,16 @@ async def tiered_retrieve(
             },
         }
 
-    # ── Level 1: 基础混合召回 ──
+    # ── Level 1: 基础混合召回（三路融合） ──
     trace["levels_attempted"].append("base")
+    fusion_info = None  # 记录融合元信息
     for query in queries:
         # 实体归一化：将别名映射为规范名，增强 BM25 匹配
         normalized_text = _entity_normalize_query(query.text)
-        vector_results, bm25_results = await hybrid_recall(normalized_text, top_k=top_k_per_query)
+        fused, fusion_meta = await hybrid_recall(normalized_text, top_k=top_k_per_query)
+        fusion_info = fusion_meta
 
-        # RRF 融合
-        if vector_results and bm25_results:
-            fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k_per_query)
-        elif vector_results:
-            fused = vector_results[:top_k_per_query]
-        elif bm25_results:
-            fused = bm25_results[:top_k_per_query]
-        else:
+        if not fused:
             continue
 
         if fused:
@@ -904,7 +1010,7 @@ async def tiered_retrieve(
 
         # 转换并合并
         evidence_items = _dict_to_evidence(fused, query.query_type, retrieved_via="base")
-        # 为 RRF 融合的结果设置 rrf_score
+        # 为融合结果设置 rrf_score
         for item in evidence_items:
             if item.rrf_score is None:
                 raw = next((f for f in fused if f.get("doc_id") == item.doc_id), None)
@@ -924,6 +1030,7 @@ async def tiered_retrieve(
         trace["retrieval_status"] = "candidate"
         trace.update(_build_confidence_trace(confidence))
         trace["decisions"] = decisions
+        trace["retrieval"]["fusion"] = fusion_info
         result = RetrievalBundle(
             status="candidate",
             level_used="base",
@@ -954,15 +1061,10 @@ async def tiered_retrieve(
 
         for eq in expanded:
             mqe_expansion_count += 1
-            vector_results, bm25_results = await hybrid_recall(eq, top_k=top_k_per_query)
+            fused, fusion_meta = await hybrid_recall(eq, top_k=top_k_per_query)
+            fusion_info = fusion_meta
 
-            if vector_results and bm25_results:
-                fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k_per_query)
-            elif vector_results:
-                fused = vector_results[:top_k_per_query]
-            elif bm25_results:
-                fused = bm25_results[:top_k_per_query]
-            else:
+            if not fused:
                 continue
 
             if fused:
@@ -986,6 +1088,7 @@ async def tiered_retrieve(
         trace["retrieval_status"] = "candidate"
         trace.update(_build_confidence_trace(confidence))
         trace["decisions"] = decisions
+        trace["retrieval"]["fusion"] = fusion_info
         result = RetrievalBundle(
             status="candidate",
             level_used="mqe",
@@ -1029,6 +1132,7 @@ async def tiered_retrieve(
     trace["retrieval_status"] = final_status
     trace.update(_build_confidence_trace(confidence))
     trace["decisions"] = decisions
+    trace["retrieval"]["fusion"] = fusion_info
 
     result = RetrievalBundle(
         status=final_status,

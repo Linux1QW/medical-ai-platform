@@ -32,3 +32,9 @@ celery_app.conf.beat_schedule = {
 
 # 自动发现 tasks 模块
 celery_app.autodiscover_tasks(["app"])
+
+# 显式 include（autodiscover 不会遍历 app/tasks/ 子包内的模块）
+celery_app.conf.include = [
+    "app.tasks.data_cleanup",
+    "app.tasks.evaluation_task",
+]

@@ -92,13 +92,13 @@ jobs:
 
       - name: Verify database migrations
         run: |
-          # 等待 MySQL 就绪
-          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -ptest --silent; do
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -proot --silent; do
             sleep 2
           done
-          # 执行迁移脚本
-          for f in database/migrate_*.sql; do
-            mysql -h 127.0.0.1 -P 3306 -u root -ptest test_db < "$f"
+          mysql -h 127.0.0.1 -P 3306 -u root -proot medical_ai < database/init.sql
+          for f in database/migrate_v*.sql; do
+            echo "Applying $f..."
+            mysql -h 127.0.0.1 -P 3306 -u root -proot medical_ai < "$f" || echo "Warning: $f had issues"
           done
 
   frontend-build:

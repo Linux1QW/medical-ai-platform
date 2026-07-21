@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
     LANGFUSE_ENABLED: bool = False
 
+    # BGE-M3 双表示配置
+    BGE_M3_ENABLED: bool = False          # 默认关闭，需要时通过环境变量开启
+    BGE_M3_MODEL_PATH: str = "BAAI/bge-m3"  # 模型路径或 HuggingFace ID
+    BGE_M3_USE_FP16: bool = False         # GPU 环境开启 FP16 量化
+    BGE_M3_QUERY_INSTRUCTION: str = "为这个医学查询生成检索表示："
+
     # 数据库连接池配置
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10

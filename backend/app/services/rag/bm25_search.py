@@ -1,135 +1,26 @@
 # -*- coding: utf-8 -*-
-"""BM25 关键词检索模块 — 基于 Okapi BM25 算法的医学文本关键词匹配
+"""医学 BM25 检索引擎 — 基于 bm25s + jieba 医学词典
 
 BM25 擅长精确术语匹配（药物名称、疾病编码、检查项目名称），
 与向量检索互补，共同构成混合检索的基础。
+
+使用 bm25s 替代手写 Okapi BM25，获得更好的性能和精度。
 """
 
 import logging
-import math
 import os
 import re
-from collections import Counter
 from typing import Dict, List, Optional
 
+import bm25s
 import jieba
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ── BM25 超参数 ──
-K1 = 1.5    # 词频饱和参数
-B = 0.75    # 文档长度归一化参数
-
-
-class BM25Index:
-    """基于 Okapi BM25 算法的文本检索索引"""
-
-    def __init__(self):
-        self.documents: List[Dict] = []        # 原始文档列表
-        self.doc_tokens: List[List[str]] = []  # 分词后的文档
-        self.doc_lengths: List[int] = []       # 每个文档的 token 数
-        self.avg_doc_length: float = 0.0       # 平均文档长度
-        self.doc_count: int = 0                # 文档总数
-        self.df: Dict[str, int] = {}           # 文档频率（包含某词的文档数）
-        self.initialized: bool = False
-
-    def build(self, documents: List[Dict], text_field: str = "text"):
-        """构建 BM25 索引
-
-        Args:
-            documents: 文档列表，每个文档为 dict
-            text_field: 用于检索的文本字段名
-        """
-        self.documents = documents
-        self.doc_count = len(documents)
-
-        if self.doc_count == 0:
-            self.initialized = False
-            return
-
-        # 分词
-        self.doc_tokens = [
-            tokenize_medical_text(doc.get(text_field, ""))
-            for doc in documents
-        ]
-        self.doc_lengths = [len(tokens) for tokens in self.doc_tokens]
-        self.avg_doc_length = sum(self.doc_lengths) / self.doc_count if self.doc_count > 0 else 0
-
-        # 计算文档频率 (DF)
-        self.df = {}
-        for tokens in self.doc_tokens:
-            unique_tokens = set(tokens)
-            for token in unique_tokens:
-                self.df[token] = self.df.get(token, 0) + 1
-
-        self.initialized = True
-        logger.info(f"BM25 索引构建完成：{self.doc_count} 个文档，词汇量 {len(self.df)}")
-
-    def search(self, query: str, top_k: int = 10) -> List[Dict]:
-        """执行 BM25 检索
-
-        Args:
-            query: 查询文本
-            top_k: 返回条数
-
-        Returns:
-            检索结果列表，每个结果增加 "bm25_score" 字段
-        """
-        if not self.initialized or not query or not query.strip():
-            return []
-
-        query_tokens = tokenize_medical_text(query)
-        if not query_tokens:
-            return []
-
-        # 计算每个文档的 BM25 分数
-        scores = []
-        for doc_idx in range(self.doc_count):
-            score = self._score_document(query_tokens, doc_idx)
-            if score > 0:
-                scores.append((doc_idx, score))
-
-        # 按分数降序排列
-        scores.sort(key=lambda x: x[1], reverse=True)
-
-        # 返回 top_k 结果
-        results = []
-        for doc_idx, score in scores[:top_k]:
-            doc_copy = dict(self.documents[doc_idx])
-            doc_copy["bm25_score"] = round(score, 4)
-            results.append(doc_copy)
-
-        return results
-
-    def _score_document(self, query_tokens: List[str], doc_idx: int) -> float:
-        """计算单个文档的 BM25 得分"""
-        doc_tokens = self.doc_tokens[doc_idx]
-        doc_len = self.doc_lengths[doc_idx]
-
-        if doc_len == 0:
-            return 0.0
-
-        # 文档中的词频统计
-        tf_in_doc = Counter(doc_tokens)
-
-        score = 0.0
-        for term in query_tokens:
-            if term not in self.df:
-                continue
-
-            # IDF: log((N - df + 0.5) / (df + 0.5) + 1)
-            df = self.df[term]
-            idf = math.log((self.doc_count - df + 0.5) / (df + 0.5) + 1.0)
-
-            # TF 归一化
-            tf = tf_in_doc.get(term, 0)
-            tf_norm = (tf * (K1 + 1)) / (
-                tf + K1 * (1 - B + B * doc_len / self.avg_doc_length)
-            )
-
-            score += idf * tf_norm
-
-        return score
+# ── BM25 超参数（医学文档调优）──
+K1 = 1.2   # 词频饱和参数（医学文档较长，降低至 1.2）
+B = 0.8    # 长度惩罚参数（提高至 0.8 惩罚长文档）
 
 
 # ── 加载医学自定义词典（模块级别，只执行一次）──
@@ -157,7 +48,7 @@ MEDICAL_STOPWORDS = {
 
 
 def tokenize_medical_text(text: str) -> List[str]:
-    """医学文本分词 — jieba 分词 + 英文术语提取 + bigram 兜底
+    """医学文本分词 — jieba 分词 + 英文术语保护 + bigram 兜底
 
     策略：
     1. 保留完整的英文术语和数字（如 NSCLC、EGFR、PD-L1、20mg）
@@ -206,6 +97,89 @@ def tokenize_medical_text(text: str) -> List[str]:
             tokens.append(bigram)
 
     return tokens
+
+
+class BM25Index:
+    """基于 bm25s 引擎的文本检索索引（向后兼容接口）
+
+    内部使用 bm25s 进行索引和检索，对外保持与原 Okapi BM25 实现相同的 API：
+    - build(documents, text_field) 构建索引
+    - search(query, top_k) 返回 List[Dict]（含 bm25_score 字段）
+    """
+
+    def __init__(self):
+        self.documents: List[Dict] = []        # 原始文档列表
+        self.doc_tokens: List[List[str]] = []  # 分词后的文档
+        self.doc_count: int = 0                # 文档总数
+        self._bm25: Optional[bm25s.BM25] = None  # bm25s 索引实例
+        self.initialized: bool = False
+
+    def build(self, documents: List[Dict], text_field: str = "text"):
+        """构建 BM25 索引
+
+        Args:
+            documents: 文档列表，每个文档为 dict
+            text_field: 用于检索的文本字段名
+        """
+        self.documents = documents
+        self.doc_count = len(documents)
+
+        if self.doc_count == 0:
+            self.initialized = False
+            return
+
+        # 分词
+        self.doc_tokens = [
+            tokenize_medical_text(doc.get(text_field, ""))
+            for doc in documents
+        ]
+
+        # 使用 bm25s 构建索引
+        self._bm25 = bm25s.BM25(method="lucene", k1=K1, b=B)
+        self._bm25.index(self.doc_tokens, show_progress=False)
+
+        self.initialized = True
+        logger.info(
+            f"BM25 索引构建完成（bm25s 引擎）：{self.doc_count} 个文档，"
+            f"平均词元数 {sum(len(t) for t in self.doc_tokens) / max(self.doc_count, 1):.0f}"
+        )
+
+    def search(self, query: str, top_k: int = 10) -> List[Dict]:
+        """执行 BM25 检索
+
+        Args:
+            query: 查询文本
+            top_k: 返回条数
+
+        Returns:
+            检索结果列表，每个结果增加 "bm25_score" 字段
+        """
+        if not self.initialized or not self._bm25 or not query or not query.strip():
+            return []
+
+        query_tokens = tokenize_medical_text(query)
+        if not query_tokens:
+            return []
+
+        # bm25s 检索（retrieve 接受 List[List[str]]，返回 2D numpy 数组）
+        results, scores = self._bm25.retrieve(
+            [query_tokens], k=min(top_k, self.doc_count), show_progress=False
+        )
+
+        # 转换为与原接口兼容的格式
+        final_results = []
+        for idx, score in zip(results[0], scores[0]):
+            idx = int(idx)
+            score = float(score)
+            if score <= 0:
+                continue
+            doc_copy = dict(self.documents[idx])
+            doc_copy["bm25_score"] = round(score, 4)
+            final_results.append(doc_copy)
+            if len(final_results) >= top_k:
+                break
+
+        return final_results
 
 
 # ── 全局 BM25 索引单例 ──

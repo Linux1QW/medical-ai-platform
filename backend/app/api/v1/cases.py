@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """病例推荐 API"""
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
-from app.db.session import get_db
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.deps import get_current_user
+from app.db.session import get_db
 from app.models.user import User
 from app.services.case_recommender import recommend_cases
 from app.services.difficulty_model import calculate_actual_difficulty
@@ -76,6 +77,7 @@ async def get_case_difficulty(
     """
     # 尝试从虚拟患者表查找对应记录
     from sqlalchemy import select
+
     from app.models.patient import VirtualPatient
 
     stmt = select(VirtualPatient).where(VirtualPatient.name == case_id)

@@ -7,8 +7,10 @@
 3. 将列改回 ENUM 并使用中文值
 """
 import asyncio
-from app.db.session import AsyncSessionLocal
+
 from sqlalchemy import text
+
+from app.db.session import AsyncSessionLocal
 
 
 async def migrate():

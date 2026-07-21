@@ -5,7 +5,7 @@
 指标命名遵循 Prometheus 规范：snake_case + 单位后缀。
 """
 
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 # ── HTTP 指标 ────────────────────────────────────────────────────────────────
 

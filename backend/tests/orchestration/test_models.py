@@ -1,6 +1,5 @@
 """测试 LangGraph 编排相关的 ORM 模型"""
 
-import pytest
 
 
 def test_evaluation_run_model():

@@ -16,14 +16,14 @@ from typing import Dict, List, Optional, Tuple
 from app.core.config import settings
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.types import (
+    AUTHORITY_WEIGHT,
+    COMPLETENESS_WEIGHT,
+    FRESHNESS_WEIGHT,
+    LLM_RERANK_INPUT,
+    MAX_RERANK_INPUT,
+    RELEVANCE_WEIGHT,
     EvidenceItem,
     RerankResult,
-    MAX_RERANK_INPUT,
-    LLM_RERANK_INPUT,
-    RELEVANCE_WEIGHT,
-    COMPLETENESS_WEIGHT,
-    AUTHORITY_WEIGHT,
-    FRESHNESS_WEIGHT,
 )
 
 logger = logging.getLogger(__name__)

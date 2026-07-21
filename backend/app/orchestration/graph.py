@@ -3,29 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, TypedDict
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from app.orchestration.state import (
-    EvaluationState,
-    EvaluationContext,
     AgentResultEnvelope,
-    DimensionResult as StateDimensionResult,
-    ProgressEvent,
+    EvaluationContext,
     EvaluationPlan,
-    PlanStep,
+    EvaluationState,
     ExecutionResult,
-    ReflectionResult,
+    PlanStep,
+    ProgressEvent,
     ReflectionIssue,
+    ReflectionResult,
 )
-import json
-
+from app.orchestration.state import (
+    DimensionResult as StateDimensionResult,
+)
 from app.services.agents.safety_agent import run_safety_check
+from app.services.scoring.calculator import DimensionResult as CalcDimResult
+from app.services.scoring.calculator import ScoreCalculator
 from app.services.scoring.policies import get_default_policy
-from app.services.scoring.calculator import ScoreCalculator, DimensionResult as CalcDimResult
 from app.services.scoring.summary import SummaryGenerator
 
 logger = logging.getLogger(__name__)
@@ -779,9 +781,10 @@ async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:
     当 ENABLE_LLM_SUGGESTION=true 时，调用 suggestion_agent 进行对比学习分析。
     LLM 调用失败时自动降级到原有的规则建议方案。
     """
+    import json
+
     from app.core.config import settings as app_settings
     from app.orchestration.adapters.suggestion import run_suggestion_from_context
-    import json
 
     context = state.get("context")
     dimension_results = state.get("dimension_results", {})
@@ -1069,25 +1072,25 @@ _compiled_graph = None
 
 async def get_graph():
     """获取编译后的图（应用生命周期内只编译一次）
-    
+
     Returns:
         编译后的图，如果 LANGGRAPH_ENABLED=false 则返回 None
     """
     global _compiled_graph
-    
+
     from app.core.config import settings
-    
+
     # LANGGRAPH_ENABLED=false 时不编译图
     if not settings.LANGGRAPH_ENABLED:
         logger.debug("LangGraph disabled, get_graph returning None")
         return None
-    
+
     if _compiled_graph is None:
         from app.orchestration.checkpointer import get_checkpointer
 
         checkpointer = get_checkpointer()
         graph = build_evaluation_graph()
-        
+
         if checkpointer is not None:
             _compiled_graph = graph.compile(checkpointer=checkpointer)
             logger.info("LangGraph 评估图已编译（带 checkpointer）")
@@ -1096,7 +1099,7 @@ async def get_graph():
             # 因为 init_checkpointer 在 LANGGRAPH_ENABLED=true 时会抛异常
             _compiled_graph = graph.compile()
             logger.warning("LangGraph 评估图已编译（无 checkpointer）")
-    
+
     return _compiled_graph
 
 

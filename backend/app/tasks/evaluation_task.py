@@ -4,7 +4,6 @@ import asyncio
 import logging
 
 from app.celery_app import celery_app
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +53,8 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
 async def _execute_evaluation(consultation_id: int, run_id: str) -> dict:
     """在异步上下文中执行评估"""
     from app.db.session import AsyncSessionLocal
-    from app.services.evaluation_service import run_evaluation
     from app.services.evaluation_lock_service import update_lock_status
+    from app.services.evaluation_service import run_evaluation
 
     async with AsyncSessionLocal() as db:
         try:

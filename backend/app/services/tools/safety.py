@@ -21,10 +21,10 @@ __all__ = ["run_safety_check"]
 
 def register_safety_tools(registry) -> None:
     """注册 Safety 相关工具到工具注册表
-    
+
     注意：当前 Safety 不引入 LLM 自主 Tool Use。
     此函数保留为空实现，未来如需扩展，需经过严格审核。
-    
+
     Args:
         registry: 工具注册表（ToolRegistry 实例）
     """

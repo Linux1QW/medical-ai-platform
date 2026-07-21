@@ -1,42 +1,40 @@
 import logging
 import time
 import traceback
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from prometheus_client import generate_latest
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
-from contextlib import asynccontextmanager
-
+import app.models  # noqa: F401
 from app.api.v1 import router as api_v1_router
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.core.logging import setup_logging
 from app.db.session import engine
 from app.models.base import Base
-from app.orchestration.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer
 from app.orchestration.adapters import register_all as register_all_adapters
-from app.services.qwen_client import get_llm_metrics
+from app.orchestration.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
+from app.services.jwt_blacklist import close_blacklist_redis
 from app.services.llm_cache import LLMResponseCache, close_cache_redis
+from app.services.observability.metrics import (
+    CACHE_HIT_RATE,
+    HTTP_REQUEST_DURATION,
+    HTTP_REQUESTS_TOTAL,
+)
+from app.services.qwen_client import get_llm_metrics
 from app.services.rag.retrieval_cache import close_retrieval_cache_redis, get_retrieval_cache_stats
 from app.services.token_tracker import token_tracker
-from app.services.observability.metrics import (
-    HTTP_REQUESTS_TOTAL,
-    HTTP_REQUEST_DURATION,
-    CACHE_HIT_RATE,
-)
-from prometheus_client import generate_latest
-from app.services.jwt_blacklist import close_blacklist_redis
-import app.models  # noqa: F401
 
 # 初始化结构化日志
 setup_logging()
 logger = logging.getLogger(__name__)
-
-from app.core.limiter import limiter
 
 # ── 速率限制器 ────────────────────────────────────────────────────────────────
 

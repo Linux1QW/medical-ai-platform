@@ -5,15 +5,14 @@ Provides functions to compare retrieval quality between two index versions
 by running the same evaluation cases against each version and computing
 delta metrics.
 """
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .datasets import RagGoldCase, RagEvalResult
+from .datasets import RagEvalResult, RagGoldCase
+from .report import generate_json_report, write_json_report
 from .runners import run_evaluation
-from .report import generate_json_report, write_json_report, write_markdown_report
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +102,7 @@ def _clear_caches() -> None:
     """清除检索缓存，确保公平对比。"""
     try:
         import asyncio
+
         from app.services.rag.retrieval_cache import clear_retrieval_cache
         # 如果在事件循环中，需要 await；这里用同步包装
         loop = asyncio.get_event_loop()

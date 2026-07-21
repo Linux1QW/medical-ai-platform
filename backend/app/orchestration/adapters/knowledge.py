@@ -7,8 +7,8 @@ from app.orchestration.adapters.base import BaseAgentAdapter
 from app.orchestration.state import AgentResultEnvelope, EvaluationContext
 from app.services.agents.knowledge_agent import (
     run_knowledge_check,
-    run_knowledge_check_with_tools,
     run_knowledge_check_react,
+    run_knowledge_check_with_tools,
 )
 
 logger = logging.getLogger(__name__)

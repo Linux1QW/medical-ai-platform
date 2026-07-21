@@ -4,25 +4,14 @@ Runner functions for different evaluation modes.
 import asyncio
 import logging
 import time
-from typing import List, Optional, Dict, Any
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from .config import EvalConfig, DEFAULT_CONFIG
-from .datasets import RagEvalResult, RagGoldCase, RagEvalMetrics, RagEvalReport, load_gold_cases
-from .metrics import (
-    refusal_metrics_from_results as compute_refusal_metrics,
-    tool_metrics as compute_tool_metrics,
-    tool_breakdown as compute_tool_breakdown,
-    aggregate_metrics_by_dimension,
-    final_answer_keyword_coverage,
-    tool_call_accuracy,
-    retrieval_metrics as compute_retrieval_metrics,
-    citation_metrics as compute_citation_metrics,
-    score_range_accuracy as compute_score_range_accuracy,
-)
-from .report import generate_json_report
 from app.services.agents.knowledge_agent import run_knowledge_check, run_knowledge_check_with_tools
 
+from .config import DEFAULT_CONFIG, EvalConfig
+from .datasets import RagEvalResult, RagGoldCase, load_gold_cases
+from .report import generate_json_report
 
 logger = logging.getLogger(__name__)
 
@@ -30,22 +19,22 @@ logger = logging.getLogger(__name__)
 async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
     """
     Run a single case using the legacy knowledge check.
-    
+
     Args:
         case: The gold case to evaluate
-        
+
     Returns:
         Evaluation result
     """
     start_time = time.time()
-    
+
     try:
         # Prepare inputs for legacy knowledge check
         conversation_text = case.conversation_text
         patient_info = case.patient_info
         doctor_diagnosis = case.doctor_diagnosis or ""
         treatment_plan = case.treatment_plan or ""
-        
+
         # Run the legacy knowledge check
         result = await run_knowledge_check(
             conversation_text=conversation_text,
@@ -53,10 +42,10 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
             doctor_diagnosis=doctor_diagnosis,
             treatment_plan=treatment_plan,
         )
-        
+
         # Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Extract relevant fields from the result
         knowledge_score = result.get('score') or result.get('knowledge_score')
         evaluation_status = result.get('evaluation_status', 'completed')
@@ -65,7 +54,7 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
         retrieval_status = result.get('retrieval_status', 'sufficient')
         evidence_stance_str = result.get('evidence_stance')
         evidence_stance = evidence_stance_str if evidence_stance_str else None
-        
+
         # Handle citation data
         citations = result.get('citations', [])
         citation_data = []
@@ -73,25 +62,25 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
             citation_data = citations
         elif isinstance(citations, dict):
             citation_data = [citations]
-        
+
         # Handle rag trace data
         rag_trace_data = result.get('rag_trace', {})
         if not isinstance(rag_trace_data, dict):
             rag_trace_data = {}
-        
+
         # Handle tool trace (for legacy, this should be empty)
         tool_trace = result.get('tool_trace', [])
         if not isinstance(tool_trace, list):
             tool_trace = []
-        
+
         # Extract final answer if available
         final_answer_text = result.get('final_answer', result.get('response', None))
-        
+
         # For legacy mode, actual tool calls would come from rag_trace_data
         actual_tool_calls = []
         if 'tool_calls' in rag_trace_data:
             actual_tool_calls = rag_trace_data['tool_calls']
-        
+
         # Create the evaluation result
         eval_result = RagEvalResult(
             case_id=case.case_id,
@@ -110,7 +99,7 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
             actual_tool_calls=actual_tool_calls,
             final_answer_text=final_answer_text
         )
-        
+
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         eval_result = RagEvalResult(
@@ -130,7 +119,7 @@ async def run_case_legacy(case: RagGoldCase) -> RagEvalResult:
             actual_tool_calls=[],
             final_answer_text=None
         )
-    
+
     return eval_result
 
 
@@ -148,22 +137,22 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
 
     Args:
         case: The gold case to evaluate
-        
+
     Returns:
         Evaluation result
     """
     start_time = time.time()
-    
+
     try:
         # Prepare inputs for Tool Use knowledge check
         consultation = {
             "conversation_text": case.conversation_text,
             "patient_info": case.patient_info,
         }
-        
+
         diagnosis_text = case.doctor_diagnosis or ""
         treatment_text = case.treatment_plan or ""
-        
+
         # -- ReAct main path entry point --
         # run_knowledge_check_with_tools internally:
         #   1. Builds a ReAct agent with retrieval & calculation tools
@@ -175,10 +164,10 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
             diagnosis_text=diagnosis_text,
             treatment_text=treatment_text,
         )
-        
+
         # Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         # Extract relevant fields from the result
         knowledge_score = result.get('score') or result.get('knowledge_score')
         evaluation_status = result.get('evaluation_status', 'completed')
@@ -187,7 +176,7 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
         retrieval_status = result.get('retrieval_status', 'sufficient')
         evidence_stance_str = result.get('evidence_stance')
         evidence_stance = evidence_stance_str if evidence_stance_str else None
-        
+
         # Handle citation data
         citations = result.get('citations', [])
         citation_data = []
@@ -195,25 +184,25 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
             citation_data = citations
         elif isinstance(citations, dict):
             citation_data = [citations]
-        
+
         # Handle rag trace data
         rag_trace_data = result.get('rag_trace', {})
         if not isinstance(rag_trace_data, dict):
             rag_trace_data = {}
-        
+
         # Handle tool trace (ReAct step-by-step records)
         tool_trace = result.get('tool_trace', [])
         if not isinstance(tool_trace, list):
             tool_trace = []
-        
+
         # Extract final answer if available
         final_answer_text = result.get('final_answer', result.get('response', None))
-        
+
         # Extract actual tool calls from the ReAct trajectory
         actual_tool_calls = result.get('actual_tool_calls', [])
         if not isinstance(actual_tool_calls, list):
             actual_tool_calls = []
-        
+
         # Create the evaluation result — tool_trace and rag_trace_data
         # together provide full observability into the ReAct reasoning chain
         eval_result = RagEvalResult(
@@ -233,7 +222,7 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
             actual_tool_calls=actual_tool_calls,
             final_answer_text=final_answer_text
         )
-        
+
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         eval_result = RagEvalResult(
@@ -253,18 +242,18 @@ async def run_case_tooluse(case: RagGoldCase) -> RagEvalResult:
             actual_tool_calls=[],
             final_answer_text=None
         )
-    
+
     return eval_result
 
 
 async def run_case(case: RagGoldCase, mode: str) -> RagEvalResult:
     """
     Run a single case in the specified mode.
-    
+
     Args:
         case: The gold case to evaluate
         mode: Evaluation mode ('legacy', 'tooluse', 'mock')
-        
+
     Returns:
         Evaluation result
     """
@@ -314,33 +303,33 @@ async def run_case(case: RagGoldCase, mode: str) -> RagEvalResult:
 
 
 async def run_evaluation(
-    cases: List[RagGoldCase], 
-    mode: str, 
+    cases: List[RagGoldCase],
+    mode: str,
     limit: Optional[int] = None
 ) -> List[RagEvalResult]:
     """
     Run evaluation on a list of cases.
-    
+
     Args:
         cases: List of gold cases to evaluate
         mode: Evaluation mode ('legacy', 'tooluse', 'both', 'mock')
         limit: Maximum number of cases to run (None for all)
-        
+
     Returns:
         List of evaluation results
     """
     if limit is not None:
         cases = cases[:limit]
-    
+
     results = []
-    
+
     if mode == "both":
         # Run both legacy and tooluse modes
         for case in cases:
             # Run legacy
             legacy_result = await run_case(case, "legacy")
             results.append(legacy_result)
-            
+
             # Run tooluse
             tooluse_result = await run_case(case, "tooluse")
             results.append(tooluse_result)
@@ -349,18 +338,18 @@ async def run_evaluation(
         for case in cases:
             result = await run_case(case, mode)
             results.append(result)
-    
+
     return results
 
 
 def filter_cases_by_split(cases: List[RagGoldCase], split: str) -> List[RagGoldCase]:
     """
     Filter cases by split type.
-    
+
     Args:
         cases: List of gold cases
         split: Split type to filter by ('dev', 'test', 'regression')
-        
+
     Returns:
         Filtered list of cases
     """
@@ -370,10 +359,10 @@ def filter_cases_by_split(cases: List[RagGoldCase], split: str) -> List[RagGoldC
 def create_mock_cases(count: int = 5) -> List[RagGoldCase]:
     """
     Create mock cases for smoke testing.
-    
+
     Args:
         count: Number of mock cases to create
-        
+
     Returns:
         List of mock cases
     """
@@ -410,7 +399,7 @@ def create_mock_cases(count: int = 5) -> List[RagGoldCase]:
             notes="Mock case for smoke testing"
         )
         cases.append(case)
-    
+
     return cases
 
 

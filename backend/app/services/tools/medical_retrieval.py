@@ -14,22 +14,21 @@
 - 执行耗时监控
 """
 
-import time
 import logging
-from typing import List, Optional
+import time
+from typing import List
 
 from pydantic import BaseModel, Field
 
+from app.services.rag.reranker import two_stage_rerank
+from app.services.rag.retriever import (
+    _generate_hypothetical_document,
+    expand_queries,
+    tiered_retrieve,
+)
+from app.services.rag.types import EvidenceItem, RetrievalBundle, RetrievalQuery
 from app.services.tools.base import BaseTool, ToolContext
 from app.services.tools.registry import ToolRegistry
-from app.services.rag.types import EvidenceItem, RetrievalQuery, RetrievalBundle
-from app.services.rag.retriever import (
-    hybrid_retrieve,
-    tiered_retrieve,
-    expand_queries,
-    _generate_hypothetical_document,
-)
-from app.services.rag.reranker import two_stage_rerank
 
 logger = logging.getLogger(__name__)
 

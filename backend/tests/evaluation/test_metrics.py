@@ -2,107 +2,115 @@
 Unit tests for metrics calculation.
 """
 import unittest
-from evaluation.metrics import (
-    recall_at_k, mrr, ndcg_at_k, citation_validity, 
-    citation_hallucination_rate, refusal_metrics_from_results,
-    retrieval_metrics, citation_metrics, refusal_metrics, tool_use_metrics,
-)
+
 from evaluation.datasets import RagEvalResult, RagGoldCase, StanceType
+from evaluation.metrics import (
+    citation_hallucination_rate,
+    citation_metrics,
+    citation_validity,
+    mrr,
+    ndcg_at_k,
+    recall_at_k,
+    refusal_metrics,
+    refusal_metrics_from_results,
+    retrieval_metrics,
+    tool_use_metrics,
+)
 
 
 class TestMetrics(unittest.TestCase):
-    
+
     def test_recall_at_k_perfect_match(self):
         """Test recall when all gold items are retrieved."""
         retrieved = ["doc1", "doc2", "doc3"]
         gold = ["doc1", "doc2", "doc3"]
         recall = recall_at_k(retrieved, gold, k=3)
         self.assertEqual(recall, 1.0)
-    
+
     def test_recall_at_k_partial_match(self):
         """Test recall when only some gold items are retrieved."""
         retrieved = ["doc1", "doc2", "doc4"]
         gold = ["doc1", "doc2", "doc3"]
         recall = recall_at_k(retrieved, gold, k=3)
         self.assertAlmostEqual(recall, 2/3, places=2)
-    
+
     def test_recall_at_k_no_match(self):
         """Test recall when no gold items are retrieved."""
         retrieved = ["doc4", "doc5", "doc6"]
         gold = ["doc1", "doc2", "doc3"]
         recall = recall_at_k(retrieved, gold, k=3)
         self.assertEqual(recall, 0.0)
-    
+
     def test_recall_at_k_empty_gold(self):
         """Test recall when gold list is empty."""
         retrieved = ["doc1", "doc2"]
         gold = []
         recall = recall_at_k(retrieved, gold, k=3)
         self.assertEqual(recall, 0.0)
-    
+
     def test_recall_at_k_empty_retrieved(self):
         """Test recall when retrieved list is empty."""
         retrieved = []
         gold = ["doc1", "doc2"]
         recall = recall_at_k(retrieved, gold, k=3)
         self.assertEqual(recall, 0.0)
-    
+
     def test_mrr_first_rank(self):
         """Test MRR when first result is relevant."""
         retrieved = ["doc1", "doc2", "doc3"]
         gold = ["doc1"]
         mrr_val = mrr(retrieved, gold)
         self.assertEqual(mrr_val, 1.0)
-    
+
     def test_mrr_middle_rank(self):
         """Test MRR when relevant result is in middle."""
         retrieved = ["doc2", "doc1", "doc3"]
         gold = ["doc1"]
         mrr_val = mrr(retrieved, gold)
         self.assertEqual(mrr_val, 1/2)  # Rank 2 -> 1/2
-    
+
     def test_mrr_no_relevant(self):
         """Test MRR when no relevant results."""
         retrieved = ["doc2", "doc3", "doc4"]
         gold = ["doc1"]
         mrr_val = mrr(retrieved, gold)
         self.assertEqual(mrr_val, 0.0)
-    
+
     def test_ndcg_perfect_ranking(self):
         """Test nDCG with perfect ranking."""
         retrieved = ["doc3", "doc2", "doc1"]
         relevance_grades = {"doc1": 1, "doc2": 2, "doc3": 3}  # Perfect order
         ndcg = ndcg_at_k(retrieved, relevance_grades, k=3)
         self.assertAlmostEqual(ndcg, 1.0, places=2)
-    
+
     def test_citation_validity_all_valid(self):
         """Test citation validity when all citations are valid."""
         used_ids = ["cit1", "cit2", "cit3"]
         allowed_ids = {"cit1", "cit2", "cit3", "cit4"}
         validity = citation_validity(used_ids, allowed_ids)
         self.assertEqual(validity, 1.0)
-    
+
     def test_citation_validity_partial_valid(self):
         """Test citation validity when some citations are invalid."""
         used_ids = ["cit1", "cit2", "invalid_cit"]
         allowed_ids = {"cit1", "cit2", "cit3"}
         validity = citation_validity(used_ids, allowed_ids)
         self.assertEqual(validity, 2/3)
-    
+
     def test_citation_hallucination_rate_none(self):
         """Test hallucination rate when no invalid citations."""
         used_ids = ["cit1", "cit2", "cit3"]
         allowed_ids = {"cit1", "cit2", "cit3", "cit4"}
         halluc_rate = citation_hallucination_rate(used_ids, allowed_ids)
         self.assertEqual(halluc_rate, 0.0)
-    
+
     def test_citation_hallucination_rate_some_invalid(self):
         """Test hallucination rate when some citations are invalid."""
         used_ids = ["cit1", "cit2", "invalid_cit"]
         allowed_ids = {"cit1", "cit2", "cit3"}
         halluc_rate = citation_hallucination_rate(used_ids, allowed_ids)
         self.assertEqual(halluc_rate, 1/3)
-    
+
     def test_refusal_metrics_from_results_all_correct(self):
         """Test refusal metrics when all predictions are correct."""
         # Create results and gold cases where everything is correct
@@ -117,7 +125,7 @@ class TestMetrics(unittest.TestCase):
                 retrieval_status="sufficient"
             ),
             RagEvalResult(
-                case_id="case2", 
+                case_id="case2",
                 mode="test",
                 knowledge_score=85.0,  # Should not refuse
                 evaluation_status="completed",
@@ -126,7 +134,7 @@ class TestMetrics(unittest.TestCase):
                 retrieval_status="sufficient"
             )
         ]
-        
+
         gold_cases = [
             RagGoldCase(
                 case_id="case1",
@@ -140,7 +148,7 @@ class TestMetrics(unittest.TestCase):
             ),
             RagGoldCase(
                 case_id="case2",
-                split="dev", 
+                split="dev",
                 department="test",
                 difficulty="easy",
                 patient_info="test",
@@ -149,7 +157,7 @@ class TestMetrics(unittest.TestCase):
                 should_refuse=False  # Should not refuse
             )
         ]
-        
+
         # Compute system_refused for each result
         for result in results:
             # Manually compute system_refused based on our logic
@@ -157,21 +165,21 @@ class TestMetrics(unittest.TestCase):
                 result.system_refused = True
             elif result.evaluation_status == "needs_review":
                 result.system_refused = True
-            elif (result.human_review_needed and 
-                  result.review_reason in ["insufficient_evidence", "knowledge_undetermined", 
-                                          "citation_verification_failed", "retrieval_error", 
+            elif (result.human_review_needed and
+                  result.review_reason in ["insufficient_evidence", "knowledge_undetermined",
+                                          "citation_verification_failed", "retrieval_error",
                                           "system_exception"]):
                 result.system_refused = True
             else:
                 result.system_refused = False
-        
+
         # Calculate metrics
         metrics = refusal_metrics_from_results(results, gold_cases)
-        
+
         # We expect high scores since most metrics depend on the logic
         # Just check that function runs without error and returns expected keys
         expected_keys = [
-            "refusal_accuracy", "refusal_precision", "refusal_recall", 
+            "refusal_accuracy", "refusal_precision", "refusal_recall",
             "refusal_f1", "false_refusal_rate", "false_acceptance_rate"
         ]
         for key in expected_keys:

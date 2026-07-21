@@ -13,25 +13,28 @@ import logging
 import math
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from app.services.qwen_client import call_qwen_chat
-from app.services.rag.embeddings import get_embedding, get_embeddings
-from app.services.rag.bm25_search import get_bm25_index
-from app.services.rag.sparse_search import get_sparse_search
-from app.services.rag.hybrid_fusion import weighted_rrf
-from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
-from app.services.rag.reranker import rerank_documents
-from app.services.rag.types import (
-    EvidenceItem, RetrievalBundle, RetrievalQuery, RetrievalConfidence,
-    MIN_CANDIDATE_COUNT, MIN_QUERY_TYPE_COVERAGE, MIN_RRF_SCORE, MIN_SOURCE_COUNT,
-    MIN_VECTOR_SCORE,
-    MAX_MQE_EXPANSIONS, MAX_HYDE_CALLS, MAX_RAG_CANDIDATES,
-)
 from app.core.config import settings
-from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
 from app.services.observability.langfuse_client import get_tracer
 from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
+from app.services.qwen_client import call_qwen_chat
+from app.services.rag.bm25_search import get_bm25_index
+from app.services.rag.embeddings import get_embedding, get_embeddings
+from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
+from app.services.rag.hybrid_fusion import weighted_rrf
+from app.services.rag.medical_store import get_medical_store
+from app.services.rag.reranker import rerank_documents
+from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
+from app.services.rag.sparse_search import get_sparse_search
+from app.services.rag.types import (
+    MAX_MQE_EXPANSIONS,
+    MAX_RAG_CANDIDATES,
+    EvidenceItem,
+    RetrievalBundle,
+    RetrievalConfidence,
+    RetrievalQuery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +103,6 @@ async def _filter_by_embedding_similarity(
     except Exception as e:
         logger.warning(f"MQE 相似度校验获取 embedding 失败，跳过过滤: {e}")
         return expanded_queries  # 降级：失败时保留全部扩展查询
-
-
-from app.services.rag.medical_store import get_medical_store
 
 
 async def retrieve_medical_evidence(
@@ -950,7 +950,7 @@ async def tiered_retrieve(
         "retrieval": {"fusion": None},
     }
 
-    all_query_types = set(q.query_type for q in queries)
+    set(q.query_type for q in queries)
     query_types_with_hits: set = set()
     all_candidates: list = []
     level_used = "base"

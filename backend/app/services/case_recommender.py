@@ -10,9 +10,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.evaluation import Evaluation
 from app.models.consultation import Consultation
-from app.services.difficulty_model import calculate_actual_difficulty, DifficultyResult
+from app.models.evaluation import Evaluation
+from app.services.difficulty_model import DifficultyResult, calculate_actual_difficulty
 
 logger = logging.getLogger(__name__)
 

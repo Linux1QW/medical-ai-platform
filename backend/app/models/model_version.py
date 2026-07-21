@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, JSON, DateTime, Text, Enum
+from sqlalchemy import JSON, Column, DateTime, Enum, String, Text
 
 from app.models.base import Base
 

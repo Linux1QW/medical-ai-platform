@@ -10,11 +10,11 @@
 """
 from __future__ import annotations
 
-import time
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
 from enum import Enum
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .budget import ToolBudget
@@ -347,6 +347,7 @@ class ToolBudgetManager:
         # 异步触发 AlertManager 告警通知
         try:
             import asyncio
+
             from app.services.observability.alerting import alert_manager
 
             loop = asyncio.get_running_loop()

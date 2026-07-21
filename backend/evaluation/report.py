@@ -4,17 +4,21 @@ Report generation for RAG evaluation.
 Provides JSON / Markdown report generation, threshold checking,
 and comparison between Legacy RAG and Tool Use methods.
 """
-import json
 import datetime
+import json
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
 from .datasets import RagEvalResult, RagGoldCase
 from .metrics import (
-    refusal_metrics_from_results, tool_metrics, tool_breakdown,
-    aggregate_metrics_by_dimension, final_answer_keyword_coverage,
-    tool_call_accuracy, score_range_accuracy,
+    aggregate_metrics_by_dimension,
+    final_answer_keyword_coverage,
+    refusal_metrics_from_results,
+    score_range_accuracy,
+    tool_breakdown,
+    tool_call_accuracy,
+    tool_metrics,
 )
-
 
 # ---------------------------------------------------------------------------
 # Timestamp helper
@@ -355,7 +359,6 @@ def threshold_checker(
 
     defs = thresholds or DEFAULT_THRESHOLDS
     checked_count = 0
-    passed_count = 0
 
     for metric_name, defn in defs.items():
         if metric_name not in metrics:
@@ -900,7 +903,7 @@ def generate_comparison_report(
             }
 
     # Query type breakdown
-    from .runners import group_cases_by_query_type, classify_query_type
+    from .runners import group_cases_by_query_type
     case_id_to_idx = {gc.case_id: i for i, gc in enumerate(gold_cases)}
     groups = group_cases_by_query_type(gold_cases)
 
@@ -972,4 +975,4 @@ def write_comparison_report(
 # ---------------------------------------------------------------------------
 # Late imports to avoid circular dependencies
 # ---------------------------------------------------------------------------
-from .metrics import recall_at_k, mrr, ndcg_at_k
+from .metrics import mrr, ndcg_at_k, recall_at_k  # noqa: E402  # noqa: E402

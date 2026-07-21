@@ -135,8 +135,9 @@ async def _load_evaluation_state(evaluation_id: str) -> Optional[dict]:
 
     # Fallback: 从数据库加载
     try:
-        from app.db.session import AsyncSessionLocal
         from sqlalchemy import text
+
+        from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -159,8 +160,9 @@ async def _save_review_record(
 ):
     """保存复核记录到数据库"""
     try:
-        from app.db.session import AsyncSessionLocal
         from sqlalchemy import text
+
+        from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
             await session.execute(
@@ -223,8 +225,9 @@ async def _resume_or_finalize(evaluation_id: str, state: dict) -> dict:
 async def _list_pending_evaluations() -> list:
     """列出所有待复核的评估"""
     try:
-        from app.db.session import AsyncSessionLocal
         from sqlalchemy import text
+
+        from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(

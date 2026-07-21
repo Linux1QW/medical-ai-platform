@@ -2,14 +2,14 @@
 """病例难度评估模型 — 基于历史评估数据动态计算实际难度"""
 
 import logging
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.evaluation import Evaluation
 from app.models.consultation import Consultation
+from app.models.evaluation import Evaluation
 
 logger = logging.getLogger(__name__)
 

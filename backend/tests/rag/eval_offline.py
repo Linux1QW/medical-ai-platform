@@ -8,13 +8,11 @@
 需要预先准备的测试用例文件（test_cases.json）。
 """
 
-import json
-import time
-import asyncio
 import argparse
+import asyncio
+import json
 import logging
-from pathlib import Path
-from typing import Optional
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,8 @@ class OfflineRAGEvaluator:
         case: dict,
     ) -> dict:
         """评估单个测试用例"""
-        from app.services.rag.types import RetrievalQuery, ClinicalFacts
         from app.services.agents.knowledge_agent import build_queries
+        from app.services.rag.types import ClinicalFacts
 
         # 构建查询
         facts = ClinicalFacts(

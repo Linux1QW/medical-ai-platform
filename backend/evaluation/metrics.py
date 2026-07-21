@@ -2,36 +2,37 @@
 Core metrics calculation for RAG evaluation.
 """
 import math
-from typing import List, Dict, Set, Tuple, Optional, Any
 from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 from .datasets import RagEvalResult, RagGoldCase, StanceType
 
 
 def recall_at_k(retrieved_ids: List[str], gold_ids: List[str], k: int) -> float:
     """
     Calculate Recall@K metric.
-    
+
     Args:
         retrieved_ids: List of retrieved document IDs (ranked order)
         gold_ids: List of ground truth relevant document IDs
         k: Number of top results to consider
-        
+
     Returns:
         Recall@K value (0.0 to 1.0)
     """
     if not gold_ids:
         return 0.0  # Cannot calculate recall when there are no gold standards
-    
+
     if len(retrieved_ids) == 0:
         return 0.0
-    
+
     # Take top-k retrieved documents
     top_k_retrieved = set(retrieved_ids[:k])
     gold_set = set(gold_ids)
-    
+
     # Count how many gold IDs are in the top-k retrieved
     hits = len(top_k_retrieved.intersection(gold_set))
-    
+
     # Calculate recall
     recall = hits / len(gold_set)
     return min(recall, 1.0)  # Cap at 1.0
@@ -40,24 +41,24 @@ def recall_at_k(retrieved_ids: List[str], gold_ids: List[str], k: int) -> float:
 def mrr(retrieved_ids: List[str], gold_ids: List[str]) -> float:
     """
     Calculate Mean Reciprocal Rank (MRR).
-    
+
     Args:
         retrieved_ids: List of retrieved document IDs (ranked order)
         gold_ids: List of ground truth relevant document IDs
-        
+
     Returns:
         MRR value (0.0 to 1.0)
     """
     if not gold_ids or len(retrieved_ids) == 0:
         return 0.0
-    
+
     gold_set = set(gold_ids)
-    
+
     # Find the rank of the first relevant document
     for rank, doc_id in enumerate(retrieved_ids, 1):
         if doc_id in gold_set:
             return 1.0 / rank
-    
+
     # No relevant document found in the retrieved list
     return 0.0
 
@@ -65,49 +66,49 @@ def mrr(retrieved_ids: List[str], gold_ids: List[str]) -> float:
 def dcg_at_k(retrieved_ids: List[str], relevance_grades: Dict[str, int], k: int) -> float:
     """
     Calculate Discounted Cumulative Gain at K.
-    
+
     Args:
         retrieved_ids: List of retrieved document IDs (ranked order)
         relevance_grades: Dictionary mapping doc_id to relevance grade (0-3)
         k: Number of top results to consider
-        
+
     Returns:
         DCG@K value
     """
     if not relevance_grades or len(retrieved_ids) == 0:
         return 0.0
-    
+
     dcg = 0.0
     for i, doc_id in enumerate(retrieved_ids[:k]):
         rank = i + 1
         relevance = relevance_grades.get(doc_id, 0)
-        
+
         # DCG formula: rel_1 + sum(rel_i/log2(i+1)) for i=2 to k
         if rank == 1:
             dcg += relevance
         else:
             dcg += relevance / math.log2(rank)
-    
+
     return dcg
 
 
 def idcg_at_k(relevance_grades: Dict[str, int], k: int) -> float:
     """
     Calculate Ideal Discounted Cumulative Gain at K.
-    
+
     Args:
         relevance_grades: Dictionary mapping doc_id to relevance grade (0-3)
         k: Number of top results to consider
-        
+
     Returns:
         IDCG@K value
     """
     if not relevance_grades:
         return 0.0
-    
+
     # Sort relevance grades in descending order to get ideal ranking
     sorted_relevances = sorted(relevance_grades.values(), reverse=True)[:k]
-    
+
     idcg = 0.0
     for i, relevance in enumerate(sorted_relevances):
         rank = i + 1
@@ -115,48 +116,48 @@ def idcg_at_k(relevance_grades: Dict[str, int], k: int) -> float:
             idcg += relevance
         else:
             idcg += relevance / math.log2(rank)
-    
+
     return idcg
 
 
 def ndcg_at_k(retrieved_ids: List[str], relevance_grades: Dict[str, int], k: int) -> float:
     """
     Calculate Normalized Discounted Cumulative Gain at K.
-    
+
     Args:
         retrieved_ids: List of retrieved document IDs (ranked order)
         relevance_grades: Dictionary mapping doc_id to relevance grade (0-3)
         k: Number of top results to consider
-        
+
     Returns:
         nDCG@K value (0.0 to 1.0)
     """
     if not relevance_grades or len(retrieved_ids) == 0:
         return 0.0
-    
+
     dcg = dcg_at_k(retrieved_ids, relevance_grades, k)
     idcg = idcg_at_k(relevance_grades, k)
-    
+
     if idcg == 0.0:
         return 0.0
-    
+
     return dcg / idcg
 
 
 def citation_validity(used_ids: List[str], allowed_ids: Set[str]) -> float:
     """
     Calculate citation validity rate.
-    
+
     Args:
         used_ids: List of citation IDs used by the system
         allowed_ids: Set of valid citation IDs that could be used
-        
+
     Returns:
         Citation validity rate (0.0 to 1.0)
     """
     if not used_ids:
         return 1.0  # No citations used means 100% validity
-    
+
     valid_count = sum(1 for cid in used_ids if cid in allowed_ids)
     return valid_count / len(used_ids)
 
@@ -164,17 +165,17 @@ def citation_validity(used_ids: List[str], allowed_ids: Set[str]) -> float:
 def citation_hallucination_rate(used_ids: List[str], allowed_ids: Set[str]) -> float:
     """
     Calculate citation hallucination rate.
-    
+
     Args:
         used_ids: List of citation IDs used by the system
         allowed_ids: Set of valid citation IDs that could be used
-        
+
     Returns:
         Citation hallucination rate (0.0 to 1.0)
     """
     if not used_ids:
         return 0.0  # No citations used means 0% hallucination
-    
+
     hallucinated_count = sum(1 for cid in used_ids if cid not in allowed_ids)
     return hallucinated_count / len(used_ids)
 
@@ -182,20 +183,20 @@ def citation_hallucination_rate(used_ids: List[str], allowed_ids: Set[str]) -> f
 def citation_coverage(used_ids: List[str], gold_ids: List[str]) -> float:
     """
     Calculate citation coverage of gold keywords.
-    
+
     Args:
         used_ids: List of citation IDs used by the system
         gold_ids: List of expected citation IDs
-        
+
     Returns:
         Citation coverage rate (0.0 to 1.0)
     """
     if not gold_ids:
         return 1.0  # No gold citations expected means 100% coverage
-    
+
     used_set = set(used_ids)
     gold_set = set(gold_ids)
-    
+
     covered = gold_set.intersection(used_set)
     return len(covered) / len(gold_set)
 
@@ -203,16 +204,16 @@ def citation_coverage(used_ids: List[str], gold_ids: List[str]) -> float:
 def stance_accuracy(results: List[Tuple[StanceType, StanceType]]) -> float:
     """
     Calculate stance accuracy.
-    
+
     Args:
         results: List of (predicted_stance, expected_stance) tuples
-        
+
     Returns:
         Stance accuracy rate (0.0 to 1.0)
     """
     if not results:
         return 0.0
-    
+
     correct = sum(1 for pred, expected in results if pred == expected)
     return correct / len(results)
 
@@ -220,74 +221,74 @@ def stance_accuracy(results: List[Tuple[StanceType, StanceType]]) -> float:
 def score_range_accuracy(eval_results: List[RagEvalResult], gold_cases: List[RagGoldCase]) -> float:
     """
     Calculate score range accuracy for non-refusal cases.
-    
+
     Args:
         eval_results: List of evaluation results
         gold_cases: List of corresponding gold cases
-        
+
     Returns:
         Score range accuracy rate (0.0 to 1.0)
     """
     pairs_with_ranges = [
-        (eval_res, gold_case) 
-        for eval_res, gold_case in zip(eval_results, gold_cases) 
+        (eval_res, gold_case)
+        for eval_res, gold_case in zip(eval_results, gold_cases)
         if gold_case.expected_score_range is not None and eval_res.knowledge_score is not None
     ]
-    
+
     if not pairs_with_ranges:
         return 0.0
-    
+
     correct = 0
     for eval_res, gold_case in pairs_with_ranges:
         min_score, max_score = gold_case.expected_score_range
         if min_score <= eval_res.knowledge_score <= max_score:
             correct += 1
-    
+
     return correct / len(pairs_with_ranges)
 
 
 def compute_system_refused(result: RagEvalResult) -> bool:
     """
     Determine if the system refused based on our unified definition.
-    
+
     Args:
         result: Evaluation result
-        
+
     Returns:
         True if system refused, False otherwise
     """
     # Check if knowledge score is null
     if result.knowledge_score is None:
         return True
-    
+
     # Check if evaluation status indicates need for review
     if result.evaluation_status == "needs_review":
         return True
-    
+
     # Check if human review is needed for specific refusal reasons
     refusal_reasons = [
         "insufficient_evidence",
-        "knowledge_undetermined", 
+        "knowledge_undetermined",
         "citation_verification_failed",
         "retrieval_error",
         "system_exception"
     ]
-    
-    if (result.human_review_needed and 
+
+    if (result.human_review_needed and
         result.review_reason in refusal_reasons):
         return True
-    
+
     return False
 
 
 def compute_false_acceptance(result: RagEvalResult, gold_case: RagGoldCase) -> bool:
     """
     Determine if this is a false acceptance (should refuse but didn't).
-    
+
     Args:
         result: Evaluation result
         gold_case: Corresponding gold case
-        
+
     Returns:
         True if false acceptance occurred, False otherwise
     """
@@ -305,17 +306,17 @@ def refusal_metrics_from_results(results: List[RagEvalResult], gold_cases: List[
     Args:
         results: List of evaluation results
         gold_cases: List of corresponding gold cases
-        
+
     Returns:
         Dictionary containing refusal metrics
     """
     # Precompute system_refused and false_acceptance for each result
     for result in results:
         result.system_refused = compute_system_refused(result)
-    
+
     for result, gold_case in zip(results, gold_cases):
         result.false_acceptance = compute_false_acceptance(result, gold_case)
-    
+
     # Count different types of cases
     total_cases = len(results)
     if total_cases == 0:
@@ -327,57 +328,57 @@ def refusal_metrics_from_results(results: List[RagEvalResult], gold_cases: List[
             "false_refusal_rate": 0.0,
             "false_acceptance_rate": 0.0
         }
-    
+
     # Count correct refusals (where system refused when it should have)
     correct_refusals = sum(
         1 for result, gold_case in zip(results, gold_cases)
         if result.system_refused and gold_case.should_refuse
     )
-    
+
     # Count incorrect refusals (where system refused when it shouldn't have)
     incorrect_refusals = sum(
         1 for result, gold_case in zip(results, gold_cases)
         if result.system_refused and not gold_case.should_refuse
     )
-    
+
     # Count correct acceptances (where system didn't refuse when it shouldn't have)
     correct_acceptances = sum(
         1 for result, gold_case in zip(results, gold_cases)
         if not result.system_refused and not gold_case.should_refuse
     )
-    
+
     # Count incorrect acceptances (where system didn't refuse when it should have)
     incorrect_acceptances = sum(
         1 for result, gold_case in zip(results, gold_cases)
         if not result.system_refused and gold_case.should_refuse
     )
-    
+
     # Calculate basic metrics
     total_should_refuse = sum(1 for gc in gold_cases if gc.should_refuse)
     total_should_not_refuse = total_cases - total_should_refuse
     total_system_refusals = sum(1 for r in results if r.system_refused)
-    
+
     # Accuracy: (correct_refusals + correct_acceptances) / total
     refusal_accuracy = (correct_refusals + correct_acceptances) / total_cases if total_cases > 0 else 0.0
-    
+
     # Precision: correct_refusals / total_system_refusals
     refusal_precision = correct_refusals / total_system_refusals if total_system_refusals > 0 else 0.0
-    
+
     # Recall: correct_refusals / total_should_refuse
     refusal_recall = correct_refusals / total_should_refuse if total_should_refuse > 0 else 0.0
-    
+
     # F1: harmonic mean of precision and recall
     if refusal_precision + refusal_recall > 0:
         refusal_f1 = 2 * (refusal_precision * refusal_recall) / (refusal_precision + refusal_recall)
     else:
         refusal_f1 = 0.0
-    
+
     # False refusal rate: incorrect_refusals / total_should_not_refuse
     false_refusal_rate = incorrect_refusals / total_should_not_refuse if total_should_not_refuse > 0 else 0.0
-    
+
     # False acceptance rate: incorrect_acceptances / total_should_refuse
     false_acceptance_rate = incorrect_acceptances / total_should_refuse if total_should_refuse > 0 else 0.0
-    
+
     return {
         "refusal_accuracy": refusal_accuracy,
         "refusal_precision": refusal_precision,
@@ -391,10 +392,10 @@ def refusal_metrics_from_results(results: List[RagEvalResult], gold_cases: List[
 def tool_metrics(results: List[RagEvalResult]) -> Dict[str, float]:
     """
     Calculate all Tool Use-related metrics.
-    
+
     Args:
         results: List of evaluation results containing tool traces
-        
+
     Returns:
         Dictionary containing tool metrics
     """
@@ -406,19 +407,19 @@ def tool_metrics(results: List[RagEvalResult]) -> Dict[str, float]:
             "avg_tool_calls": 0.0,
             "avg_latency_ms": 0.0
         }
-    
+
     total_calls = 0
     successful_calls = 0
     failed_calls = 0
     budget_exceeded_calls = 0
     total_latency = 0
     samples_with_latency = 0
-    
+
     for result in results:
         # Count tool calls from trace
         sample_calls = len(result.tool_trace)
         total_calls += sample_calls
-        
+
         # Analyze each tool call in the trace
         for tool_call in result.tool_trace:
             status = tool_call.get('status', 'unknown')
@@ -428,19 +429,19 @@ def tool_metrics(results: List[RagEvalResult]) -> Dict[str, float]:
                 failed_calls += 1
             elif status == 'budget_exceeded':
                 budget_exceeded_calls += 1
-        
+
         # Track latency
         if result.latency_ms is not None:
             total_latency += result.latency_ms
             samples_with_latency += 1
-    
+
     # Calculate rates
     tool_success_rate = successful_calls / total_calls if total_calls > 0 else 0.0
     tool_failure_rate = failed_calls / total_calls if total_calls > 0 else 0.0
     tool_budget_exceeded_rate = budget_exceeded_calls / total_calls if total_calls > 0 else 0.0
     avg_tool_calls = total_calls / len(results) if results else 0.0
     avg_latency_ms = total_latency / samples_with_latency if samples_with_latency > 0 else 0.0
-    
+
     return {
         "tool_success_rate": tool_success_rate,
         "tool_failure_rate": tool_failure_rate,
@@ -453,10 +454,10 @@ def tool_metrics(results: List[RagEvalResult]) -> Dict[str, float]:
 def tool_breakdown(results: List[RagEvalResult]) -> Dict[str, Dict[str, float]]:
     """
     Calculate tool breakdown metrics by tool name.
-    
+
     Args:
         results: List of evaluation results containing tool traces
-        
+
     Returns:
         Dictionary containing tool breakdown metrics
     """
@@ -467,130 +468,130 @@ def tool_breakdown(results: List[RagEvalResult]) -> Dict[str, Dict[str, float]]:
         "total_latency_ms": 0,
         "call_count": 0
     })
-    
+
     for result in results:
         for tool_call in result.tool_trace:
             tool_name = tool_call.get('name', 'unknown')
             status = tool_call.get('status', 'unknown')
             latency = tool_call.get('latency_ms', 0)
-            
+
             stats = tool_stats[tool_name]
             stats["calls"] += 1
             stats["total_latency_ms"] += latency
-            
+
             if status == 'success':
                 stats["successes"] += 1
             elif status in ['error', 'timeout', 'budget_exceeded']:
                 stats["failures"] += 1
-    
+
     # Calculate derived metrics
     breakdown = {}
     for tool_name, stats in tool_stats.items():
         total_calls = stats["calls"]
         successes = stats["successes"]
         total_latency = stats["total_latency_ms"]
-        
+
         breakdown[tool_name] = {
             "calls": total_calls,
             "success_rate": successes / total_calls if total_calls > 0 else 0.0,
             "avg_latency_ms": total_latency / total_calls if total_calls > 0 else 0.0
         }
-    
+
     return breakdown
 
 
 def aggregate_metrics_by_dimension(
-    results: List[RagEvalResult], 
-    gold_cases: List[RagGoldCase], 
+    results: List[RagEvalResult],
+    gold_cases: List[RagGoldCase],
     dimension: str
 ) -> Dict[str, Dict[str, float]]:
     """
     Aggregate metrics by a specific dimension (difficulty, department, etc.).
-    
+
     Args:
         results: List of evaluation results
         gold_cases: List of corresponding gold cases
         dimension: Dimension to group by ('difficulty', 'department', etc.)
-        
+
     Returns:
         Dictionary mapping dimension values to metrics
     """
     groups = defaultdict(list)
-    
+
     for result, gold_case in zip(results, gold_cases):
         if hasattr(gold_case, dimension):
             dim_value = getattr(gold_case, dimension)
             if dim_value is not None:
                 groups[dim_value].append((result, gold_case))
-    
+
     aggregated = {}
     for dim_value, group_pairs in groups.items():
         group_results = [pair[0] for pair in group_pairs]
         group_gold_cases = [pair[1] for pair in group_pairs]
-        
+
         # Calculate basic metrics for this group
         refusal_mets = refusal_metrics_from_results(group_results, group_gold_cases)
-        
+
         # Add other metrics here as needed
         aggregated[dim_value] = refusal_mets
-    
+
     return aggregated
 
 
 def final_answer_keyword_coverage(eval_results: List[RagEvalResult], gold_cases: List[RagGoldCase]) -> float:
     """
     Calculate coverage of expected keywords in final answers.
-    
+
     Args:
         eval_results: List of evaluation results
         gold_cases: List of corresponding gold cases
-        
+
     Returns:
         Keyword coverage rate (0.0 to 1.0)
     """
     total_expected_keywords = 0
     total_covered_keywords = 0
-    
+
     for result, gold_case in zip(eval_results, gold_cases):
         expected_keywords = gold_case.expected_final_answer_keywords or []
         final_answer = result.final_answer_text or ""
-        
+
         if not expected_keywords:
             continue
-            
+
         total_expected_keywords += len(expected_keywords)
-        
+
         # Count how many expected keywords appear in the final answer
         for keyword in expected_keywords:
             if keyword.lower() in final_answer.lower():
                 total_covered_keywords += 1
-    
+
     if total_expected_keywords == 0:
         return 1.0  # No expected keywords means 100% coverage
-    
+
     return total_covered_keywords / total_expected_keywords
 
 
 def tool_call_accuracy(eval_results: List[RagEvalResult], gold_cases: List[RagGoldCase]) -> float:
     """
     Calculate accuracy of tool calls compared to expected calls.
-    
+
     Args:
         eval_results: List of evaluation results
         gold_cases: List of corresponding gold cases
-        
+
     Returns:
         Tool call accuracy rate (0.0 to 1.0)
     """
     if not gold_cases:
         return 0.0
-    
+
     correct_cases = 0
-    
+
     for result, gold_case in zip(eval_results, gold_cases):
         expected_calls = gold_case.expected_tool_calls or []
         actual_calls = result.actual_tool_calls or []
-        
+
         # Simple check: compare if both lists are empty or both have content
         if len(expected_calls) == 0 and len(actual_calls) == 0:
             correct_cases += 1
@@ -598,7 +599,7 @@ def tool_call_accuracy(eval_results: List[RagEvalResult], gold_cases: List[RagGo
             # More sophisticated comparison would go here
             # For now, just check if both have tool calls
             correct_cases += 1
-    
+
     return correct_cases / len(gold_cases)
 
 
@@ -828,10 +829,10 @@ def refusal_metrics(
         }
 
     # 混淆矩阵
-    tp = sum(1 for p, l in zip(predictions, labels) if p and l)   # 正确拒绝
-    fp = sum(1 for p, l in zip(predictions, labels) if p and not l)  # 错误拒绝
-    fn = sum(1 for p, l in zip(predictions, labels) if not p and l)  # 错误接受
-    tn = sum(1 for p, l in zip(predictions, labels) if not p and not l)  # 正确接受
+    tp = sum(1 for p, lbl in zip(predictions, labels) if p and lbl)   # 正确拒绝
+    fp = sum(1 for p, lbl in zip(predictions, labels) if p and not lbl)  # 错误拒绝
+    fn = sum(1 for p, lbl in zip(predictions, labels) if not p and lbl)  # 错误接受
+    tn = sum(1 for p, lbl in zip(predictions, labels) if not p and not lbl)  # 正确接受
 
     accuracy = (tp + tn) / n
 

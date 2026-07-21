@@ -51,7 +51,7 @@ def split_query_into_fields(query: str):
     # Only attempt to split if query starts with patient case indicators
     if not re.match(r'^(患者|儿童|2型糖尿病)', query):
         return "", query
-    
+
     # Try to find where the question part starts
     for starter in QUESTION_STARTERS:
         starter_match = re.search(re.escape(starter), query)
@@ -72,7 +72,7 @@ def split_query_into_fields(query: str):
                 conversation = query[last_comma+1:].strip()
                 if patient_info and conversation:
                     return patient_info, conversation
-    
+
     # Fallback: if query contains 。or ；, split there
     period_pattern = re.compile(r'^(.*?[。；])\s*(.*)', re.DOTALL)
     match = period_pattern.match(query)
@@ -81,7 +81,7 @@ def split_query_into_fields(query: str):
         conversation = match.group(2).strip()
         if conversation:
             return patient_info, conversation
-    
+
     # No clear split point found
     return "", query
 
@@ -97,10 +97,10 @@ SPLIT_CYCLE = ["dev", "test", "regression"]
 def convert_case(old: dict, case_index: int = 0) -> dict:
     """Convert a single old-format case to new RagGoldCase schema."""
     patient_info, conversation_text = split_query_into_fields(old.get("query", ""))
-    
+
     old_stance = old.get("expected_stance", "提供信息")
     old_difficulty = old.get("difficulty", "中等")
-    
+
     new_case = {
         # Identification
         "case_id": old.get("id", ""),
@@ -108,14 +108,14 @@ def convert_case(old: dict, case_index: int = 0) -> dict:
         "department": old.get("department", ""),
         "domain_expertise": None,
         "difficulty": DIFFICULTY_MAP.get(old_difficulty, "medium"),
-        
+
         # Case information
         "chief_complaint": None,
         "patient_info": patient_info,
         "conversation_text": conversation_text,
         "doctor_diagnosis": None,
         "treatment_plan": None,
-        
+
         # Expected retrieval results
         "gold_queries": [],
         "gold_doc_ids": [],
@@ -123,25 +123,25 @@ def convert_case(old: dict, case_index: int = 0) -> dict:
         "gold_relevant_sources": old.get("reference_docs", []),
         "gold_citation_keywords": [],
         "gold_relevance_grades": {},
-        
+
         # Expected queries
         "expected_queries": [],
-        
+
         # Expected evaluation results
         "expected_stance": STANCE_MAP.get(old_stance, "supports"),
         "should_refuse": determine_should_refuse(old_stance),
         "expected_score_range": None,
         "expected_review_reason": None,
-        
+
         # Tool use expectations
         "expected_tool_calls": [],
         "expected_tool_params": {},
         "expected_final_answer_keywords": old.get("tags", []),
-        
+
         # Metadata
         "notes": old.get("expected_answer", ""),
     }
-    
+
     return new_case
 
 
@@ -152,23 +152,23 @@ def main():
             line = line.strip()
             if line:
                 old_cases.append(json.loads(line))
-    
+
     print(f"Read {len(old_cases)} old-format cases")
-    
+
     new_cases = [convert_case(c, i) for i, c in enumerate(old_cases)]
-    
+
     # Write new format
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for case in new_cases:
             f.write(json.dumps(case, ensure_ascii=False) + "\n")
-    
+
     print(f"Wrote {len(new_cases)} new-format cases to {OUTPUT_FILE}")
-    
+
     # Validate with Pydantic
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from evaluation.datasets import RagGoldCase
-    
+
     errors = 0
     for i, case_data in enumerate(new_cases):
         try:
@@ -177,7 +177,7 @@ def main():
         except Exception as e:
             errors += 1
             print(f"  ✗ Case {i+1} ({case_data.get('case_id')}): {e}")
-    
+
     if errors:
         print(f"\n{errors} case(s) failed validation!")
         sys.exit(1)

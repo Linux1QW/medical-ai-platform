@@ -1,10 +1,7 @@
 """场景分类与动态路由"""
 
-from app.orchestration.state import (
-    EvaluationContext, SubmissionFlags, RoutePlan, EvaluationPlan, PlanStep
-)
 from app.models.consultation import Consultation
-
+from app.orchestration.state import EvaluationPlan, PlanStep, RoutePlan, SubmissionFlags
 
 # ── 路由矩阵 ──────────────────────────────────────────────────────────────
 

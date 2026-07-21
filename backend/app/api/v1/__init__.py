@@ -1,16 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.v1.auth import router as auth_router
-from app.api.v1.patients import router as patients_router
-from app.api.v1.consultations import router as consultations_router
-from app.api.v1.evaluations import router as evaluations_router
-from app.api.v1.stats import router as stats_router
-from app.api.v1.knowledge_base import router as knowledge_base_router
 from app.api.v1.admin import router as admin_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.cases import router as cases_router
-from app.api.v1.review import router as review_router
-from app.api.v1.model_versions import router as model_versions_router
+from app.api.v1.consultations import router as consultations_router
 from app.api.v1.data_export import router as data_export_router
+from app.api.v1.evaluations import router as evaluations_router
+from app.api.v1.knowledge_base import router as knowledge_base_router
+from app.api.v1.model_versions import router as model_versions_router
+from app.api.v1.patients import router as patients_router
+from app.api.v1.review import router as review_router
+from app.api.v1.stats import router as stats_router
 
 router = APIRouter()
 

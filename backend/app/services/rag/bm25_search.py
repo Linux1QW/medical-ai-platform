@@ -14,7 +14,6 @@ from typing import Dict, List, Optional
 
 import bm25s
 import jieba
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +197,7 @@ def get_bm25_index() -> BM25Index:
 def _try_load_documents():
     """尝试从当前活跃版本的 ChromaDB collection 加载文档构建 BM25 索引"""
     try:
-        from app.services.rag.medical_store import get_medical_store, _get_collection_name
+        from app.services.rag.medical_store import _get_collection_name, get_medical_store
 
         store = get_medical_store()
         if store.client is None:

@@ -1,16 +1,14 @@
 """ToolExecutor 单元测试"""
 
 import asyncio
-import json
 
 import pytest
 from pydantic import BaseModel, Field
 
-from app.services.tools.base import BaseTool, ToolContext
+from app.services.tools.base import BaseTool
 from app.services.tools.budget import ToolBudget
 from app.services.tools.executor import ToolExecutor
 from app.services.tools.registry import ToolRegistry
-
 
 # ── 测试用工具定义 ──────────────────────────────────────────────────────────────
 

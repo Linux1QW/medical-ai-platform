@@ -10,11 +10,11 @@
 """
 
 import asyncio
-import time
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Awaitable, Optional
+from typing import Any, Callable
 
 from .base import BaseTool, ToolContext
 from .registry import ToolRegistry
@@ -354,8 +354,10 @@ class ToolHealthChecker:
     def _build_probe_args(self, tool: BaseTool):
         """根据工具类型构建探测参数"""
         from .medical_retrieval import (
-            SearchMedicalKBArgs, ExpandQueryArgs,
-            GenerateHydeQueryArgs, RerankEvidenceArgs,
+            ExpandQueryArgs,
+            GenerateHydeQueryArgs,
+            RerankEvidenceArgs,
+            SearchMedicalKBArgs,
         )
 
         probe = self.config.probe_query

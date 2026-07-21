@@ -1,19 +1,19 @@
 """
 Unit tests for report generation.
 """
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
+
+from evaluation.datasets import RagEvalResult, RagGoldCase, StanceType
 from evaluation.report import (
+    check_thresholds,
+    generate_comparison_report,
     generate_json_report,
     generate_markdown_report,
-    check_thresholds,
     threshold_checker,
-    generate_comparison_report,
     write_comparison_report,
-    DEFAULT_THRESHOLDS,
 )
-from evaluation.datasets import RagGoldCase, RagEvalResult, StanceType
 
 
 def _make_result(case_id="case_001", mode="tooluse", **kwargs):

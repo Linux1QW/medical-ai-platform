@@ -3,6 +3,7 @@
 
 import json
 import logging
+
 from app.services.qwen_client import call_qwen_chat
 from app.utils.json_parser import extract_json_from_text
 
@@ -194,12 +195,12 @@ def _calculate_empathy_score(empathy_data: dict) -> float:
     empathy = empathy_data.get("empathy", 5)
     politeness = empathy_data.get("politeness", 5)
     clarity = empathy_data.get("clarity", 5)
-    
+
     # 确保分数在 0-10 范围内
     empathy = max(0, min(10, empathy))
     politeness = max(0, min(10, politeness))
     clarity = max(0, min(10, clarity))
-    
+
     # 计算平均分并归一化到 0-1
     avg_score = (empathy + politeness + clarity) / 3
     return avg_score / 10
@@ -208,16 +209,16 @@ def _calculate_empathy_score(empathy_data: dict) -> float:
 def _calculate_behavior_score(behavior_data: dict) -> float:
     """计算行为得分（0-1 范围）"""
     utterances = behavior_data.get("utterances", [])
-    
+
     if not utterances:
         return 0.5  # 默认中等得分
-    
+
     total_weight = 0
     for utterance in utterances:
         behavior_type = utterance.get("behavior", "ignore")
         weight = BEHAVIOR_WEIGHTS.get(behavior_type, 0.0)
         total_weight += weight
-    
+
     return total_weight / len(utterances)
 
 
@@ -227,32 +228,32 @@ def _generate_analysis(empathy_score: float, behavior_score: float,
     empathy = empathy_data.get("empathy", 5)
     politeness = empathy_data.get("politeness", 5)
     clarity = empathy_data.get("clarity", 5)
-    
+
     utterances = behavior_data.get("utterances", [])
-    
+
     # 统计行为类型
     behavior_counts = {"comfort": 0, "explain": 0, "instruction": 0, "ignore": 0}
     for utterance in utterances:
         behavior_type = utterance.get("behavior", "ignore")
         if behavior_type in behavior_counts:
             behavior_counts[behavior_type] += 1
-    
+
     total_utterances = len(utterances)
-    
+
     # 生成分析文本
     analysis_parts = []
-    
+
     # 1. 共情维度分析
     empathy_desc = f"文本共情评估得分{empathy_score*100:.0f}分（权重60%）。"
     empathy_desc += f"三个子维度：共情{empathy}分"
-    
+
     if empathy >= 8:
         empathy_desc += "（优秀，充分理解患者情绪）"
     elif empathy >= 5:
         empathy_desc += "（一般，有一定情绪关注）"
     else:
         empathy_desc += "（不足，缺乏情感回应）"
-    
+
     empathy_desc += f"，礼貌{politeness}分"
     if politeness >= 8:
         empathy_desc += "（得体尊重）"
@@ -260,7 +261,7 @@ def _generate_analysis(empathy_score: float, behavior_score: float,
         empathy_desc += "（基本礼貌）"
     else:
         empathy_desc += "（生硬欠妥）"
-    
+
     empathy_desc += f"，表达清晰{clarity}分"
     if clarity >= 8:
         empathy_desc += "（通俗易懂）"
@@ -268,23 +269,23 @@ def _generate_analysis(empathy_score: float, behavior_score: float,
         empathy_desc += "（基本可理解）"
     else:
         empathy_desc += "（表达混乱）"
-    
+
     analysis_parts.append(empathy_desc)
-    
+
     # 2. 行为维度分析
     behavior_desc = f"对话行为分析得分{behavior_score*100:.0f}分（权重40%）。"
-    
+
     if total_utterances > 0:
         behavior_desc += f"共{total_utterances}句医生发言："
         behavior_desc += f"安慰{behavior_counts['comfort']}次、"
         behavior_desc += f"解释{behavior_counts['explain']}次、"
         behavior_desc += f"指令{behavior_counts['instruction']}次、"
         behavior_desc += f"忽视{behavior_counts['ignore']}次。"
-        
+
         # 评价行为模式
         positive = behavior_counts['comfort'] + behavior_counts['explain']
         negative = behavior_counts['ignore']
-        
+
         if positive > total_utterances * 0.6:
             behavior_desc += "正面沟通行为占比较高，体现较好的人文关怀。"
         elif negative > total_utterances * 0.3:
@@ -293,9 +294,9 @@ def _generate_analysis(empathy_score: float, behavior_score: float,
             behavior_desc += "沟通行为较为均衡。"
     else:
         behavior_desc += "未能提取到医生发言数据。"
-    
+
     analysis_parts.append(behavior_desc)
-    
+
     return "".join(analysis_parts)
 
 
@@ -304,7 +305,7 @@ def _generate_analysis(empathy_score: float, behavior_score: float,
 async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -> dict:
     """
     基于结构化建模与可计算指标的人文关怀评估
-    
+
     评估维度：
     1. Empathy (60%): 文本共情评估（共情、礼貌、表达清晰三个子维度）
     2. Behavior (40%): 对话行为分析（安慰、解释、指令、忽视四类行为）
@@ -312,7 +313,7 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
     # 默认降级数据
     default_empathy_data = {"empathy": 5, "politeness": 5, "clarity": 5}
     default_behavior_data = {"utterances": []}
-    
+
     try:
         # ── Step 1: 文本共情评估（第一次 LLM 调用）──
         empathy_messages = [
@@ -324,14 +325,14 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
                 "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请对医生的文本共情表现进行评分。"
             },
         ]
-        
+
         empathy_result = await call_qwen_chat(empathy_messages, temperature=0.2)
         empathy_data = _extract_json(empathy_result)
-        
+
     except Exception as e:
         logging.error(f"共情评估 LLM 调用失败: {e}")
         empathy_data = default_empathy_data
-    
+
     try:
         # ── Step 2: 对话行为分类（第二次 LLM 调用）──
         behavior_messages = [
@@ -343,14 +344,14 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
                 "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请对医生的每句发言进行行为分类。"
             },
         ]
-        
+
         behavior_result = await call_qwen_chat(behavior_messages, temperature=0.2)
         behavior_data = _extract_json(behavior_result)
-        
+
     except Exception as e:
         logging.error(f"行为分类 LLM 调用失败: {e}")
         behavior_data = default_behavior_data
-    
+
     # ── Step 3: 数学计算综合评分 ──
     try:
         empathy_score = _calculate_empathy_score(empathy_data)
@@ -363,16 +364,16 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
         empathy_score = _calculate_empathy_score(empathy_data)
         behavior_score = _calculate_behavior_score(behavior_data)
         analysis = _generate_analysis(empathy_score, behavior_score, empathy_data, behavior_data)
-    
+
     # 加权计算最终得分
     final_score = (
         WEIGHTS["empathy"] * empathy_score +
         WEIGHTS["behavior"] * behavior_score
     ) * 100
-    
+
     # 确保分数在 0-100 范围内并取整
     final_score = int(round(max(0.0, min(100.0, final_score))))
-    
+
     # 构建返回结果
     result = {
         "score": final_score,
@@ -399,5 +400,5 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
             }
         }
     }
-    
+
     return {"raw_response": json.dumps(result, ensure_ascii=False)}

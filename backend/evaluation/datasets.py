@@ -3,11 +3,11 @@ Dataset handling for RAG evaluation system.
 """
 import json
 import logging
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -36,21 +36,21 @@ class DifficultyLevel(str, Enum):
 
 class RagGoldCase(BaseModel):
     """Gold standard case for RAG evaluation."""
-    
+
     # Identification
     case_id: str
     split: SplitType
     department: str
     domain_expertise: Optional[str] = None
     difficulty: DifficultyLevel
-    
+
     # Case information
     chief_complaint: Optional[str] = None
     patient_info: str
     conversation_text: str
     doctor_diagnosis: Optional[str] = None
     treatment_plan: Optional[str] = None
-    
+
     # Expected retrieval results
     gold_queries: Optional[List[str]] = Field(default_factory=list)
     gold_doc_ids: Optional[List[str]] = Field(default_factory=list)
@@ -58,34 +58,34 @@ class RagGoldCase(BaseModel):
     gold_relevant_sources: Optional[List[str]] = Field(default_factory=list)
     gold_citation_keywords: Optional[List[str]] = Field(default_factory=list)
     gold_relevance_grades: Optional[Dict[str, int]] = Field(default_factory=dict)
-    
+
     # Expected queries for retrieval evaluation
     expected_queries: Optional[List[str]] = Field(default_factory=list)
-    
+
     # Expected evaluation results
     expected_stance: StanceType
     should_refuse: bool
     expected_score_range: Optional[List[float]] = None
     expected_review_reason: Optional[str] = None
-    
+
     # Tool use expectations (added fields)
     expected_tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     expected_tool_params: Optional[Dict[str, Any]] = Field(default_factory=dict)
     expected_final_answer_keywords: Optional[List[str]] = Field(default_factory=list)
-    
+
     # Metadata
     notes: Optional[str] = None
-    
+
     model_config = ConfigDict(use_enum_values=True)
 
 
 class RagEvalResult(BaseModel):
     """Result from running an evaluation case."""
-    
+
     # Identification
     case_id: str
     mode: str  # legacy, tooluse
-    
+
     # System outputs
     knowledge_score: Optional[float] = None
     evaluation_status: str  # completed, needs_review
@@ -98,20 +98,20 @@ class RagEvalResult(BaseModel):
     tool_trace: List[Dict[str, Any]] = Field(default_factory=list)
     latency_ms: Optional[int] = None
     error: Optional[str] = None
-    
+
     # Actual retrieval results (for metric computation)
     actual_stance: Optional[str] = None
     retrieved_doc_ids: Optional[List[str]] = Field(default_factory=list)
     used_citation_ids: Optional[List[str]] = Field(default_factory=list)
-    
+
     # Tool use results (added fields)
     actual_tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     final_answer_text: Optional[str] = None
-    
+
     # Internal computed fields
     system_refused: bool = False
     false_acceptance: bool = False
-    
+
     model_config = ConfigDict(use_enum_values=True)
 
 
@@ -260,14 +260,14 @@ def load_gold_cases(cases_path: Path) -> List[RagGoldCase]:
     """
     if not cases_path.exists():
         raise FileNotFoundError(f"Gold cases file not found: {cases_path}")
-    
+
     cases = []
     with open(cases_path, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
-            
+
             try:
                 data = json.loads(line)
                 data = _convert_legacy_format(data)
@@ -279,7 +279,7 @@ def load_gold_cases(cases_path: Path) -> List[RagGoldCase]:
             except Exception as e:
                 logger.error(f"Validation error in {cases_path}:{line_num}: {e}")
                 raise
-    
+
     return cases
 
 

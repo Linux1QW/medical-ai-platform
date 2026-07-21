@@ -1,24 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.limiter import limiter
 from app.core.access import require_consultation_access
-from app.core.deps import get_current_user
-from app.core.permissions import require_permission
 from app.core.audit import record_audit_log
+from app.core.config import settings
+from app.core.deps import get_current_user
+from app.core.limiter import limiter
+from app.core.permissions import require_permission
 from app.core.security import decode_access_token
+from app.core.websocket import manager
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.user import User
 from app.schemas.evaluation import EvaluationOut, EvaluationRequest
-from app.services.evaluation_service import run_evaluation, get_evaluation_by_consultation
 from app.services.evaluation_lock_service import (
+    get_lock_status,
     try_acquire_lock,
     update_lock_status,
-    get_lock_status,
 )
+from app.services.evaluation_service import get_evaluation_by_consultation, run_evaluation
 from app.services.user_service import get_user_by_id
-from app.core.websocket import manager
-from app.core.config import settings
 
 router = APIRouter()
 
@@ -176,8 +176,9 @@ async def get_task_status(
     current_user: User = Depends(get_current_user),
 ):
     """查询 Celery 异步评估任务状态"""
-    from app.celery_app import celery_app
     from celery.result import AsyncResult
+
+    from app.celery_app import celery_app
 
     result = AsyncResult(task_id, app=celery_app)
     response = {

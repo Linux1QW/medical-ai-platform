@@ -2,28 +2,31 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import record_audit_log
+from app.core.deps import get_current_user
 from app.core.limiter import limiter
-from app.core.config import settings
-
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     verify_refresh_token,
 )
-from app.core.deps import get_current_user
-from app.core.audit import record_audit_log
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import (
-    UserRegister, UserLogin, UserUpdate, UserOut, Token, RefreshTokenRequest,
-)
-from app.services.user_service import (
-    create_user,
-    authenticate_user,
-    get_user_by_username,
-    get_user_by_email,
+    RefreshTokenRequest,
+    Token,
+    UserLogin,
+    UserOut,
+    UserRegister,
+    UserUpdate,
 )
 from app.services.jwt_blacklist import blacklist_token
+from app.services.user_service import (
+    authenticate_user,
+    create_user,
+    get_user_by_email,
+    get_user_by_username,
+)
 
 router = APIRouter()
 

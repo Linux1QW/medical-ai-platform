@@ -9,7 +9,7 @@ LLM 响应缓存层 — 基于 Redis 的精确哈希缓存
 import hashlib
 import json
 import logging
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
 
 import redis.asyncio as aioredis
 
@@ -46,7 +46,7 @@ async def _get_redis() -> Optional[aioredis.Redis]:
     global _redis_client
     if _redis_client is not None:
         return _redis_client
-    
+
     try:
         # 复用 REDIS_CHECKPOINT_URL 指向的 Redis 实例，使用 db=2 避免与 checkpointer(db=1) 冲突
         redis_url = settings.REDIS_CHECKPOINT_URL

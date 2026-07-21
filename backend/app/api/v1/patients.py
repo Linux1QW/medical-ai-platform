@@ -3,21 +3,20 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.limiter import limiter
-
-from app.core.deps import get_current_user, get_current_admin
-from app.core.permissions import require_permission
 from app.core.audit import record_audit_log
+from app.core.deps import get_current_admin, get_current_user
+from app.core.limiter import limiter
+from app.core.permissions import require_permission
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.patient import PatientCreate, PatientUpdate, PatientOut, DoctorPatientOut
+from app.schemas.patient import DoctorPatientOut, PatientCreate, PatientOut, PatientUpdate
 from app.schemas.patient_masked import DoctorPatientMaskedOut
 from app.services.patient_service import (
     create_patient,
+    delete_patient,
     get_patient_by_id,
     list_patients,
     update_patient,
-    delete_patient,
 )
 
 router = APIRouter()

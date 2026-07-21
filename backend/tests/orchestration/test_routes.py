@@ -1,14 +1,15 @@
 """场景分类与动态路由测试"""
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.orchestration.routes import (
-    build_submission_flags,
     build_route_plan,
+    build_submission_flags,
     get_consultation_type,
 )
-from app.orchestration.state import SubmissionFlags, RoutePlan
+from app.orchestration.state import SubmissionFlags
 
 
 def _make_consultation(diagnosis="", treatment_plan="", consultation_type=None):

@@ -10,9 +10,9 @@
 
 import json
 import logging
+
 from app.services.qwen_client import call_qwen_chat
 from app.utils.json_parser import extract_json_from_text
-
 
 # ── System Prompt ────────────────────────────────────────────────────────────
 
@@ -193,16 +193,16 @@ async def run_suggestion(
 ) -> dict:
     """
     基于对比学习的问诊改进建议生成
-    
+
     通过对比理想问诊与当前问诊，分析差异并生成结构化改进建议。
-    
+
     Args:
         conversation_text: 问诊对话记录
         patient_info: 患者基本信息
         inquiry_result: 问诊分析评估结果
         knowledge_result: 医学知识评估结果
         humanistic_result: 人文关怀评估结果
-    
+
     Returns:
         dict: 包含 raw_response 字段，其中 JSON 字符串包括：
             - suggestions: 格式化的建议文本（兼容数据库存储）
@@ -229,7 +229,7 @@ async def run_suggestion(
 {humanistic_result}
 
 请基于对比分析生成改进建议。"""
-        
+
         # 构建 LLM 调用消息
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -239,30 +239,30 @@ async def run_suggestion(
             {"role": "assistant", "content": FEWSHOT_ASSISTANT_2},
             {"role": "user", "content": user_prompt},
         ]
-        
+
         # 调用 LLM
         result = await call_qwen_chat(messages, temperature=0.4)
-        
+
         # 解析 JSON
         suggestion_data = _extract_json(result)
-        
+
         # 确保返回格式兼容
         if "suggestions" not in suggestion_data:
             # 如果 LLM 未生成 suggestions 字段，构造一个
             missing = suggestion_data.get("missing_questions", [])
             improvements = suggestion_data.get("improvement_suggestions", [])
-            
+
             suggestion_text = "一、缺失的关键问题\n\n"
             for i, q in enumerate(missing[:5], 1):
                 suggestion_text += f"{i}. {q}\n"
             suggestion_text += "\n二、改进措施建议\n\n"
             for i, s in enumerate(improvements[:5], 1):
                 suggestion_text += f"{i}. {s}\n"
-            
+
             suggestion_data["suggestions"] = suggestion_text
-        
+
         return {"raw_response": json.dumps(suggestion_data, ensure_ascii=False)}
-    
+
     except Exception as e:
         logging.error(f"建议生成智能体执行失败: {e}")
         # 降级处理：返回默认建议

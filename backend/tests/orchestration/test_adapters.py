@@ -1,16 +1,17 @@
 """Agent 适配器单元测试"""
 
 import json
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
-from app.orchestration.state import AgentResultEnvelope, EvaluationContext
-from app.orchestration.adapters.inquiry import InquiryAdapter
+import pytest
+
 from app.orchestration.adapters.diagnosis import DiagnosisAdapter
-from app.orchestration.adapters.treatment import TreatmentAdapter
-from app.orchestration.adapters.knowledge import KnowledgeAdapter
 from app.orchestration.adapters.humanistic import HumanisticAdapter
-from app.orchestration.adapters.registry import register_adapter, get_adapter, list_adapters, _REGISTRY
+from app.orchestration.adapters.inquiry import InquiryAdapter
+from app.orchestration.adapters.knowledge import KnowledgeAdapter
+from app.orchestration.adapters.registry import _REGISTRY, get_adapter, list_adapters, register_adapter
+from app.orchestration.adapters.treatment import TreatmentAdapter
+from app.orchestration.state import AgentResultEnvelope, EvaluationContext
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ class TestInquiryAdapter:
         }
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert isinstance(result, AgentResultEnvelope)
         assert result.agent_name == "inquiry"
         assert result.status == "success"
@@ -56,7 +57,7 @@ class TestInquiryAdapter:
         adapter = InquiryAdapter()
         with patch.object(adapter, "_call_agent", new=AsyncMock(side_effect=RuntimeError("LLM failed"))):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "error"
         assert result.human_review_needed is True
         assert "inquiry_error" in result.review_reason
@@ -68,7 +69,7 @@ class TestInquiryAdapter:
         mock_raw = {"raw_response": json.dumps({"score": 150, "analysis": "test"})}
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.score == 100.0
 
     @pytest.mark.asyncio
@@ -78,7 +79,7 @@ class TestInquiryAdapter:
         mock_raw = {"raw_response": json.dumps({"score": -10, "analysis": "test"})}
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.score == 0.0
 
 
@@ -92,7 +93,7 @@ class TestDiagnosisAdapter:
         mock_raw = {"raw_response": json.dumps({"score": 78, "analysis": "诊断基本正确"})}
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.agent_name == "diagnosis"
         assert result.status == "success"
         assert result.score == 78.0
@@ -103,7 +104,7 @@ class TestDiagnosisAdapter:
         adapter = DiagnosisAdapter()
         with patch.object(adapter, "_call_agent", new=AsyncMock(side_effect=ValueError("API error"))):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "error"
         assert result.human_review_needed is True
 
@@ -118,7 +119,7 @@ class TestTreatmentAdapter:
         mock_raw = {"raw_response": json.dumps({"score": 92, "analysis": "治疗方案规范"})}
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.agent_name == "treatment"
         assert result.status == "success"
         assert result.score == 92.0
@@ -129,7 +130,7 @@ class TestTreatmentAdapter:
         adapter = TreatmentAdapter()
         with patch.object(adapter, "_call_agent", new=AsyncMock(side_effect=Exception("timeout"))):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "error"
 
 
@@ -150,7 +151,7 @@ class TestKnowledgeAdapter:
         }
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.agent_name == "knowledge"
         assert result.status == "success"
         assert result.score == 88.0
@@ -170,7 +171,7 @@ class TestKnowledgeAdapter:
         }
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "insufficient"
         assert result.score is None
         assert result.human_review_needed is True
@@ -181,7 +182,7 @@ class TestKnowledgeAdapter:
         adapter = KnowledgeAdapter()
         with patch.object(adapter, "_call_agent", new=AsyncMock(side_effect=ConnectionError("RAG fail"))):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "error"
         assert result.human_review_needed is True
 
@@ -202,7 +203,7 @@ class TestHumanisticAdapter:
         }
         with patch.object(adapter, "_call_agent", new=AsyncMock(return_value=mock_raw)):
             result = await adapter.run(sample_context)
-        
+
         assert result.agent_name == "humanistic"
         assert result.status == "success"
         assert result.score == 75.0
@@ -213,7 +214,7 @@ class TestHumanisticAdapter:
         adapter = HumanisticAdapter()
         with patch.object(adapter, "_call_agent", new=AsyncMock(side_effect=TimeoutError())):
             result = await adapter.run(sample_context)
-        
+
         assert result.status == "error"
 
 
@@ -228,7 +229,7 @@ class TestRegistry:
         """测试注册和查找"""
         adapter = InquiryAdapter()
         register_adapter(adapter)
-        
+
         retrieved = get_adapter("inquiry")
         assert retrieved is adapter
 
@@ -241,7 +242,7 @@ class TestRegistry:
         """测试列出所有已注册的适配器"""
         register_adapter(InquiryAdapter())
         register_adapter(DiagnosisAdapter())
-        
+
         adapters = list_adapters()
         assert "inquiry" in adapters
         assert "diagnosis" in adapters

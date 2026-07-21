@@ -190,7 +190,7 @@ def rebuild_sparse_index() -> bool:
         return False
 
     try:
-        from app.services.rag.medical_store import get_medical_store, _get_collection_name
+        from app.services.rag.medical_store import _get_collection_name, get_medical_store
 
         store = get_medical_store()
         if store.client is None:

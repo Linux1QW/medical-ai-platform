@@ -7,15 +7,13 @@ LLMResponseCache 单元测试
 - 覆盖所有核心路径：命中、未命中、temperature>0 跳过、禁用跳过、异常降级、统计指标
 """
 
-import hashlib
-import json
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 # ── 被测模块 ──────────────────────────────────────────────────────────────────
 import app.services.llm_cache as llm_cache_module
 from app.services.llm_cache import LLMResponseCache, _build_cache_key
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

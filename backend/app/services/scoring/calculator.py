@@ -2,6 +2,7 @@
 """确定性评分计算器 — 纯代码，不调用 LLM"""
 
 from pydantic import BaseModel
+
 from app.services.scoring.policies import ScoringPolicy
 
 

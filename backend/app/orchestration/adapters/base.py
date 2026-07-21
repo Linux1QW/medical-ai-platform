@@ -1,6 +1,5 @@
 """Agent 适配器基类"""
 
-import json
 import logging
 from abc import ABC, abstractmethod
 

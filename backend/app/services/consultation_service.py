@@ -1,12 +1,10 @@
-from datetime import datetime
-from typing import List, Optional, Dict, AsyncGenerator
 import json
 import logging
+from datetime import datetime
+from typing import AsyncGenerator, Dict, List, Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from sqlalchemy import delete
 
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
@@ -114,11 +112,11 @@ async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, 
         .join(User, Consultation.doctor_id == User.id)
         .outerjoin(Evaluation, Consultation.id == Evaluation.consultation_id)
     )
-    
+
     # 基础过滤：特定医生或全平台（管理员）
     if doctor_id is not None:
         query = query.where(Consultation.doctor_id == doctor_id)
-        
+
     # 额外过滤条件（用于管理员筛选）
     if filters:
         if filters.get("username"):
@@ -135,10 +133,10 @@ async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, 
             query = query.where(Consultation.started_at <= filters["end_time"])
 
     query = query.order_by(Consultation.id.desc())
-    
+
     result = await db.execute(query)
     rows = result.all()
-    
+
     consultations = []
     for row in rows:
         c = row.Consultation
@@ -146,7 +144,7 @@ async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, 
         duration = None
         if c.started_at and c.ended_at:
             duration = int((c.ended_at - c.started_at).total_seconds() / 60)
-            
+
         # 构建返回对象
         consultation_dict = {
             "id": c.id,
@@ -166,7 +164,7 @@ async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, 
             "created_at": c.created_at
         }
         consultations.append(consultation_dict)
-        
+
     return consultations
 
 
@@ -189,7 +187,7 @@ async def _summarize_early_messages(
     """
     if not early_messages:
         return ""
-    
+
     history_lines = []
     for m in early_messages:
         role_label = "医生" if m.role == "doctor" else "患者"

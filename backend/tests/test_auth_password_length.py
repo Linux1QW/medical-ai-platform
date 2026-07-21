@@ -1,9 +1,9 @@
-from datetime import datetime
-from types import SimpleNamespace
-import unittest
-from unittest.mock import patch
 import json
 import locale
+import unittest
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from passlib.context import CryptContext

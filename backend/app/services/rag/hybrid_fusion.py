@@ -10,7 +10,6 @@
 3. normalize_scores: Min-Max 分数归一化
 """
 
-import numpy as np
 from typing import Optional
 
 

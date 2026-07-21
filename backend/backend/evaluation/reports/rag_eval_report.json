@@ -1,0 +1,143 @@
+{
+  "timestamp": "2026-07-21T04:47:04.380497+00:00",
+  "mode": "mock",
+  "dataset": {
+    "path": "backend\\evaluation\\rag_cases\\rag_gold_cases.jsonl",
+    "split": "dev",
+    "total_samples": 5,
+    "normal_samples": 5,
+    "refusal_samples": 0
+  },
+  "metrics": {
+    "total_samples": 5,
+    "normal_samples": 5,
+    "refusal_samples": 0,
+    "avg_latency_ms": 100.0,
+    "avg_knowledge_score": 85.0,
+    "refusal_accuracy": 1.0,
+    "refusal_precision": 0.0,
+    "refusal_recall": 0.0,
+    "refusal_f1": 0.0,
+    "false_refusal_rate": 0.0,
+    "false_acceptance_rate": 0.0,
+    "tool_success_rate": 1.0,
+    "tool_failure_rate": 0.0,
+    "tool_budget_exceeded_rate": 0.0,
+    "avg_tool_calls": 1.0,
+    "recall_at_1": 0.0,
+    "recall_at_3": 0.0,
+    "recall_at_5": 0.0,
+    "mrr": 0.0,
+    "ndcg_at_5": 0.0,
+    "citation_validity": 0.0,
+    "citation_hallucination_rate": 1.0,
+    "citation_coverage": 0.2,
+    "stance_accuracy": 1.0,
+    "final_answer_keyword_coverage": 0.0,
+    "tool_call_accuracy": 1.0,
+    "score_range_accuracy": 1.0
+  },
+  "tool_breakdown": {
+    "mock_tool": {
+      "calls": 5,
+      "success_rate": 1.0,
+      "avg_latency_ms": 100.0
+    }
+  },
+  "breakdown_by_difficulty": {
+    "easy": {
+      "refusal_accuracy": 1.0,
+      "refusal_precision": 0.0,
+      "refusal_recall": 0.0,
+      "refusal_f1": 0.0,
+      "false_refusal_rate": 0.0,
+      "false_acceptance_rate": 0.0
+    }
+  },
+  "breakdown_by_department": {
+    "内科": {
+      "refusal_accuracy": 1.0,
+      "refusal_precision": 0.0,
+      "refusal_recall": 0.0,
+      "refusal_f1": 0.0,
+      "false_refusal_rate": 0.0,
+      "false_acceptance_rate": 0.0
+    }
+  },
+  "failed_cases": [
+    {
+      "case_id": "mock_case_001",
+      "failure_type": "hallucinated_citation",
+      "message": "Hallucinated citation: mock-citation-1"
+    },
+    {
+      "case_id": "mock_case_002",
+      "failure_type": "hallucinated_citation",
+      "message": "Hallucinated citation: mock-citation-1"
+    },
+    {
+      "case_id": "mock_case_003",
+      "failure_type": "hallucinated_citation",
+      "message": "Hallucinated citation: mock-citation-1"
+    },
+    {
+      "case_id": "mock_case_004",
+      "failure_type": "hallucinated_citation",
+      "message": "Hallucinated citation: mock-citation-1"
+    },
+    {
+      "case_id": "mock_case_005",
+      "failure_type": "hallucinated_citation",
+      "message": "Hallucinated citation: mock-citation-1"
+    }
+  ],
+  "thresholds": {
+    "passed": false,
+    "violations": [
+      {
+        "metric": "citation_validity",
+        "actual": 0.0,
+        "threshold": 1.0,
+        "level": "P0",
+        "description": "引用有效性必须达到 100%"
+      },
+      {
+        "metric": "citation_hallucination_rate",
+        "actual": 1.0,
+        "threshold": 0.05,
+        "level": "P0",
+        "description": "引用幻觉率必须 ≤ 5%"
+      },
+      {
+        "metric": "recall_at_5",
+        "actual": 0.0,
+        "threshold": 0.5,
+        "level": "P2",
+        "description": "Recall@5 应 ≥ 50%"
+      }
+    ],
+    "summary_by_level": {
+      "P0": {
+        "total": 3,
+        "passed": 1,
+        "failed": 2
+      },
+      "P1": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      "P2": {
+        "total": 2,
+        "passed": 1,
+        "failed": 1
+      }
+    },
+    "compliance_rate": 0.625,
+    "recommendations": [
+      "[P0] 引用有效性不足 (0.0% < 100.0%)，需检查检索管道与引用映射逻辑",
+      "[P0] 引用幻觉率偏高 (100.0% > 5.0%)，需加强引用来源校验",
+      "[P2] Recall@5 偏低 (0.0% < 50.0%)，建议优化检索查询或增加召回数量"
+    ]
+  }
+}

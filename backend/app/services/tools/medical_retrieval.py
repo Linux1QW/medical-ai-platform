@@ -20,9 +20,12 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
+from app.services.rag.context_compressor import compress_evidences
 from app.services.rag.reranker import two_stage_rerank
 from app.services.rag.retriever import (
     _generate_hypothetical_document,
+    expand_context,
     expand_queries,
     tiered_retrieve,
 )
@@ -150,6 +153,28 @@ class SearchMedicalKB(BaseTool):
         # 将 rag_trace 记录到 context 供后续使用
         if bundle.trace:
             context.extras["rag_trace"] = bundle.trace
+
+        # ── B. Small-to-Big 上下文扩展（默认关闭，opt-in）──
+        if settings.ENABLE_CONTEXT_EXPANSION and candidates:
+            try:
+                candidates = expand_context(
+                    candidates, window=settings.CONTEXT_EXPANSION_WINDOW
+                )
+            except Exception as e:
+                logger.warning(f"上下文扩展失败，使用原始证据: {e}")
+
+        # ── D. 抽取式上下文压缩（默认关闭，opt-in；先扩展再降噪）──
+        if settings.ENABLE_CONTEXT_COMPRESSION and candidates:
+            try:
+                candidates = await compress_evidences(
+                    candidates,
+                    sanitized_query,
+                    min_chars=settings.COMPRESSION_MIN_CHARS,
+                    top_sentences=settings.COMPRESSION_TOP_SENTENCES,
+                    min_score=settings.COMPRESSION_MIN_SENT_SCORE,
+                )
+            except Exception as e:
+                logger.warning(f"上下文压缩失败，使用未压缩证据: {e}")
 
         evidence_list = []
         for i, item in enumerate(candidates):

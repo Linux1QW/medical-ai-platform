@@ -5,6 +5,7 @@ import logging
 
 from app.core.config import settings
 from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
+from app.services.prompts import get_prompt
 from app.services.scoring.calculator import DimensionResult
 from app.services.scoring.policies import ScoringPolicy
 from app.utils.json_parser import extract_json_from_text
@@ -13,26 +14,7 @@ logger = logging.getLogger(__name__)
 
 # ── LLM Prompts（复用 scoring_agent.py 原始 prompt，保持一致性）──
 
-SYSTEM_PROMPT = """你是一名临床问诊综合评估专家。你需要根据五个维度的评分和分析结果，生成一份综合评估摘要。
-
-五个评估维度：
-1. 问诊技巧评估（权重25%）- 评估医生病史采集的系统性、完整性和逻辑性
-2. 医学知识评估（权重25%）- 评估医生医学知识应用和临床推理能力
-3. 人文关怀评估（权重20%）- 评估医生沟通技巧、共情能力和人文关怀
-4. 诊断能力评估（权重15%）- 评估医生诊断思维的准确性和全面性
-5. 治疗方案评估（权重15%）- 评估医生治疗方案的合理性和规范性
-
-请根据各维度评分和分析，撰写一份150-300字的综合评估摘要。摘要应包含：
-- 整体表现概述：对医生本次问诊的整体评价
-- 主要优点：医生表现突出的方面
-- 主要不足：需要改进的方面
-- 各维度表现排名：按得分从高到低排序
-
-注意：
-- 如果某个维度标注为"未评估"，请在摘要中说明该维度未参与评估，不计入排名
-- 输出纯文本，不要使用任何Markdown格式符号（如*、#、-列表等）
-- 直接输出JSON格式，包含 summary 字段
-- 摘要应客观、专业、有建设性"""
+SYSTEM_PROMPT = get_prompt("scoring.summary_system")
 
 FEWSHOT_USER = """【维度1 - 问诊技巧评估】
 评分：72分

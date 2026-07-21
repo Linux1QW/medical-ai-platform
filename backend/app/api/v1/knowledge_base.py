@@ -109,8 +109,8 @@ async def add_pdf(
             status_code=404,
             detail=f"文件不存在: {body.filename}（PDF 目录: {PDF_DIR}）",
         )
-    if not body.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="仅支持 .pdf 文件")
+    if not body.filename.lower().endswith((".pdf", ".docx")):
+        raise HTTPException(status_code=400, detail="仅支持 .pdf 或 .docx 文件")
 
     try:
         result = await index_single_pdf(pdf_path, force_replace=body.force_replace)

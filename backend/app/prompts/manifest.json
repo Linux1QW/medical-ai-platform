@@ -1,0 +1,54 @@
+{
+  "diagnosis.system": {
+    "active": "v1",
+    "description": "诊断结果评估智能体 system prompt"
+  },
+  "treatment.system": {
+    "active": "v1",
+    "description": "治疗方案评估智能体 system prompt"
+  },
+  "suggestion.system": {
+    "active": "v1",
+    "description": "建议指导智能体（对比学习）system prompt"
+  },
+  "humanistic.empathy_system": {
+    "active": "v1",
+    "description": "人文关怀评估-共情/礼貌/清晰打分 system prompt"
+  },
+  "humanistic.behavior_system": {
+    "active": "v1",
+    "description": "人文关怀评估-对话行为分类 system prompt"
+  },
+  "safety.system": {
+    "active": "v1",
+    "description": "急危重风险门控-LLM 语义补充 system prompt"
+  },
+  "reflection.system": {
+    "active": "v1",
+    "description": "评估质量反思智能体（ReAct）system prompt"
+  },
+  "inquiry.slot_filling_system": {
+    "active": "v1",
+    "description": "问诊技巧评估-临床槽位填充 system prompt"
+  },
+  "inquiry.logic_efficiency_system": {
+    "active": "v1",
+    "description": "问诊技巧评估-流程逻辑与效率 system prompt"
+  },
+  "knowledge.consistency_system": {
+    "active": "v1",
+    "description": "医学知识核对-一致性评估 system prompt"
+  },
+  "knowledge.tool_use_system": {
+    "active": "v1",
+    "description": "医学知识核对-Function Calling system prompt"
+  },
+  "knowledge.react_system": {
+    "active": "v1",
+    "description": "医学知识核对-ReAct system prompt"
+  },
+  "scoring.summary_system": {
+    "active": "v1",
+    "description": "五维综合评估摘要 system prompt（运行时追加分数约束）"
+  }
+}

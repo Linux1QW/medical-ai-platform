@@ -5,6 +5,7 @@ import json
 import logging
 
 from app.services.qwen_client import call_qwen_chat
+from app.services.prompts import get_prompt
 from app.utils.json_parser import extract_json_from_text
 
 # ── 权重配置 ──
@@ -27,34 +28,7 @@ BEHAVIOR_WEIGHTS = {
 # ── LLM Prompts ──
 
 # 第一次 LLM 调用：文本共情评估
-EMPATHY_SYSTEM_PROMPT = """你是一名医学人文关怀与医患沟通评估专家。请分析医生在问诊对话中的沟通表现，从三个子维度进行评分。
-
-评估维度（每个维度 0-10 分）：
-1. empathy（共情）：医生对患者情绪的理解与回应程度
-   - 10分：充分理解患者情绪，使用共情性语言，给予情感支持
-   - 5分：有一定情绪关注，但回应不够深入或及时
-   - 0分：完全忽视患者情绪，态度冷漠
-
-2. politeness（礼貌）：医生语言表达的得体性与尊重程度
-   - 10分：语言礼貌得体，尊重患者，无打断、无命令式语气
-   - 5分：基本礼貌，但偶有生硬表达
-   - 0分：语言粗鲁，态度傲慢，频繁打断患者
-
-3. clarity（表达清晰）：医生问诊问题、解释内容的易懂程度
-   - 10分：语言通俗易懂，解释清晰，患者易于理解
-   - 5分：基本可理解，但偶有专业术语未解释
-   - 0分：表达混乱，专业术语堆砌，患者难以理解
-
-输出格式（严格JSON）：
-{
-  "empathy": 0-10的整数,
-  "politeness": 0-10的整数,
-  "clarity": 0-10的整数
-}
-
-注意：
-- 每个维度给出 0-10 的整数评分
-- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+EMPATHY_SYSTEM_PROMPT = get_prompt("humanistic.empathy_system")
 
 EMPATHY_FEWSHOT_USER = """【患者信息】
 姓名: 姚xx, 年龄: 64, 性别: female
@@ -103,34 +77,7 @@ EMPATHY_FEWSHOT_ASSISTANT = """{
 }"""
 
 # 第二次 LLM 调用：对话行为分类
-BEHAVIOR_SYSTEM_PROMPT = """你是一名医患沟通行为分析专家。请将医生在问诊过程中的每句发言分类为四种对话行为之一。
-
-对话行为类型定义：
-1. comfort（安慰）：对患者进行情绪安抚、鼓励的发言
-   - 示例："别担心，这个检查结果很好"、"您的情况会好起来的"
-
-2. explain（解释）：向患者解释病情、检查目的、治疗方案的发言
-   - 示例："这个检查是为了排除肿瘤"、"萎缩性胃炎是胃黏膜退化"
-
-3. instruction（指令）：向患者下达检查、用药等指令的发言
-   - 示例："去做个CT检查"、"每天三次，每次一片"
-
-4. ignore（忽视）：未回应患者疑问、情绪的发言，或生硬转移话题
-   - 示例：患者表达担忧后医生直接问下一个问题而无回应
-
-输出格式（严格JSON）：
-{
-  "utterances": [
-    {"text": "医生发言原文1", "behavior": "explain"},
-    {"text": "医生发言原文2", "behavior": "instruction"},
-    ...
-  ]
-}
-
-注意：
-- 只包含医生的发言，不包含患者的发言
-- 每句医生发言必须分类为四种行为之一
-- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+BEHAVIOR_SYSTEM_PROMPT = get_prompt("humanistic.behavior_system")
 
 BEHAVIOR_FEWSHOT_USER = """【患者信息】
 姓名: 宋xx, 年龄: 59, 性别: female

@@ -12,6 +12,7 @@ import logging
 
 from app.orchestration.state import SafetyResult
 from app.services.qwen_client import call_qwen_chat
+from app.services.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ async def _llm_safety_check(
 
     try:
         messages = [
-            {"role": "system", "content": "你是医疗安全评估专家，负责识别急危重风险。"},
+            {"role": "system", "content": get_prompt("safety.system")},
             {"role": "user", "content": prompt},
         ]
         response = await call_qwen_chat(

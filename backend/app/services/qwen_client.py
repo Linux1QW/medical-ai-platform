@@ -6,10 +6,10 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import httpx
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from app.core.config import settings
+from app.services.llm import ProviderConfig, create_adapter
 from app.services.llm_cache import LLMResponseCache
 from app.services.llm_failover import failover_manager
 from app.services.observability.alerting import alert_manager
@@ -23,17 +23,37 @@ from app.services.token_tracker import token_tracker
 
 logger = logging.getLogger(__name__)
 
-# ── HTTP 客户端 ──
-http_client = httpx.AsyncClient(
-    timeout=httpx.Timeout(120.0),
-    limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
+# ── LLM 适配器 & 客户端 ──
+#
+# 底层客户端通过 ProviderAdapter 抽象层创建，使 failover 切换 Provider 时能够
+# 真实重建客户端（而非仅记账）。模块级 `client` / `_active_model` 作为向后兼容与
+# 测试注入点保留：重试循环通过全局名 `client` 读取当前客户端，failover 命中时由
+# `_refresh_active_provider()` 重新赋值为新 Provider 的客户端与模型。
+_active_adapter = create_adapter(
+    ProviderConfig.from_dict(failover_manager.get_current_provider())
 )
+_active_model: str = _active_adapter.model or settings.QWEN_MODEL
+client: AsyncOpenAI = _active_adapter.client
 
-client = AsyncOpenAI(
-    api_key=settings.QWEN_API_KEY,
-    base_url=settings.QWEN_API_BASE_URL,
-    http_client=http_client,
-)
+
+def get_active_adapter():
+    """返回当前活跃的 ProviderAdapter（供监控 / 测试使用）。"""
+    return _active_adapter
+
+
+def _refresh_active_provider(provider: dict) -> None:
+    """根据 failover 返回的 Provider 配置刷新活跃适配器与模块级 `client`。
+
+    仅当 Provider 身份（类型 / api_key / base_url）发生变化时才重建底层客户端，
+    从而实现 failover 的"真实切换"；模型名变化则仅更新 `_active_model`。
+    """
+    global _active_adapter, _active_model, client
+    new_config = ProviderConfig.from_dict(provider)
+    if new_config.identity() != _active_adapter.config.identity():
+        _active_adapter = create_adapter(new_config)
+        client = _active_adapter.client
+        logger.warning(f"LLM 客户端已切换到 Provider: {_active_adapter.describe()}")
+    _active_model = new_config.model or _active_model
 
 
 # ── 全局并发控制 ──────────────────────────────────────────────────────────────
@@ -158,7 +178,7 @@ async def call_qwen_chat(
         APITimeoutError: API 超时（重试耗尽后）
     """
     # ── Step 0: 缓存查询（仅 temperature=0 且缓存启用时）──
-    _model = model or settings.QWEN_MODEL
+    _model = model or _active_model
     if settings.LLM_CACHE_ENABLED and temperature == 0:
         try:
             cached = await LLMResponseCache.get(messages, _model, temperature)
@@ -225,7 +245,7 @@ async def _execute_with_retry(
         exec_start = time.monotonic()
         try:
             response = await client.chat.completions.create(
-                model=model or settings.QWEN_MODEL,
+                model=model or _active_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -234,7 +254,7 @@ async def _execute_with_retry(
             metrics.total_exec_time += exec_elapsed
 
             # ── Prometheus 指标更新 ──
-            _model_name = model or settings.QWEN_MODEL
+            _model_name = model or _active_model
             LLM_CALLS_TOTAL.labels(model=_model_name, status="success").inc()
             LLM_REQUEST_DURATION.labels(model=_model_name).observe(exec_elapsed)
 
@@ -301,6 +321,8 @@ async def _execute_with_retry(
                 # 检查是否需要切换 Provider
                 if failover_manager.should_switch():
                     new_provider = failover_manager.switch_to_next()
+                    # 真实切换：重建底层客户端 & 更新模型（非仅记账）
+                    _refresh_active_provider(new_provider)
                     logger.warning(
                         f"Failover: 切换到 Provider '{new_provider['name']}'"
                     )
@@ -314,7 +336,7 @@ async def _execute_with_retry(
                 retry_delay *= 2
             else:
                 metrics.total_failures += 1
-                _model_name = model or settings.QWEN_MODEL
+                _model_name = model or _active_model
                 LLM_CALLS_TOTAL.labels(model=_model_name, status="error").inc()
                 # 触发 LLM 连续失败告警
                 await alert_manager.record_llm_error()
@@ -329,7 +351,7 @@ async def _execute_with_retry(
             metrics.total_exec_time += exec_elapsed
             metrics.total_failures += 1
             failover_manager.report_failure()
-            _model_name = model or settings.QWEN_MODEL
+            _model_name = model or _active_model
             LLM_CALLS_TOTAL.labels(model=_model_name, status="error").inc()
             logger.error(f"LLM调用发生未知异常: {str(e)}\n{traceback.format_exc()}")
             raise

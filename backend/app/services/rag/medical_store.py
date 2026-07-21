@@ -172,12 +172,21 @@ class MedicalKnowledgeStore:
 
         logger.info(f"共添加 {total} 条文档到医学知识库")
 
-    async def search(self, query_text: str, top_k: int = 5) -> List[Dict]:
+    async def search(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        where_document: Optional[Dict] = None,
+    ) -> List[Dict]:
         """检索相关医学证据
 
         Args:
             query_text: 查询文本（如诊断结果）
             top_k: 返回条数
+            where_document: 可选的 ChromaDB 文档内容过滤条件（如
+                {"$contains": "肺癌"}）。传入时先做带过滤查询，若命中
+                不足 METADATA_FILTER_MIN_RESULTS 则自动回退为无过滤查询，
+                避免过滤过度导致漏召。
 
         Returns:
             医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
@@ -192,14 +201,57 @@ class MedicalKnowledgeStore:
         # 1. 异步获取查询向量
         query_embedding = await get_embedding(query_text)
 
-        # 2. 同步执行 ChromaDB 查询
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
+        # 2. 同步执行 ChromaDB 查询（可选带 where_document 预过滤 + 回退）
+        results = self._query_with_fallback(
+            query_embedding, top_k, where_document
         )
 
         # 3. 格式化结果
+        evidences = self._format_results(results)
+        logger.debug(f"医学知识库检索返回 {len(evidences)} 条证据")
+        return evidences
+
+    def _query_with_fallback(
+        self,
+        query_embedding: List[float],
+        top_k: int,
+        where_document: Optional[Dict],
+    ) -> Dict:
+        """执行 ChromaDB 查询；带过滤时命中不足则回退无过滤查询"""
+        include = ["documents", "metadatas", "distances"]
+        if where_document:
+            try:
+                filtered = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k,
+                    where_document=where_document,
+                    include=include,
+                )
+                hit_count = (
+                    len(filtered["ids"][0])
+                    if filtered.get("ids") and filtered["ids"]
+                    else 0
+                )
+                if hit_count >= settings.METADATA_FILTER_MIN_RESULTS:
+                    logger.debug(
+                        f"metadata 预过滤命中 {hit_count} 条（filter={where_document}）"
+                    )
+                    return filtered
+                logger.debug(
+                    f"metadata 预过滤仅命中 {hit_count} 条（<"
+                    f"{settings.METADATA_FILTER_MIN_RESULTS}），回退无过滤查询"
+                )
+            except Exception as e:
+                logger.warning(f"metadata 预过滤查询失败，回退无过滤：{e}")
+
+        return self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=include,
+        )
+
+    def _format_results(self, results: Dict) -> List[Dict]:
+        """将 ChromaDB 查询结果格式化为证据列表"""
         evidences = []
         if results["ids"] and len(results["ids"]) > 0:
             for i, doc_id in enumerate(results["ids"][0]):
@@ -228,6 +280,7 @@ class MedicalKnowledgeStore:
                         "page": metadata.get("page", 0),
                         "score": round(score, 4),
                         "heading_path": metadata.get("heading_path", ""),
+                        "chunk_seq": metadata.get("chunk_seq", -1),
                         "content_type": metadata.get("content_type", ""),
                         "organization": metadata.get("organization"),
                         "year": metadata.get("year"),
@@ -241,8 +294,6 @@ class MedicalKnowledgeStore:
                         "metadata_source": metadata.get("metadata_source"),
                     }
                 )
-
-        logger.debug(f"医学知识库检索返回 {len(evidences)} 条证据")
         return evidences
 
     def count(self) -> int:
@@ -274,6 +325,58 @@ class MedicalKnowledgeStore:
             include=[],
         )
         return len(result.get("ids") or [])
+
+    def fetch_neighbors(
+        self, source: str, chunk_seq: int, window: int = 1
+    ) -> Dict[int, Dict]:
+        """按 source + chunk_seq 拉取相邻文本块（Small-to-Big 上下文扩展）
+
+        Args:
+            source: 来源文件名
+            chunk_seq: 中心块在该来源内的全局序号
+            window: 向前 / 向后各拉取的邻居块数
+
+        Returns:
+            {chunk_seq: {"text": ..., "page": ...}} 映射（仅邻居，不含中心块）。
+            无邻居或查询失败时返回空 dict。
+        """
+        if self.collection is None:
+            self._init_client()
+        if window <= 0 or chunk_seq is None or chunk_seq < 0:
+            return {}
+        wanted = [
+            s
+            for s in range(chunk_seq - window, chunk_seq + window + 1)
+            if s >= 0 and s != chunk_seq
+        ]
+        if not wanted:
+            return {}
+        try:
+            result = self.collection.get(
+                where={
+                    "$and": [
+                        {"source": source},
+                        {"chunk_seq": {"$in": wanted}},
+                    ]
+                },
+                include=["documents", "metadatas"],
+            )
+        except Exception as e:
+            logger.warning(f"邻居块查询失败（source={source}, seq={chunk_seq}）: {e}")
+            return {}
+
+        neighbors: Dict[int, Dict] = {}
+        ids = result.get("ids") or []
+        docs = result.get("documents") or []
+        metas = result.get("metadatas") or []
+        for i in range(len(ids)):
+            meta = metas[i] if i < len(metas) else {}
+            seq = meta.get("chunk_seq", -1)
+            neighbors[seq] = {
+                "text": docs[i] if i < len(docs) else "",
+                "page": meta.get("page", 0),
+            }
+        return neighbors
 
     def delete_by_source(self, source: str) -> int:
         """删除指定来源的全部文档块，返回删除条数"""

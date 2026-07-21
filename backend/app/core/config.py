@@ -66,6 +66,47 @@ class Settings(BaseSettings):
     # RAG 索引版本
     ACTIVE_INDEX_VERSION: str = "rag-v1"    # 当前活跃版本
 
+    # ── Metadata 预过滤（按疾病/关键词缩小候选集，降噪提精度）──
+    # disease_tags 等以 JSON 字符串存储，ChromaDB where 无法子串匹配，
+    # 故改用 where_document={"$contains": ...} 对文档内容做子串过滤；
+    # 命中不足时自动回退无过滤查询（见 medical_store.search / retriever）。
+    ENABLE_METADATA_FILTER: bool = False    # 是否启用检索时的 metadata 预过滤
+    METADATA_FILTER_MIN_RESULTS: int = 3    # 过滤结果少于该值时回退无过滤查询
+
+    # ── A. 结果多样性重排（来源配额，避免 top-k 集中于单一来源）──
+    ENABLE_DIVERSITY_RERANK: bool = False   # 粗排后、精排前是否施加来源多样性约束
+    MAX_CHUNKS_PER_SOURCE: int = 2          # 同一 source 进入精排候选的最大条数
+
+    # ── C. 融合 / 重排权重外置（便于基于评估集调参）──
+    # 三路 RRF 权重 [BM25, Dense, Sparse]；两路时取前两项归一化
+    RRF_WEIGHT_BM25: float = 0.30
+    RRF_WEIGHT_DENSE: float = 0.45
+    RRF_WEIGHT_SPARSE: float = 0.25
+    # 两阶段重排最终打分权重（relevance/completeness/authority/freshness）
+    RERANK_W_RELEVANCE: float = 0.4
+    RERANK_W_COMPLETENESS: float = 0.3
+    RERANK_W_AUTHORITY: float = 0.2
+    RERANK_W_FRESHNESS: float = 0.1
+
+    # ── B. Small-to-Big 上下文扩展（命中小块→拼相邻块喂 LLM）──
+    ENABLE_CONTEXT_EXPANSION: bool = False  # 是否启用邻居块上下文拼接
+    CONTEXT_EXPANSION_WINDOW: int = 1       # 向前/向后各拉取的邻居块数
+
+    # ── D. 抽取式上下文压缩（喂 LLM 前句级降噪）──
+    ENABLE_CONTEXT_COMPRESSION: bool = False  # 是否对长证据做句级抽取
+    COMPRESSION_MIN_CHARS: int = 400          # 证据短于该长度不压缩
+    COMPRESSION_TOP_SENTENCES: int = 5        # 每条证据最多保留的句数
+    COMPRESSION_MIN_SENT_SCORE: float = 0.2   # 句子与查询相似度低于该值则丢弃
+
+    # ── OCR（扫描版/图片型 PDF 文字识别兜底）──
+    # 复用 Qwen-VL 多模态能力，仅在页面文本过少时触发，未配置 API Key 时自动降级
+    ENABLE_OCR: bool = False                # 是否对低文本页启用 Qwen-VL OCR 兜底
+    OCR_MODEL: str = "qwen-vl-ocr"          # 通义千问多模态 OCR 模型
+    OCR_MIN_TEXT_THRESHOLD: int = 50        # 页面文本低于该字符数视为扫描/图片页
+    OCR_RENDER_DPI: int = 200               # 渲染 PDF 页为图片的 DPI
+    OCR_MAX_CONCURRENCY: int = 4            # OCR API 并发上限
+    OCR_TIMEOUT_SECONDS: int = 60           # 单页 OCR 请求超时（秒）
+
     # LangGraph 编排
     LANGGRAPH_ENABLED: bool = True          # Feature Flag，False 时回退旧编排
     LANGGRAPH_SHADOW_MODE: bool = False     # 影子模式（同时运行新旧编排，只记录不返回新结果）
@@ -142,6 +183,19 @@ class Settings(BaseSettings):
     LLM_PROVIDERS: str = "[]"               # JSON 格式，支持多个 Provider 配置
     LLM_CIRCUIT_BREAKER_THRESHOLD: int = 3  # 连续失败 N 次后切换备用 Provider
 
+    # ── 通用 LLM 接入（Provider / 框架无关）──
+    # 通过 ProviderAdapter 抽象层解耦具体厂商；下列通用配置为空时回退 QWEN_* ，
+    # 从而在不破坏现有阿里云百炼配置的前提下支持接入任意 OpenAI 兼容服务。
+    LLM_PROVIDER_TYPE: str = "openai_compatible"  # 适配器类型，对应 ProviderAdapter 注册表
+    LLM_API_KEY: str = ""        # 为空时回退 QWEN_API_KEY
+    LLM_API_BASE_URL: str = ""   # 为空时回退 QWEN_API_BASE_URL
+    LLM_MODEL: str = ""          # 为空时回退 QWEN_MODEL
+
+    # Prompt 版本管理
+    # JSON 映射 {"<prompt_key>": "<version>"}，覆盖 manifest.json 中的活跃版本，
+    # 便于灰度 / A-B 对比而无需改动 Prompt 文件；空对象表示全部使用 manifest.active。
+    PROMPT_ACTIVE_VERSIONS: str = "{}"
+
     # 日志配置
     LOG_LEVEL: str = "INFO"          # 日志级别：DEBUG | INFO | WARNING | ERROR
     LOG_FORMAT: str = "json"         # 日志格式：json | text
@@ -172,13 +226,29 @@ class Settings(BaseSettings):
                 return providers
         except (json.JSONDecodeError, TypeError):
             pass
-        # 默认返回当前单 Provider 配置
+        # 默认返回当前单 Provider 配置（通用 LLM_* 优先，回退 QWEN_*）
         return [{
             "name": "default",
-            "api_key": self.QWEN_API_KEY,
-            "base_url": self.QWEN_API_BASE_URL,
-            "model": self.QWEN_MODEL,
+            "type": self.LLM_PROVIDER_TYPE,
+            "api_key": self.llm_api_key,
+            "base_url": self.llm_api_base_url,
+            "model": self.llm_model,
         }]
+
+    @property
+    def llm_api_key(self) -> str:
+        """通用 LLM API Key（未配置时回退 QWEN_API_KEY）。"""
+        return self.LLM_API_KEY or self.QWEN_API_KEY
+
+    @property
+    def llm_api_base_url(self) -> str:
+        """通用 LLM Base URL（未配置时回退 QWEN_API_BASE_URL）。"""
+        return self.LLM_API_BASE_URL or self.QWEN_API_BASE_URL
+
+    @property
+    def llm_model(self) -> str:
+        """通用 LLM 模型（未配置时回退 QWEN_MODEL）。"""
+        return self.LLM_MODEL or self.QWEN_MODEL
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

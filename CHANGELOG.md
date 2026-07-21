@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Prompt 外置化 + 版本管理（`PromptManager`）：13 个 agent system prompt 抽离为文件，支持 `PROMPT_ACTIVE_VERSIONS` 灰度覆盖、变量渲染、缓存与热重载
+- LLM Provider 适配器抽象层（`ProviderAdapter` + `OpenAICompatibleAdapter` + 注册表），通用 `LLM_*` 配置（空回退 `QWEN_*`）
+- 单测：`test_prompt_manager.py`（18）、`test_llm_adapter.py`（17）
+- 文档：`docs/prompt-and-provider-adapter.md`
+
+### Fixed
+- 修复 failover「半接线」缺陷：熔断切换 Provider 时真实重建底层 LLM 客户端（此前仅更新索引/计数，请求仍打向原端点）
+
 ## [1.0.0] - 2026-07-21
 
 ### Added

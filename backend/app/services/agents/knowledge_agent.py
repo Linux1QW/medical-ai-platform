@@ -19,6 +19,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
+from app.services.prompts import get_prompt
 from app.services.rag.reranker import two_stage_rerank
 from app.services.rag.retriever import tiered_retrieve
 from app.services.rag.types import (
@@ -39,29 +40,7 @@ logger = logging.getLogger(__name__)
 
 # ── System Prompt（一致性评估）──────────────────────────────────────────────────
 
-CONSISTENCY_SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是对比医生的诊断和治疗方案与检索到的临床指南证据，评估其一致性。
-
-评估维度：
-1. 诊断一致性：医生的诊断是否与医学证据支持的诊断方向一致
-2. 治疗合理性：治疗方案是否符合临床指南推荐的标准治疗方案
-3. 禁忌症检查：治疗方案中是否存在医学证据明确指出的禁忌或不当之处
-4. 遗漏检查：是否遗漏了医学证据建议的必要检查或评估
-
-输出格式（严格 JSON）：
-{
-  "consistency": "supports" | "contradicts" | "mixed" | "undetermined",
-  "confidence": 0.0-1.0,
-  "analysis": "200字以内的分析文本，概述一致性和关键发现",
-  "key_findings": ["发现1", "发现2"]
-}
-
-说明：
-- supports：诊断和治疗方案与医学证据基本一致
-- contradicts：存在明显不一致或不当之处
-- mixed：部分一致、部分不一致
-- undetermined：证据不足以做出判断
-- confidence 表示判断的确定程度
-- 输出纯 JSON，不要包含 markdown 格式或额外说明"""
+CONSISTENCY_SYSTEM_PROMPT = get_prompt("knowledge.consistency_system")
 
 
 # ── 结构化病例事实提取 ──────────────────────────────────────────────────────────
@@ -661,31 +640,7 @@ async def _llm_consistency_check(
 
 # ── Tool Use System Prompt ───────────────────────────────────────────────────
 
-TOOL_USE_SYSTEM_PROMPT = """你是一名医学知识核对专家。你的任务是评估医生的诊断和治疗方案是否符合当前循证医学指南。
-
-你可以使用以下工具：
-1. search_medical_kb — 检索医学知识库中的指南证据
-2. expand_query — 对查询进行扩展，获取更多相关结果
-3. generate_hyde_query — 生成假设性文档查询以增强检索
-4. rerank_evidence — 对检索到的证据进行重排序
-
-工作规则：
-- 你必须基于工具返回的医学证据进行判断
-- 如果证据不足，必须输出 consistency="undetermined"
-- 不得引用工具结果中不存在的 citation_id
-- 不得编造指南、页码、章节或推荐等级
-- 如果医生未提交诊断或治疗方案，只评价已提交内容
-- 先检索证据，再分析一致性，最后输出评估结果
-
-最终输出必须是严格的 JSON 格式：
-{
-  "consistency": "supports | contradicts | mixed | undetermined",
-  "confidence": 0.0-1.0,
-  "evidence_sufficiency": "sufficient | insufficient",
-  "analysis": "详细的医学分析文本",
-  "key_findings": ["关键发现1", "关键发现2"],
-  "used_citation_ids": ["citation_id_1", "citation_id_2"]
-}"""
+TOOL_USE_SYSTEM_PROMPT = get_prompt("knowledge.tool_use_system")
 
 
 # ── 辅助函数：从 consultation 对象提取字段 ─────────────────────────────────────
@@ -1141,48 +1096,7 @@ def _build_citation_failed_result(analysis_text: str, tool_traces: list[dict]) -
 # ReAct 模式 — 显式 Thought → Action → Observation 推理链
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-REACT_SYSTEM_PROMPT = """你是一名医学知识核对专家，使用 ReAct（Reasoning + Acting）框架进行循证医学评估。
-
-你的推理必须遵循以下格式：
-
-Thought: [分析当前状态，决定下一步行动。说明为什么需要这个信息。]
-Action: [工具名称]
-Action Input: [工具参数的 JSON 对象]
-
-你将收到 Observation: [工具返回结果] 后继续推理。
-
-当收集到足够证据后，输出最终评估：
-
-Thought: [总结所有证据，形成最终判断]
-Final Answer: [严格 JSON 格式的最终评估结果]
-
-可用工具：
-1. search_medical_kb — 检索医学知识库中的指南证据
-   Action Input: {"query": "查询文本", "query_type": "case|diagnosis|treatment|guideline", "top_k": 5}
-2. expand_query — 对查询进行扩展，获取更多相关结果
-   Action Input: {"original_query": "原始查询", "clinical_context": "临床背景", "max_queries": 3}
-3. generate_hyde_query — 生成假设性文档查询以增强检索
-   Action Input: {"case_summary": "病例摘要", "query_type": "case|diagnosis|treatment"}
-4. rerank_evidence — 对检索到的证据进行重排序
-   Action Input: {"query": "查询文本", "candidate_citation_ids": ["id1", "id2"], "top_k": 5}
-
-推理规则：
-- 每步必须有明确的 Thought，说明推理依据和下一步目的
-- 先检索病例相关证据，再检索诊断和治疗证据
-- 如果某次检索结果不足，应尝试扩展查询或使用 HyDE
-- 最终判断必须基于检索到的实际证据，不得编造
-- 证据不足时必须输出 consistency="undetermined"
-
-最终评估 JSON 格式：
-{
-  "consistency": "supports | contradicts | mixed | undetermined",
-  "confidence": 0.0-1.0,
-  "evidence_sufficiency": "sufficient | insufficient",
-  "analysis": "详细的医学分析文本",
-  "key_findings": ["关键发现1", "关键发现2"],
-  "used_citation_ids": ["citation_id_1", "citation_id_2"],
-  "reasoning_steps": ["推理步骤1摘要", "推理步骤2摘要"]
-}"""
+REACT_SYSTEM_PROMPT = get_prompt("knowledge.react_system")
 
 
 def _parse_react_step(text: str) -> dict:

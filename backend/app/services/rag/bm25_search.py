@@ -174,6 +174,8 @@ class BM25Index:
                 continue
             doc_copy = dict(self.documents[idx])
             doc_copy["bm25_score"] = round(score, 4)
+            # 与向量检索结果字段对齐，保证 RRF 跨路去重生效
+            doc_copy["doc_id"] = doc_copy.get("id", "")
             final_results.append(doc_copy)
             if len(final_results) >= top_k:
                 break
@@ -234,6 +236,7 @@ def _try_load_documents():
                         "source": metadata.get("source", "未知"),
                         "page": metadata.get("page", 0),
                         "heading_path": metadata.get("heading_path", ""),
+                        "chunk_seq": metadata.get("chunk_seq", -1),
                         "content_type": metadata.get("content_type", ""),
                         "organization": metadata.get("organization"),
                         "year": metadata.get("year"),

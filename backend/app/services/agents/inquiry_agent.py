@@ -5,6 +5,7 @@ import json
 import logging
 
 from app.services.qwen_client import call_qwen_chat
+from app.services.prompts import get_prompt
 from app.utils.json_parser import extract_json_from_text
 
 # ── 临床 Schema 定义 ──
@@ -64,42 +65,7 @@ WEIGHTS = {
 # ── LLM Prompts ──
 
 # 第一次 LLM 调用：槽位填充 + 关键路径检查
-SLOT_FILLING_SYSTEM_PROMPT = """你是一名临床信息提取专家。请分析医生与患者的问诊对话，提取结构化临床信息。
-
-任务：
-1. 检查以下临床 Schema 中的每个槽位是否被医生询问并获取到信息
-2. 额外检查关键路径中的槽位（associated_symptom, risk_factor）是否被询问
-
-Schema 定义：
-- chief_complaint: symptom(症状), duration(持续时间), severity(严重程度)
-- history: onset(起病情况), progression(演变过程), trigger(诱因)
-- past_history: disease(既往疾病), surgery(手术史)
-- medication: current_drugs(当前用药)
-- allergy: drug_allergy(药物过敏)
-
-关键路径额外检查：
-- associated_symptom(伴随症状)
-- risk_factor(危险因素)
-
-输出格式（严格JSON）：
-{
-  "slots": {
-    "chief_complaint": {"symptom": true/false, "duration": true/false, "severity": true/false},
-    "history": {"onset": true/false, "progression": true/false, "trigger": true/false},
-    "past_history": {"disease": true/false, "surgery": true/false},
-    "medication": {"current_drugs": true/false},
-    "allergy": {"drug_allergy": true/false}
-  },
-  "critical_slots": {
-    "associated_symptom": true/false,
-    "risk_factor": true/false
-  }
-}
-
-注意：
-- 只有当医生明确询问并获取到相关信息时，才标记为 true
-- 如果患者主动提及但医生未追问，标记为 true
-- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+SLOT_FILLING_SYSTEM_PROMPT = get_prompt("inquiry.slot_filling_system")
 
 SLOT_FILLING_FEWSHOT_USER = """【患者信息】
 姓名: 马xx, 年龄: 63, 性别: male
@@ -143,37 +109,7 @@ SLOT_FILLING_FEWSHOT_ASSISTANT = """{
 }"""
 
 # 第二次 LLM 调用：问诊步骤序列 + 问题分类
-LOGIC_EFFICIENCY_SYSTEM_PROMPT = """你是一名问诊流程分析专家。请分析医生在问诊过程中的每个问题，提取问诊步骤序列和问题分类。
-
-任务：
-1. 将医生的每个问题映射为问诊步骤类型，形成有序序列
-2. 对每个医生问题进行分类：relevant(相关) / redundant(冗余) / irrelevant(无关)
-
-问诊步骤类型定义：
-- symptom: 症状询问（主诉相关）
-- history: 病史探索（现病史详细询问）
-- risk_factor: 风险评估（危险因素、鉴别诊断相关）
-- past_history: 既往史（既往疾病、手术、用药、过敏）
-- other: 其他（解释说明、检查安排、治疗建议等）
-
-问题分类定义：
-- relevant: 与诊断直接相关，有助于获取关键信息
-- redundant: 重复询问已获取的信息
-- irrelevant: 与当前诊断无关，偏离主题
-
-输出格式（严格JSON）：
-{
-  "inquiry_steps": ["symptom", "history", "risk_factor", ...],
-  "question_classification": [
-    {"question": "医生问题原文", "type": "symptom", "category": "relevant"},
-    ...
-  ]
-}
-
-注意：
-- inquiry_steps 只包含医生主动提问的步骤，按时间顺序排列
-- question_classification 需要列出每个医生问题的分类
-- 输出纯JSON，不要包含任何markdown格式或额外说明"""
+LOGIC_EFFICIENCY_SYSTEM_PROMPT = get_prompt("inquiry.logic_efficiency_system")
 
 LOGIC_EFFICIENCY_FEWSHOT_USER = """【患者信息】
 姓名: 任xx, 年龄: 29, 性别: female

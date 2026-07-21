@@ -30,12 +30,13 @@ class LLMFailoverManager:
         """获取当前 Provider 配置
 
         Returns:
-            dict: {"name": ..., "api_key": ..., "base_url": ..., "model": ...}
+            dict: {"name": ..., "type": ..., "api_key": ..., "base_url": ..., "model": ...}
         """
         with self._lock:
             provider = self._providers[self._current_index]
             return {
                 "name": provider.get("name", f"provider-{self._current_index}"),
+                "type": provider.get("type", "openai_compatible"),
                 "api_key": provider["api_key"],
                 "base_url": provider.get("base_url", settings.QWEN_API_BASE_URL),
                 "model": provider.get("model", settings.QWEN_MODEL),

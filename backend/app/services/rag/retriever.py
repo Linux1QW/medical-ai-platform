@@ -21,6 +21,7 @@ from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.bm25_search import get_bm25_index
 from app.services.rag.embeddings import get_embedding, get_embeddings
+from app.services.rag.entity_resolver import extract_entities as _extract_entities
 from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
 from app.services.rag.hybrid_fusion import weighted_rrf
 from app.services.rag.medical_store import get_medical_store
@@ -105,6 +106,46 @@ async def _filter_by_embedding_similarity(
         return expanded_queries  # 降级：失败时保留全部扩展查询
 
 
+def build_disease_where_document(query: str) -> Dict | None:
+    """从查询中抽取疾病实体，构建 ChromaDB where_document 过滤条件（纯函数）
+
+    因 disease_tags 以 JSON 字符串存储，无法用 ChromaDB where 等值匹配，
+    改用 where_document 的 $contains 对文档正文做子串过滤。中文子串有效
+    （如查询含"肺癌"可命中正文"非小细胞肺癌"）。
+
+    Args:
+        query: 原始查询文本
+
+    Returns:
+        - 无疾病实体命中时返回 None（表示不过滤）
+        - 单个疾病：{"$contains": "<规范名>"}
+        - 多个疾病：{"$or": [{"$contains": d1}, {"$contains": d2}, ...]}
+    """
+    if not query or not query.strip():
+        return None
+    try:
+        entities = _extract_entities(query)
+    except Exception as e:  # 抽取失败不应影响检索
+        logger.warning(f"疾病实体抽取失败，跳过 metadata 预过滤: {e}")
+        return None
+
+    diseases = []
+    seen = set()
+    for ent in entities:
+        if ent.get("type") != "disease":
+            continue
+        name = ent.get("normalized", "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            diseases.append(name)
+
+    if not diseases:
+        return None
+    if len(diseases) == 1:
+        return {"$contains": diseases[0]}
+    return {"$or": [{"$contains": d} for d in diseases]}
+
+
 async def retrieve_medical_evidence(
     diagnosis: str, top_k: int = 5
 ) -> List[Dict]:
@@ -121,7 +162,12 @@ async def retrieve_medical_evidence(
         logger.debug("医学知识库索引不可用，跳过医学证据检索")
         return []
     try:
-        return await store.search(diagnosis, top_k=top_k)
+        where_document = None
+        if settings.ENABLE_METADATA_FILTER:
+            where_document = build_disease_where_document(diagnosis)
+        return await store.search(
+            diagnosis, top_k=top_k, where_document=where_document
+        )
     except Exception as e:
         logger.warning(f"医学证据检索失败，降级为无证据模式: {e}")
         return []
@@ -138,6 +184,47 @@ def format_evidence_for_verification(evidences: List[Dict]) -> str:
             f"{ev.get('text', '')}"
         )
     return "\n\n".join(parts)
+
+
+def expand_context(
+    items: List[EvidenceItem], window: int
+) -> List[EvidenceItem]:
+    """Small-to-Big 上下文扩展：命中小块后拼接相邻块，提升喂给 LLM 的上下文完整度
+
+    仅拼接同一 source 下 chunk_seq 相邻的块，保持前→中→后顺序。就地修改
+    并返回 items（便于链式调用）。缺失 chunk_seq / 无邻居 / 查询失败时该条保持原样。
+
+    Args:
+        items: 待扩展的证据列表（通常为精排后的最终小集）
+        window: 向前 / 向后各拉取的邻居块数
+    """
+    if not items or window <= 0:
+        return items
+    store = get_medical_store()
+    for item in items:
+        seq = item.chunk_seq
+        if seq is None or seq < 0:
+            continue
+        try:
+            neighbors = store.fetch_neighbors(item.source, seq, window=window)
+        except Exception as e:
+            logger.warning(f"上下文扩展失败（{item.source}#{seq}）: {e}")
+            continue
+        if not neighbors:
+            continue
+        before = [
+            neighbors[s]["text"]
+            for s in sorted(neighbors)
+            if s < seq and neighbors[s].get("text")
+        ]
+        after = [
+            neighbors[s]["text"]
+            for s in sorted(neighbors)
+            if s > seq and neighbors[s].get("text")
+        ]
+        if before or after:
+            item.text = "\n".join(before + [item.text] + after)
+    return items
 
 
 # ── HyDE（Hypothetical Document Embeddings）──
@@ -243,6 +330,7 @@ async def hyde_retrieve(query: str, top_k: int = 5) -> List[Dict]:
                     "page": metadata.get("page", 0),
                     "score": round(score, 4),
                     "heading_path": metadata.get("heading_path", ""),
+                    "chunk_seq": metadata.get("chunk_seq", -1),
                     "content_type": metadata.get("content_type", ""),
                     "organization": metadata.get("organization"),
                     "year": metadata.get("year"),
@@ -508,21 +596,30 @@ async def hybrid_recall(
             doc_map[key]["vector_score"] = doc.get("score", doc.get("vector_score", 0.0))
 
     if sparse_ranking:
-        # 三路融合
+        # 三路融合（权重来自 config，便于基于评估集调参）
+        fusion_weights = [
+            settings.RRF_WEIGHT_BM25,
+            settings.RRF_WEIGHT_DENSE,
+            settings.RRF_WEIGHT_SPARSE,
+        ]
         fused = weighted_rrf(
             rankings=[bm25_ranking, dense_ranking, sparse_ranking],
-            weights=[0.30, 0.45, 0.25],
+            weights=fusion_weights,
             k=35,
         )
-        fusion_weights = [0.30, 0.45, 0.25]
     else:
-        # 降级为两路融合
+        # 降级为两路融合：取 BM25/Dense 权重归一化
+        _bm25, _dense = settings.RRF_WEIGHT_BM25, settings.RRF_WEIGHT_DENSE
+        _total = _bm25 + _dense
+        if _total <= 0:
+            fusion_weights = [0.40, 0.60]
+        else:
+            fusion_weights = [_bm25 / _total, _dense / _total]
         fused = weighted_rrf(
             rankings=[bm25_ranking, dense_ranking],
-            weights=[0.40, 0.60],
+            weights=fusion_weights,
             k=35,
         )
-        fusion_weights = [0.40, 0.60]
 
     # ── 将融合后的 (doc_id, score) 还原为完整 dict ──
     fused_results: List[Dict] = []
@@ -758,6 +855,7 @@ def _dict_to_evidence(
             source=d.get("source", "未知"),
             page=d.get("page"),
             heading_path=d.get("heading_path", ""),
+            chunk_seq=d.get("chunk_seq") if isinstance(d.get("chunk_seq"), int) and d.get("chunk_seq", -1) >= 0 else None,
             query_types=[query_type],
             vector_score=d.get("vector_score") or d.get("score"),
             bm25_score=d.get("bm25_score"),

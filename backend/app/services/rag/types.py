@@ -63,6 +63,7 @@ class EvidenceItem(BaseModel):
     source: str                                    # PDF 来源文件名
     page: Optional[int] = None
     heading_path: str = ""
+    chunk_seq: Optional[int] = None                # 块在来源内的全局序号（Small-to-Big 邻居定位）
 
     # 该证据被哪些查询类型命中
     query_types: list[str] = Field(default_factory=list)

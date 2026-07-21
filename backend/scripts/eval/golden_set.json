@@ -1,0 +1,86 @@
+{
+  "description": "RAG 检索质量回归评估集。relevant_source_contains 中每个子串代表一个期望命中的来源文档组；检索结果的 source 文件名若包含任一子串即判为相关。基于 data/ 目录真实指南文件构建。",
+  "k_values": [1, 3, 5, 10],
+  "cases": [
+    {
+      "id": "nsclc_treat",
+      "query": "非小细胞肺癌 EGFR 突变阳性一线靶向治疗方案",
+      "relevant_source_contains": ["非小细胞肺癌"]
+    },
+    {
+      "id": "breast_neoadj",
+      "query": "HER2 阳性乳腺癌新辅助治疗推荐",
+      "relevant_source_contains": ["乳腺癌"]
+    },
+    {
+      "id": "crc_stage",
+      "query": "结直肠癌分期与术后辅助化疗方案",
+      "relevant_source_contains": ["结直肠癌", "结肠癌", "直肠癌"]
+    },
+    {
+      "id": "prostate_dx",
+      "query": "前列腺癌风险分层与内分泌治疗",
+      "relevant_source_contains": ["前列腺癌"]
+    },
+    {
+      "id": "gastric_treat",
+      "query": "晚期胃癌一线化疗与免疫联合治疗",
+      "relevant_source_contains": ["胃癌"]
+    },
+    {
+      "id": "renal_treat",
+      "query": "转移性肾癌靶向及免疫治疗选择",
+      "relevant_source_contains": ["肾癌"]
+    },
+    {
+      "id": "melanoma_treat",
+      "query": "皮肤黑色素瘤 BRAF 突变靶向治疗",
+      "relevant_source_contains": ["黑色素瘤"]
+    },
+    {
+      "id": "npc_rt",
+      "query": "鼻咽癌放疗联合同步化疗方案",
+      "relevant_source_contains": ["鼻咽癌"]
+    },
+    {
+      "id": "esophageal_treat",
+      "query": "食管癌新辅助放化疗与手术时机",
+      "relevant_source_contains": ["食管癌"]
+    },
+    {
+      "id": "myeloma_treat",
+      "query": "多发性骨髓瘤诱导治疗与自体移植",
+      "relevant_source_contains": ["多发性骨髓瘤", "骨髓瘤"]
+    },
+    {
+      "id": "cervical_treat",
+      "query": "宫颈癌同步放化疗与手术指征",
+      "relevant_source_contains": ["宫颈癌"]
+    },
+    {
+      "id": "ovarian_treat",
+      "query": "上皮性卵巢癌减瘤术后化疗与维持治疗",
+      "relevant_source_contains": ["卵巢癌"]
+    },
+    {
+      "id": "lymphoma_treat",
+      "query": "弥漫大 B 细胞淋巴瘤一线免疫化疗",
+      "relevant_source_contains": ["淋巴瘤", "B细胞淋巴瘤"]
+    },
+    {
+      "id": "pancreatic_treat",
+      "query": "胰腺癌可切除性评估与新辅助治疗",
+      "relevant_source_contains": ["胰腺癌"]
+    },
+    {
+      "id": "hypertension_dx",
+      "query": "原发性高血压的诊断标准与一线降压药物选择",
+      "relevant_source_contains": ["内科学", "心血管"]
+    },
+    {
+      "id": "pediatric_fever",
+      "query": "儿童急性发热的评估与处理原则",
+      "relevant_source_contains": ["儿科学"]
+    }
+  ]
+}

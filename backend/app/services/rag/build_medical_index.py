@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""医学指南索引构建脚本 — 扫描 PDF 并构建 ChromaDB 向量索引
+"""医学指南索引构建脚本 — 扫描多格式文档（PDF / Word）并构建 ChromaDB 向量索引
 
+统一流水线：PDF/Word → Markdown → 语义切分 → 向量化存储
 执行方式: cd backend; python -m app.services.rag.build_medical_index
 """
 
@@ -22,6 +23,7 @@ from app.services.rag.embeddings import get_embeddings
 from app.services.rag.entity_resolver import extract_entities
 from app.services.rag.medical_store import get_medical_store
 from app.services.rag.metadata_config import DocumentMetadata, get_enriched_metadata
+from app.services.rag.ocr import apply_ocr_to_pages
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -66,6 +68,9 @@ HEADING_REGEX = re.compile(
     '|'.join(pat.pattern for _, pat in HEADING_LEVELS), re.MULTILINE
 )
 
+# Markdown ATX 标题正则（统一转 Markdown 后的主要标题形式：#=1级 ##=2级 ### 及更深=3级）
+_ATX_HEADING_RE = re.compile(r'^(#{1,6})\s+\S')
+
 # 句末标点（中文和英文）
 SENTENCE_END_PUNCT = r'[。！？；.!?,]'
 
@@ -75,10 +80,19 @@ def _get_heading_level(line: str) -> int:
     stripped = line.strip()
     if not stripped:
         return 0
+    # Markdown ATX 标题优先（统一格式输入下 Word 标题会被转为 #/##/###）
+    atx = _ATX_HEADING_RE.match(stripped)
+    if atx:
+        return min(len(atx.group(1)), 3)
     for level, pattern in HEADING_LEVELS:
         if pattern.match(stripped):
             return level
     return 0
+
+
+def _clean_heading_text(line: str) -> str:
+    """清洗标题行：去除 Markdown ATX 前缀（#）及首尾空白，返回纯标题文本"""
+    return re.sub(r'^\s*#{1,6}\s+', '', line).strip()
 
 
 def _clean_source_name(source: str) -> str:
@@ -122,7 +136,7 @@ def _split_by_headings(text: str) -> List[Tuple[str, str, List[str]]]:
             # 弹出所有层级 >= 当前层级的条目
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
-            current_heading = line.strip()
+            current_heading = _clean_heading_text(line)
             heading_stack.append((level, current_heading))
             current_content_lines = []
         else:
@@ -544,6 +558,11 @@ def extract_text_from_pdf(pdf_path: Path) -> List[Dict]:
     """
     pages = []
     try:
+        from app.core.config import settings
+        ocr_enabled = getattr(settings, "ENABLE_OCR", False)
+        ocr_threshold = getattr(settings, "OCR_MIN_TEXT_THRESHOLD", 50)
+        ocr_dpi = getattr(settings, "OCR_RENDER_DPI", 200)
+
         doc = fitz.open(pdf_path)
         source_name = pdf_path.name
 
@@ -588,16 +607,31 @@ def extract_text_from_pdf(pdf_path: Path) -> List[Dict]:
             else:
                 text = page.get_text().strip()
 
-            # 3. 添加正文页
-            if text:
-                pages.append({
+            # 3. 低文本页（疑似扫描/图片页）渲染为 PNG 并标记，交由 OCR 兜底
+            ocr_image = None
+            if ocr_enabled and len(text) < ocr_threshold:
+                try:
+                    pix = page.get_pixmap(dpi=ocr_dpi)
+                    ocr_image = pix.tobytes("png")
+                except Exception as e:
+                    logger.debug(
+                        f"[{source_name}] 第{page_real_num}页渲染 OCR 图片失败: {e}"
+                    )
+                    ocr_image = None
+
+            # 4. 添加正文页（低文本但待 OCR 的页也保留，稍后回填文本）
+            if text or ocr_image is not None:
+                page_entry = {
                     "text": text,
                     "page": page_real_num,
                     "source": source_name,
                     "content_type": "text",
-                })
+                }
+                if ocr_image is not None:
+                    page_entry["_ocr_image"] = ocr_image
+                pages.append(page_entry)
 
-            # 4. 添加表格块
+            # 5. 添加表格块
             pages.extend(table_items)
 
         doc.close()
@@ -611,6 +645,132 @@ def extract_text_from_pdf(pdf_path: Path) -> List[Dict]:
     except Exception as e:
         logger.error(f"提取 PDF 失败 {pdf_path}: {e}")
         return []
+
+
+# ── Word 文档抽取（.docx → Markdown）────────────────────────────────
+
+# 支持的文档格式（统一转 Markdown 后走同一套语义分块）
+SUPPORTED_EXTENSIONS: Tuple[str, ...] = (".pdf", ".docx")
+
+
+def _docx_heading_level(style_name: str) -> int:
+    """将 Word 段落样式名映射为标题层级（0=正文）。
+
+    兼容英文 "Heading N" / "Title" 与中文 "标题 N" / "标题" 样式。
+    """
+    if not style_name:
+        return 0
+    s = style_name.strip().lower()
+    m = re.match(r'(?:heading|标题)\s*(\d+)', s)
+    if m:
+        return min(int(m.group(1)), 3)
+    if s in ("title", "标题", "文档标题"):
+        return 1
+    return 0
+
+
+def _iter_docx_blocks(document):
+    """按文档自然顺序迭代 docx 的段落与表格块。
+
+    Yields:
+        ("paragraph", Paragraph) 或 ("table", Table)
+    """
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    body = document.element.body
+    for child in body.iterchildren():
+        tag = child.tag  # 含命名空间，如 '{...}p' / '{...}tbl'
+        if tag.endswith("}p"):
+            yield "paragraph", Paragraph(child, document)
+        elif tag.endswith("}tbl"):
+            yield "table", Table(child, document)
+
+
+def extract_text_from_docx(docx_path: Path) -> List[Dict]:
+    """提取 Word 文档内容并统一为 Markdown 表示，表格单独标记 content_type。
+
+    - 标题段落按样式转为 Markdown ATX 标题（#/##/###），保留层级结构
+    - 普通段落按原文顺序拼接为正文 Markdown（空行分隔，保证段落切分）
+    - 表格转为 Markdown 表格（复用 _table_to_text），作为独立 content_type='table' 块
+    - Word 无稳定分页概念，正文统一归于第 1 页
+
+    Returns:
+        [{"text": ..., "page": ..., "source": ..., "content_type": "text"|"table"}, ...]
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        logger.error("未安装 python-docx，无法处理 .docx 文件；请 pip install python-docx")
+        return []
+
+    pages: List[Dict] = []
+    try:
+        document = Document(str(docx_path))
+        source_name = docx_path.name
+
+        md_lines: List[str] = []
+        table_items: List[Dict] = []
+        table_idx = 0
+
+        for kind, block in _iter_docx_blocks(document):
+            if kind == "paragraph":
+                text = (block.text or "").strip()
+                if not text:
+                    continue
+                style_name = block.style.name if block.style is not None else ""
+                level = _docx_heading_level(style_name)
+                if level > 0:
+                    md_lines.append(f"{'#' * level} {text}")
+                else:
+                    md_lines.append(text)
+            else:  # table
+                rows = [[cell.text for cell in row.cells] for row in block.rows]
+                table_idx += 1
+                table_text = _table_to_text(rows, table_idx)
+                if table_text:
+                    table_items.append({
+                        "text": table_text,
+                        "page": 1,
+                        "source": source_name,
+                        "content_type": "table",
+                    })
+
+        # 段落之间以空行分隔，保证 _split_by_paragraphs 正确切分
+        body_text = "\n\n".join(md_lines).strip()
+        if body_text:
+            pages.append({
+                "text": body_text,
+                "page": 1,
+                "source": source_name,
+                "content_type": "text",
+            })
+        pages.extend(table_items)
+
+        logger.info(
+            f"已提取 {source_name}: {1 if body_text else 0} 页正文，{len(table_items)} 个表格块"
+        )
+        return pages
+
+    except Exception as e:
+        logger.error(f"提取 Word 文档失败 {docx_path}: {e}")
+        return []
+
+
+def extract_document(path: Path) -> List[Dict]:
+    """统一文档抽取入口：按扩展名分派到对应解析器，输出统一的页面/块结构。
+
+    - .pdf  → extract_text_from_pdf（含表格抽取与低文本页 OCR 兜底标记）
+    - .docx → extract_text_from_docx（Word → Markdown）
+    其它扩展名将被跳过并告警。
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return extract_text_from_pdf(path)
+    if suffix == ".docx":
+        return extract_text_from_docx(path)
+    logger.warning(f"不支持的文件格式，跳过: {path.name}")
+    return []
 
 
 def generate_doc_id(source: str, page: int, chunk_idx: int, content: str) -> str:
@@ -679,26 +839,34 @@ async def build_medical_index(target_version: str = "rag-v2"):
     _reset_collection_cache()  # 清除缓存，确保使用新版本 collection
 
     try:
-        logger.info(f"开始构建医学知识库索引，PDF 目录: {PDF_DIR}，目标版本: {target_version}")
-
-        # 1. 验证 PDF 目录
+        logger.info(f"开始构建医学知识库索引，文档目录: {PDF_DIR}，目标版本: {target_version}")
+        
+        # 1. 验证文档目录
         if not PDF_DIR.exists():
-            logger.error(f"PDF 目录不存在: {PDF_DIR}")
+            logger.error(f"文档目录不存在: {PDF_DIR}")
             return
-
-        # 2. 扫描 PDF 文件
-        pdf_files = list(PDF_DIR.glob("*.pdf"))
-        if not pdf_files:
-            logger.warning(f"未找到 PDF 文件: {PDF_DIR}")
+        
+        # 2. 扫描支持的文档文件（PDF / Word）
+        doc_files = sorted(
+            f for f in PDF_DIR.iterdir()
+            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+        )
+        if not doc_files:
+            logger.warning(
+                f"未找到可处理的文档文件（{', '.join(SUPPORTED_EXTENSIONS)}）: {PDF_DIR}"
+            )
             return
-
-        logger.info(f"发现 {len(pdf_files)} 个 PDF 文件")
-
+        
+        logger.info(f"发现 {len(doc_files)} 个文档文件")
+        
         # 3. 提取所有文本块
         all_chunks = []  # [{"id": ..., "text": ..., "source": ..., "page": ...}]
-
-        for pdf_path in pdf_files:
-            pages = extract_text_from_pdf(pdf_path)
+        # 每个 source 的全局递增序号，用于 Small-to-Big 邻居块定位
+        source_seq_counter: Dict[str, int] = {}
+        
+        for doc_path in doc_files:
+            pages = extract_document(doc_path)
+            await apply_ocr_to_pages(pages)  # 低文本页 OCR 兜底（未启用时零开销）
             for page_info in pages:
                 # 使用共享分块入口，自动区分正文和表格
                 chunk_items = _extract_chunks_from_page(page_info)
@@ -708,14 +876,18 @@ async def build_medical_index(target_version: str = "rag-v2"):
                     doc_id = generate_doc_id(
                         page_info["source"], page_info["page"], idx, chunk_content
                     )
+                    src = page_info["source"]
+                    chunk_seq = source_seq_counter.get(src, 0)
+                    source_seq_counter[src] = chunk_seq + 1
                     all_chunks.append(
                         {
                             "id": doc_id,
                             "text": chunk_content,
-                            "source": page_info["source"],
+                            "source": src,
                             "page": page_info["page"],
                             "heading_path": heading_path,
                             "content_type": page_info.get("content_type", "text"),
+                            "chunk_seq": chunk_seq,
                         }
                     )
 
@@ -766,6 +938,7 @@ async def build_medical_index(target_version: str = "rag-v2"):
                 "page": chunk["page"],
                 "heading_path": chunk.get("heading_path", ""),
                 "content_type": chunk.get("content_type", "text"),
+                "chunk_seq": chunk.get("chunk_seq", -1),  # Small-to-Big 邻居定位
                 # 增强字段
                 "organization": doc_meta.organization or "",
                 "year": doc_meta.year or 0,
@@ -851,7 +1024,8 @@ async def index_single_pdf(
                 logger.info(f"已删除 '{source_name}' 旧索引 {deleted} 条")
 
         # 提取并分块
-        pages = extract_text_from_pdf(pdf_path)
+        pages = extract_document(pdf_path)
+        await apply_ocr_to_pages(pages)  # 低文本页 OCR 兜底（未启用时零开销）
         chunks = []
         for page_info in pages:
             chunk_items = _extract_chunks_from_page(page_info)
@@ -1089,17 +1263,14 @@ async def _health_check_index(timeout: float = 10.0) -> bool:
         # 使用标准测试查询验证索引
         test_queries = ["高血压 诊疗指南", "糖尿病 治疗方案"]
 
-        # 获取 embedding 函数
-        from app.services.rag.embeddings import get_embeddings
-        embedding_fn = get_embeddings()
+        # 获取 embedding 函数（get_embedding 为 async，内部走 LRU 缓存）
+        from app.services.rag.embeddings import get_embedding
 
         for query in test_queries:
             start = time.time()
 
             # 生成查询向量
-            query_embedding = await asyncio.to_thread(
-                embedding_fn.embed_query, query
-            )
+            query_embedding = await get_embedding(query)
 
             # 执行向量查询
             results = store.collection.query(

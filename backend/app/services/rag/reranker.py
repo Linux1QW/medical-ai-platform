@@ -145,11 +145,17 @@ def _compute_final_score(
     auth = doc.authority_score if doc.authority_score is not None else _compute_authority_score(doc)
     fresh = doc.freshness_score if doc.freshness_score is not None else _compute_freshness_score(doc)
 
+    # 权重优先取 config（可基于评估集调参），缺失时回退 types 默认常量
+    w_rel = getattr(settings, "RERANK_W_RELEVANCE", RELEVANCE_WEIGHT)
+    w_comp = getattr(settings, "RERANK_W_COMPLETENESS", COMPLETENESS_WEIGHT)
+    w_auth = getattr(settings, "RERANK_W_AUTHORITY", AUTHORITY_WEIGHT)
+    w_fresh = getattr(settings, "RERANK_W_FRESHNESS", FRESHNESS_WEIGHT)
+
     return (
-        RELEVANCE_WEIGHT * rel_norm
-        + COMPLETENESS_WEIGHT * comp_norm
-        + AUTHORITY_WEIGHT * auth
-        + FRESHNESS_WEIGHT * fresh
+        w_rel * rel_norm
+        + w_comp * comp_norm
+        + w_auth * auth
+        + w_fresh * fresh
     )
 
 
@@ -306,6 +312,54 @@ def _default_scored_docs(documents: List[EvidenceItem]) -> List[EvidenceItem]:
 # 主入口：两阶段重排
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ───────────────────────────────────────────────────────────────
+# 结果多样性重排（来源配额）
+# ───────────────────────────────────────────────────────────────
+
+def rerank_with_diversity(
+    documents: List[EvidenceItem],
+    top_k: int,
+    per_source_cap: int,
+) -> List[EvidenceItem]:
+    """在保持相关性排序的前提下施加来源多样性约束（纯函数）
+
+    贪心遍历已排序的候选：优先纳入来源未达到 per_source_cap 的文档；
+    已达配额的来源暂时延后，若最终不足 top_k 再按原相关性顺序补齐，
+    确保返回数量不低于 min(top_k, len(documents))，不因多样性而漏召。
+
+    Args:
+        documents: 已按相关性降序的候选证据
+        top_k: 最终返回条数
+        per_source_cap: 同一 source 的最大条数
+
+    Returns:
+        重排后的证据列表（长度 ≤ top_k）
+    """
+    if not documents or top_k <= 0:
+        return []
+    if per_source_cap <= 0:
+        return documents[:top_k]
+
+    selected: List[EvidenceItem] = []
+    deferred: List[EvidenceItem] = []
+    source_count: Dict[str, int] = {}
+
+    for doc in documents:
+        src = doc.source or "未知"
+        if source_count.get(src, 0) < per_source_cap:
+            selected.append(doc)
+            source_count[src] = source_count.get(src, 0) + 1
+        else:
+            deferred.append(doc)
+
+    # 多样性约束下不足 top_k 时，用被跨过的文档按原顺序补齐
+    if len(selected) < top_k:
+        selected.extend(deferred[: top_k - len(selected)])
+
+    return selected[:top_k]
+
+
+# ───────────────────────────────────────────────────────────────
 async def two_stage_rerank(
     query: str,
     documents: List[EvidenceItem],
@@ -334,14 +388,31 @@ async def two_stage_rerank(
         doc.freshness_score = _compute_freshness_score(doc)
 
     # Stage 1: 专用 reranker 粗排（20 → 10）
+    # 多样性开启时拓宽粗排输出，为来源配额裁剪留头寸
+    stage1_k = LLM_RERANK_INPUT
+    if settings.ENABLE_DIVERSITY_RERANK:
+        stage1_k = min(len(candidates), max(LLM_RERANK_INPUT, top_k * 3))
     try:
         candidates = await dedicated_rerank(
-            query, candidates, top_k=LLM_RERANK_INPUT
+            query, candidates, top_k=stage1_k
         )
     except Exception as e:
         logger.warning(f"专用 reranker 失败，使用 RRF 排序: {e}")
-        candidates = candidates[:LLM_RERANK_INPUT]
+        candidates = candidates[:stage1_k]
         degraded = True
+
+    # 多样性：在粗排池上施加来源配额，挑出进入精排的候选
+    if settings.ENABLE_DIVERSITY_RERANK and candidates:
+        before = len(candidates)
+        candidates = rerank_with_diversity(
+            candidates,
+            top_k=LLM_RERANK_INPUT,
+            per_source_cap=settings.MAX_CHUNKS_PER_SOURCE,
+        )
+        logger.info(
+            f"多样性重排（cap={settings.MAX_CHUNKS_PER_SOURCE}）："
+            f"{before} → {len(candidates)} 条进入精排"
+        )
 
     # Stage 2: LLM 精排（10 → 5）
     final: List[EvidenceItem] = []

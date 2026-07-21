@@ -21,7 +21,7 @@ class LLMFailoverManager:
         self._current_index: int = 0
         self._failure_counts: dict[int, int] = {i: 0 for i in range(len(self._providers))}
         self._circuit_breaker_threshold: int = settings.LLM_CIRCUIT_BREAKER_THRESHOLD
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # 可重入锁，防止 switch_to_next 内部调用 get_current_provider 死锁
 
     @property
     def provider_count(self) -> int:

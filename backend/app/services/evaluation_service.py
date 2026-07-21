@@ -1,25 +1,25 @@
 import asyncio
 import json
 import logging
-from typing import Optional, List
+from typing import List, Optional
 
-from sqlalchemy import select, func, case, literal, or_
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.core.websocket import manager
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
 from app.models.user import User
+from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
+from app.services.agents.humanistic_agent import run_humanistic_evaluation
 from app.services.agents.inquiry_agent import run_inquiry_analysis
 from app.services.agents.knowledge_agent import run_knowledge_check
-from app.services.agents.humanistic_agent import run_humanistic_evaluation
-from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
-from app.services.agents.treatment_agent import run_treatment_evaluation
 from app.services.agents.scoring_agent import run_scoring
 from app.services.agents.suggestion_agent import run_suggestion
-from app.core.websocket import manager
-from app.core.config import settings
+from app.services.agents.treatment_agent import run_treatment_evaluation
 from app.utils.json_parser import extract_json_from_text
 
 
@@ -51,17 +51,18 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
     """LangGraph 图执行路径"""
     import uuid
     from datetime import datetime
+
     from sqlalchemy import select
-    from app.models.consultation import Consultation, ConsultationMessage
-    from app.models.evaluation import Evaluation
-    from app.models.patient import VirtualPatient
-    from app.models.evaluation_run import EvaluationRun
-    from app.orchestration.state import EvaluationState, EvaluationContext
-    from app.orchestration.graph import get_graph
-    from app.orchestration.routes import build_submission_flags, get_consultation_type
-    from app.orchestration.progress import send_progress_events
-    from app.core.websocket import manager
+
     from app.core.config import settings
+    from app.core.websocket import manager
+    from app.models.consultation import Consultation, ConsultationMessage
+    from app.models.evaluation_run import EvaluationRun
+    from app.models.patient import VirtualPatient
+    from app.orchestration.graph import get_graph
+    from app.orchestration.progress import send_progress_events
+    from app.orchestration.routes import build_submission_flags, get_consultation_type
+    from app.orchestration.state import EvaluationContext, EvaluationState
 
     # 1. 加载数据
     await manager.send_progress(consultation_id, 0, "正在初始化...")
@@ -133,7 +134,7 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
         graph = await get_graph()
         if graph is None:
             raise RuntimeError("LangGraph 图未初始化，请检查 LANGGRAPH_ENABLED 配置和 Redis Checkpointer 状态")
-        
+
         config = {
             "configurable": {
                 "thread_id": f"evaluation:{run_id}",
@@ -265,7 +266,6 @@ def _build_evaluation_from_state(state: dict, consultation_id: int) -> Evaluatio
 
 def _parse_symptoms(symptoms_str) -> list[str]:
     """解析患者症状字段"""
-    import json
     if not symptoms_str:
         return []
     try:
@@ -314,7 +314,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
     # 用于跟踪并行任务进度的计数器
     completed_agents = {"count": 0}
     agent_names = ["病史采集", "医学知识", "沟通交流", "诊断结果", "治疗方案"]
-    
+
     async def run_with_progress(coro, agent_index: int):
         """包装异步任务，完成后更新进度"""
         result = await coro
@@ -394,7 +394,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             humanistic_result=humanistic_result["raw_response"],
         )
         suggestion_data = _extract_json(suggestion_result["raw_response"])
-        
+
         await manager.send_progress(consultation_id, 95, "正在保存评估结果...")
 
         # 拒答时 total_score 也置为 None，并替换摘要避免分数矛盾
@@ -442,10 +442,10 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             rag_trace_data=rag_trace,
             evaluation_status="needs_review" if human_review_needed else "completed",
         )
-        
+
         # 非拒答情况下确保其他维度分数不为 None（knowledge_score 和 total_score 允许 None）
         if any(s is None for s in [evaluation.inquiry_score,
-                                 evaluation.humanistic_score, evaluation.diagnosis_score, 
+                                 evaluation.humanistic_score, evaluation.diagnosis_score,
                                  evaluation.treatment_score]):
              raise EvaluationValidationError("评估 JSON 缺少分数字段", str(scoring_data))
 
@@ -549,7 +549,7 @@ async def get_stats(db: AsyncSession, doctor_id: Optional[int] = None) -> dict:
         )
         user_avgs_result = await db.execute(q_user_avgs)
         user_avgs_rows = user_avgs_result.all()
-        
+
         distribution = {"优秀(90-100)": 0, "良好(80-89)": 0, "一般(60-79)": 0, "不及格(<60)": 0}
         for row in user_avgs_rows:
             if row.avg_score is not None:

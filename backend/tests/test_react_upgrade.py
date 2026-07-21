@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 """ReAct 技术升级测试 — Knowledge Agent ReAct + Reflection Agent"""
 
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from app.orchestration.state import (
+    ReflectionIssue,
+    ReflectionResult,
+)
+from app.services.tools.base import ToolContext
 from app.services.tools.consistency import (
-    CheckScoreConsistency,
     CheckEvidenceSufficiency,
+    CheckScoreConsistency,
     DetectScoreContradictions,
     SummarizeEvaluation,
     register_consistency_tools,
 )
-from app.services.tools.base import ToolContext
 from app.services.tools.registry import ToolRegistry
-from app.orchestration.state import (
-    ReflectionResult,
-    ReflectionIssue,
-    DimensionResult,
-)
-
 
 # ── 一致性检查工具测试 ─────────────────────────────────────────────────────────
 
@@ -347,7 +345,6 @@ class TestGraphIntegration:
     async def test_reflection_check_disabled(self):
         """验证反思智能体禁用时正常跳过"""
         from app.orchestration.graph import reflection_check
-        from app.orchestration.state import EvaluationState
 
         state = {
             "dimension_results": {},

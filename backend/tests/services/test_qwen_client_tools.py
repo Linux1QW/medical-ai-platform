@@ -3,17 +3,15 @@
 使用 mock 模拟 Qwen API 响应，测试 call_qwen_with_tools 函数的各种场景。
 """
 
-import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.qwen_client import (
-    call_qwen_with_tools,
-    call_qwen_chat,
-    ToolCallResult,
-    ToolCallTrace,
-)
+import pytest
 
+from app.services.qwen_client import (
+    ToolCallResult,
+    call_qwen_chat,
+    call_qwen_with_tools,
+)
 
 # ── Mock 辅助 ────────────────────────────────────────────────────────────────────
 

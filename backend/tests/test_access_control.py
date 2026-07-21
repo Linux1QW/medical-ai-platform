@@ -1,7 +1,8 @@
 """资源访问权限校验测试"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi import HTTPException
 
 from app.core.access import require_consultation_access

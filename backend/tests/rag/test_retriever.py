@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """检索模块集成测试（需要知识库数据）"""
 
-import pytest
-from app.services.rag.types import RetrievalQuery, EvidenceItem
+from app.services.rag.types import EvidenceItem
 
 
 class TestEvidenceConversion:
@@ -27,8 +26,8 @@ class TestRetrievalBudget:
 
     def test_budget_constants(self):
         from app.services.rag.types import (
-            MAX_MQE_EXPANSIONS,
             MAX_HYDE_CALLS,
+            MAX_MQE_EXPANSIONS,
             MAX_RAG_CANDIDATES,
         )
         assert MAX_MQE_EXPANSIONS == 2

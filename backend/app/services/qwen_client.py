@@ -4,23 +4,22 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
 
 import httpx
-from openai import AsyncOpenAI, APIError, APITimeoutError, APIConnectionError, RateLimitError
+from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from app.core.config import settings
 from app.services.llm_cache import LLMResponseCache
-from app.services.token_tracker import token_tracker
-from app.services.observability.alerting import alert_manager
-from app.services.model_router import model_router
 from app.services.llm_failover import failover_manager
+from app.services.observability.alerting import alert_manager
 from app.services.observability.langfuse_client import get_tracer
 from app.services.observability.metrics import (
     LLM_CALLS_TOTAL,
     LLM_REQUEST_DURATION,
     LLM_TOKENS_TOTAL,
 )
+from app.services.token_tracker import token_tracker
 
 logger = logging.getLogger(__name__)
 

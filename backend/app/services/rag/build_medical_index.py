@@ -19,9 +19,9 @@ import fitz  # PyMuPDF
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from app.services.rag.embeddings import get_embeddings
-from app.services.rag.medical_store import get_medical_store
-from app.services.rag.metadata_config import get_enriched_metadata, DocumentMetadata
 from app.services.rag.entity_resolver import extract_entities
+from app.services.rag.medical_store import get_medical_store
+from app.services.rag.metadata_config import DocumentMetadata, get_enriched_metadata
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -173,10 +173,10 @@ def _split_by_sentences(text: str) -> List[str]:
     """按句子边界分割文本"""
     if len(text) <= CHUNK_SIZE:
         return [text]
-    
+
     # 按句末标点分割
     parts = re.split(f'({SENTENCE_END_PUNCT})', text)
-    
+
     # 合并标点回句子
     sentences = []
     for i in range(0, len(parts) - 1, 2):
@@ -185,27 +185,27 @@ def _split_by_sentences(text: str) -> List[str]:
             sentence += parts[i + 1]  # 加上标点
         if sentence.strip():
             sentences.append(sentence.strip())
-    
+
     # 处理最后可能无标点的部分
     if len(parts) % 2 == 1 and parts[-1].strip():
         sentences.append(parts[-1].strip())
-    
+
     return sentences if sentences else [text]
 
 
 def _hard_split(text: str, chunk_size: int) -> List[str]:
     """硬切割兜底：对无标点的极长文本进行字符级分割
-    
+
     Args:
         text: 文本内容
         chunk_size: 每块最大字符数
-        
+
     Returns:
         文本块列表
     """
     if len(text) <= chunk_size:
         return [text]
-    
+
     chunks = []
     start = 0
     while start < len(text):
@@ -214,30 +214,30 @@ def _hard_split(text: str, chunk_size: int) -> List[str]:
         if chunk:
             chunks.append(chunk)
         start = end
-    
+
     return chunks
 
 
 def _merge_units(units: List[str], chunk_size: int) -> List[str]:
     """将小单元合并为目标大小的块
-    
+
     Args:
         units: 文本单元列表（段落或句子）
         chunk_size: 目标块大小
-        
+
     Returns:
         合并后的文本块列表
     """
     if not units:
         return []
-    
+
     chunks = []
     current_chunk = []
     current_len = 0
-    
+
     for unit in units:
         unit_len = len(unit)
-        
+
         # 如果当前块为空，直接加入
         if not current_chunk:
             current_chunk.append(unit)
@@ -251,33 +251,33 @@ def _merge_units(units: List[str], chunk_size: int) -> List[str]:
             chunks.append('\n'.join(current_chunk))
             current_chunk = [unit]
             current_len = unit_len
-    
+
     # 保存最后一个块
     if current_chunk:
         chunks.append('\n'.join(current_chunk))
-    
+
     return chunks
 
 
 def _apply_overlap(chunks: List[str], overlap: int) -> List[str]:
     """在相邻块之间应用重叠
-    
+
     Args:
         chunks: 文本块列表
         overlap: 重叠字符数
-        
+
     Returns:
         添加了重叠的新块列表
     """
     if len(chunks) <= 1 or overlap <= 0:
         return chunks
-    
+
     result = [chunks[0]]
-    
+
     for i in range(1, len(chunks)):
         prev_chunk = chunks[i - 1]
         curr_chunk = chunks[i]
-        
+
         # 从上一个块末尾取重叠内容
         if len(prev_chunk) > overlap:
             overlap_text = prev_chunk[-overlap:]
@@ -285,20 +285,20 @@ def _apply_overlap(chunks: List[str], overlap: int) -> List[str]:
             # 找到第一个换行符或句末标点后的位置
             newline_pos = overlap_text.find('\n')
             punct_match = re.search(SENTENCE_END_PUNCT, overlap_text)
-            
+
             if newline_pos > 0:
                 overlap_text = overlap_text[newline_pos + 1:]
             elif punct_match:
                 overlap_text = overlap_text[punct_match.end():]
-            
+
             overlap_text = overlap_text.strip()
-            
+
             # 避免重叠文本以标题格式开头，导致与当前块的标题重复
             if overlap_text.startswith('【') and '】' in overlap_text:
                 bracket_end = overlap_text.find('】')
                 if bracket_end > 0:
                     overlap_text = overlap_text[bracket_end + 1:].strip()
-            
+
             if overlap_text:
                 # 检查当前块是否以标题开头，如果是，保留标题在开头
                 if curr_chunk.startswith('【') and '\n' in curr_chunk:
@@ -315,8 +315,8 @@ def _apply_overlap(chunks: List[str], overlap: int) -> List[str]:
             new_chunk = curr_chunk
 
         result.append(new_chunk)
-    
-    
+
+
     return result
 
 
@@ -957,7 +957,6 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
         {"previous": str, "current": str, "doc_count": int}
         或 {"error": str} 如果切换失败
     """
-    import time
     from app.core.config import settings
     from app.services.rag.medical_store import _reset_collection_cache
 
@@ -1068,59 +1067,60 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
 
 async def _health_check_index(timeout: float = 10.0) -> bool:
     """索引健康检查：执行标准查询验证索引可用性和响应时间
-    
+
     使用简单的向量查询验证索引可用性，不调用 LLM。
-    
+
     Args:
         timeout: 单次查询超时阈值（秒）
-    
+
     Returns:
         True 健康，False 不健康
     """
     import time
+
     from app.services.rag.medical_store import get_medical_store
-    
+
     try:
         store = get_medical_store()
         if store.collection is None:
             logger.warning("Health check: collection is None")
             return False
-        
+
         # 使用标准测试查询验证索引
         test_queries = ["高血压 诊疗指南", "糖尿病 治疗方案"]
-        
+
         # 获取 embedding 函数
         from app.services.rag.embeddings import get_embeddings
         embedding_fn = get_embeddings()
-        
+
         for query in test_queries:
             start = time.time()
-            
+
             # 生成查询向量
             query_embedding = await asyncio.to_thread(
                 embedding_fn.embed_query, query
             )
-            
+
             # 执行向量查询
             results = store.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=3,
             )
-            
+
             elapsed = time.time() - start
-            
+
             if elapsed > timeout:
                 logger.warning(f"Health check query took {elapsed:.2f}s (timeout={timeout}s)")
                 return False
-            
+
             # 检查结果
             if not results or not results.get('ids') or not results['ids'][0]:
                 logger.warning(f"Health check query returned no results: {query}")
                 return False
-        
+
         logger.info("Health check passed")
         return True
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return False

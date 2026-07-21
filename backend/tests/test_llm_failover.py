@@ -1,8 +1,7 @@
 """LLM Failover Manager 测试"""
 import json
-import pytest
 import threading
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # 测试用配置
 MOCK_PROVIDERS = [

@@ -1,19 +1,21 @@
 """LangGraph 主图测试"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app.orchestration.graph import RunAgentState
 from app.orchestration.state import (
-    EvaluationState,
+    AgentResultEnvelope,
     EvaluationContext,
-    SubmissionFlags,
+    EvaluationState,
     RoutePlan,
     SafetyResult,
-    AgentResultEnvelope,
+    SubmissionFlags,
+)
+from app.orchestration.state import (
     DimensionResult as StateDimensionResult,
 )
-from app.orchestration.graph import RunAgentState
-
 
 # ── 图构建测试 ────────────────────────────────────────────────────────────
 
@@ -45,8 +47,9 @@ class TestBuildEvaluationGraph:
     @pytest.mark.asyncio
     async def test_graph_compiles_with_mock_checkpointer(self):
         """图应该能用 mock checkpointer 编译"""
-        from app.orchestration.graph import build_evaluation_graph
         from langgraph.checkpoint.memory import MemorySaver
+
+        from app.orchestration.graph import build_evaluation_graph
 
         graph = build_evaluation_graph()
         checkpointer = MemorySaver()
@@ -639,8 +642,9 @@ class TestRouteToAgents:
 
     def test_route_creates_send_for_each_agent(self):
         """route_to_agents 应该为每个选中的 agent 创建一个 Send"""
-        from app.orchestration.graph import route_to_agents
         from langgraph.types import Send
+
+        from app.orchestration.graph import route_to_agents
 
         state: EvaluationState = {
             "run_id": "test-20",
@@ -763,8 +767,9 @@ class TestSendFanOutFanIn:
     @pytest.mark.asyncio
     async def test_graph_compiles_with_send(self):
         """包含 Send 机制的图应该能成功编译"""
-        from app.orchestration.graph import build_evaluation_graph
         from langgraph.checkpoint.memory import MemorySaver
+
+        from app.orchestration.graph import build_evaluation_graph
 
         graph = build_evaluation_graph()
         checkpointer = MemorySaver()

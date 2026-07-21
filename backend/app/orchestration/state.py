@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from operator import add
-from typing import Annotated, Any, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
-
 
 # ── 输入上下文 ──────────────────────────────────────────────────────────────
 

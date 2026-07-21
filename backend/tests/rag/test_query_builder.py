@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """查询构建测试"""
 
-import pytest
-from app.services.agents.knowledge_agent import extract_clinical_facts, build_queries
+from app.services.agents.knowledge_agent import build_queries, extract_clinical_facts
 from app.services.rag.types import ClinicalFacts
 
 

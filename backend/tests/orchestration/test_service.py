@@ -1,15 +1,14 @@
 """evaluation_service 重构测试 — 新图路径与辅助函数"""
 
-import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from app.orchestration.state import (
-    DimensionResult,
     AgentResultEnvelope,
+    DimensionResult,
     SafetyResult,
 )
-
 
 # ── _parse_symptoms ──────────────────────────────────────────────────────────
 

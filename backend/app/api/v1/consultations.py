@@ -1,36 +1,36 @@
 import logging
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.limiter import limiter
 from app.core.access import require_consultation_access
-from app.core.deps import get_current_user
 from app.core.audit import record_audit_log
-from app.core.validation import sanitize_text
+from app.core.deps import get_current_user
+from app.core.limiter import limiter
 from app.core.masking import mask_name
+from app.core.validation import sanitize_text
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.consultation import (
     ConsultationCreate,
-    ConsultationOut,
     ConsultationDetail,
+    ConsultationOut,
+    DiagnosisSubmit,
     MessageCreate,
     MessageOut,
-    DiagnosisSubmit,
 )
 from app.services.consultation_service import (
     create_consultation,
-    list_consultations,
+    delete_consultation,
+    end_consultation,
     get_messages,
+    list_consultations,
     send_doctor_message,
     send_doctor_message_stream,
-    end_consultation,
     submit_diagnosis,
-    delete_consultation,
 )
 
 logger = logging.getLogger(__name__)

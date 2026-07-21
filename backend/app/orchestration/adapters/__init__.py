@@ -1,9 +1,9 @@
-from app.orchestration.adapters.registry import register_adapter
-from app.orchestration.adapters.inquiry import InquiryAdapter
 from app.orchestration.adapters.diagnosis import DiagnosisAdapter
-from app.orchestration.adapters.treatment import TreatmentAdapter
-from app.orchestration.adapters.knowledge import KnowledgeAdapter
 from app.orchestration.adapters.humanistic import HumanisticAdapter
+from app.orchestration.adapters.inquiry import InquiryAdapter
+from app.orchestration.adapters.knowledge import KnowledgeAdapter
+from app.orchestration.adapters.registry import register_adapter
+from app.orchestration.adapters.treatment import TreatmentAdapter
 
 
 def register_all():

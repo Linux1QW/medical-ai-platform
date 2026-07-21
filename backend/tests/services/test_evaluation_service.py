@@ -7,21 +7,20 @@
 """
 
 import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
-from app.models.user import User
 from app.services.evaluation_service import (
+    EvaluationValidationError,
     _extract_json,
     _parse_symptoms,
     _score_range_label,
-    EvaluationValidationError,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

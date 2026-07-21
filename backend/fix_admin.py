@@ -1,8 +1,9 @@
 
 import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 # Assuming the script is run from the root of the backend directory
 from app.core.config import settings
@@ -23,7 +24,7 @@ async def fix_admin_password():
         if admin_user:
             print("Found admin user. Updating password...")
             new_hashed_password = hash_password('admin123')
-            
+
             # Update the password
             await db.execute(
                 update(User)

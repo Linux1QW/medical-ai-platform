@@ -11,31 +11,29 @@
 """
 
 import json
+import logging
 import re
 import time
 import uuid
-import logging
 from typing import Optional
 
 from app.core.config import settings
-from app.utils.json_parser import extract_json_from_text
 from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
+from app.services.rag.reranker import two_stage_rerank
+from app.services.rag.retriever import tiered_retrieve
 from app.services.rag.types import (
-    RetrievalQuery,
+    Citation,
     ClinicalFacts,
     EvidenceItem,
-    RetrievalBundle,
     RetrievalConfidence,
-    Citation,
-    KnowledgeAssessment,
+    RetrievalQuery,
 )
-from app.services.rag.retriever import tiered_retrieve
-from app.services.rag.reranker import two_stage_rerank
-from app.services.tools.base import ToolContext
-from app.services.tools.registry import ToolRegistry
-from app.services.tools.executor import ToolExecutor
-from app.services.tools.budget import ToolBudget
 from app.services.tools import register_all_tools
+from app.services.tools.base import ToolContext
+from app.services.tools.budget import ToolBudget
+from app.services.tools.executor import ToolExecutor
+from app.services.tools.registry import ToolRegistry
+from app.utils.json_parser import extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -888,7 +886,7 @@ async def run_knowledge_check_with_tools(
         confidence = max(0.0, min(1.0, confidence))
         evidence_sufficiency = parsed.get("evidence_sufficiency", "insufficient")
         analysis_text = parsed.get("analysis", "")
-        key_findings = parsed.get("key_findings", [])
+        parsed.get("key_findings", [])
         used_citation_ids = parsed.get("used_citation_ids", [])
 
         # ── Step 9-10: 收集 allowed_citation_ids 并执行引用校验后处理 ──
@@ -957,7 +955,7 @@ async def run_knowledge_check_with_tools(
                         confidence = max(0.0, min(1.0, confidence))
                         evidence_sufficiency = parsed.get("evidence_sufficiency", "insufficient")
                         analysis_text = parsed.get("analysis", "")
-                        key_findings = parsed.get("key_findings", [])
+                        parsed.get("key_findings", [])
                         used_citation_ids = parsed.get("used_citation_ids", [])
                         # 合并修正轮次的 trace
                         tool_result.tool_calls.extend(correction_result.tool_calls)
@@ -1273,7 +1271,7 @@ async def run_knowledge_check_react(
         facts = extract_clinical_facts(
             conversation_text, patient_info, doctor_diagnosis, treatment_plan
         )
-        queries = build_queries(facts)
+        build_queries(facts)
         logger.info(
             f"[ReAct] 病例事实提取完成：症状={len(facts.symptoms)}个, "
             f"诊断={len(facts.doctor_diagnoses)}个, 治疗项={len(facts.treatment_items)}个"
@@ -1410,7 +1408,7 @@ async def run_knowledge_check_react(
         confidence = max(0.0, min(1.0, confidence))
         evidence_sufficiency = final_parsed.get("evidence_sufficiency", "insufficient")
         analysis_text = final_parsed.get("analysis", "")
-        key_findings = final_parsed.get("key_findings", [])
+        final_parsed.get("key_findings", [])
         used_citation_ids = final_parsed.get("used_citation_ids", [])
 
         # ── Step 8: 引用校验后处理 ──

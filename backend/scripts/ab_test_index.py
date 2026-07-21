@@ -11,16 +11,13 @@
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
-import time
 from pathlib import Path
 
 # 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,9 +49,9 @@ async def run_ab_comparison_standalone(
     Returns:
         对比报告字典。
     """
+    from evaluation.ab_compare import run_ab_comparison, write_ab_report
     from evaluation.datasets import load_gold_cases
     from evaluation.runners import filter_cases_by_split
-    from evaluation.ab_compare import run_ab_comparison, write_ab_report
 
     # 加载测试用例
     if cases_path is None:

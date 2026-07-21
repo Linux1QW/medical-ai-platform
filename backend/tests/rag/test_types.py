@@ -2,12 +2,12 @@
 """RAG 数据契约模型测试"""
 
 import pytest
+
 from app.services.rag.types import (
-    RetrievalQuery,
+    Citation,
     EvidenceItem,
     RetrievalBundle,
-    Citation,
-    ClinicalFacts,
+    RetrievalQuery,
 )
 
 

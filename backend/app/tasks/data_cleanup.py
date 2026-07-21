@@ -29,10 +29,11 @@ def cleanup_expired_records() -> dict:
 
 async def _do_cleanup() -> dict:
     """执行清理逻辑"""
+    from sqlalchemy import delete
+
     from app.db.session import AsyncSessionLocal
     from app.models.audit_log import AuditLog
     from app.models.evaluation_run import EvaluationRun
-    from sqlalchemy import delete
 
     async with AsyncSessionLocal() as db:
         now = datetime.utcnow()

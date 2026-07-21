@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import require_permission
 from app.db.session import get_db
-from app.models.user import User
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
+from app.models.user import User
 
 router = APIRouter()
 

@@ -1,6 +1,8 @@
 import asyncio
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+
 
 async def migrate():
     engine = create_async_engine('mysql+aiomysql://root:qjr3225365@localhost:3306/medical_ai')
@@ -12,7 +14,7 @@ async def migrate():
             if 'max_rounds' not in columns:
                 print("Adding max_rounds to consultations table...")
                 await conn.execute(text("ALTER TABLE consultations ADD COLUMN max_rounds INT DEFAULT 20 COMMENT '最大允许问诊轮次'"))
-            
+
             # 2. 提交更改
             await conn.commit()
             print("Migration completed successfully.")

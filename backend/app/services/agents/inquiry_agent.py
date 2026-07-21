@@ -3,6 +3,7 @@
 
 import json
 import logging
+
 from app.services.qwen_client import call_qwen_chat
 from app.utils.json_parser import extract_json_from_text
 
@@ -228,14 +229,14 @@ def _calculate_coverage(slot_data: dict) -> float:
     slots = slot_data.get("slots", {})
     total_slots = 0
     filled_slots = 0
-    
+
     for category, items in CLINICAL_SCHEMA.items():
         category_data = slots.get(category, {})
         for slot in items:
             total_slots += 1
             if category_data.get(slot, False):
                 filled_slots += 1
-    
+
     return filled_slots / total_slots if total_slots > 0 else 0.0
 
 
@@ -243,7 +244,7 @@ def _calculate_critical(slot_data: dict) -> float:
     """计算关键路径得分"""
     slots = slot_data.get("slots", {})
     critical_slots = slot_data.get("critical_slots", {})
-    
+
     # 从 Schema 槽位中提取关键路径相关槽位
     critical_from_schema = {
         "symptom": slots.get("chief_complaint", {}).get("symptom", False),
@@ -251,49 +252,49 @@ def _calculate_critical(slot_data: dict) -> float:
         "duration": slots.get("chief_complaint", {}).get("duration", False),
         "severity": slots.get("chief_complaint", {}).get("severity", False),
     }
-    
+
     # 合并关键路径槽位
     all_critical = {
         **critical_from_schema,
         "associated_symptom": critical_slots.get("associated_symptom", False),
         "risk_factor": critical_slots.get("risk_factor", False),
     }
-    
+
     hit_count = sum(1 for v in all_critical.values() if v)
     total_count = len(CRITICAL_PATH)
-    
+
     return hit_count / total_count if total_count > 0 else 0.0
 
 
 def _calculate_logic(logic_data: dict) -> float:
     """计算问诊逻辑得分"""
     steps = logic_data.get("inquiry_steps", [])
-    
+
     # 过滤出有效步骤（排除 other）
     valid_steps = [s for s in steps if s in IDEAL_ORDER]
-    
+
     if len(valid_steps) <= 1:
         return 1.0  # 步骤太少，默认满分
-    
+
     # 计算顺序偏差
     order_violations = 0
     for i in range(len(valid_steps) - 1):
         current_idx = IDEAL_ORDER.index(valid_steps[i]) if valid_steps[i] in IDEAL_ORDER else -1
         next_idx = IDEAL_ORDER.index(valid_steps[i + 1]) if valid_steps[i + 1] in IDEAL_ORDER else -1
-        
+
         if current_idx != -1 and next_idx != -1 and next_idx < current_idx:
             # 逆序违规
             order_violations += 1
-    
+
     # 计算跳步（跳过中间步骤）
     for i in range(len(valid_steps) - 1):
         current_idx = IDEAL_ORDER.index(valid_steps[i]) if valid_steps[i] in IDEAL_ORDER else -1
         next_idx = IDEAL_ORDER.index(valid_steps[i + 1]) if valid_steps[i + 1] in IDEAL_ORDER else -1
-        
+
         if current_idx != -1 and next_idx != -1 and next_idx > current_idx + 1:
             # 跳步
             order_violations += 0.5
-    
+
     n = len(valid_steps)
     logic_score = 1.0 - (order_violations / n)
     return max(0.0, min(1.0, logic_score))
@@ -302,13 +303,13 @@ def _calculate_logic(logic_data: dict) -> float:
 def _calculate_efficiency(logic_data: dict) -> float:
     """计算问诊效率得分"""
     classifications = logic_data.get("question_classification", [])
-    
+
     if not classifications:
         return 0.5  # 默认值
-    
+
     relevant_count = sum(1 for c in classifications if c.get("category") == "relevant")
     total_count = len(classifications)
-    
+
     return relevant_count / total_count if total_count > 0 else 0.0
 
 
@@ -317,11 +318,11 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
     """生成详细的分析文本"""
     slots = slot_data.get("slots", {})
     critical_slots = slot_data.get("critical_slots", {})
-    
+
     # 收集已填充和未填充的槽位
     filled = []
     unfilled = []
-    
+
     for category, items in CLINICAL_SCHEMA.items():
         category_data = slots.get(category, {})
         for slot in items:
@@ -331,11 +332,11 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
                 filled.append(cn_name)
             else:
                 unfilled.append(cn_name)
-    
+
     # 关键路径状态
     critical_filled = []
     critical_unfilled = []
-    
+
     if slots.get("chief_complaint", {}).get("symptom"):
         critical_filled.append(CRITICAL_CN_MAP.get("symptom", "symptom"))
     else:
@@ -365,18 +366,18 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
         critical_filled.append(CRITICAL_CN_MAP.get("risk_factor", "risk_factor"))
     else:
         critical_unfilled.append(CRITICAL_CN_MAP.get("risk_factor", "risk_factor"))
-    
+
     # 问诊步骤分析
     steps = logic_data.get("inquiry_steps", [])
     classifications = logic_data.get("question_classification", [])
-    
+
     relevant_count = sum(1 for c in classifications if c.get("category") == "relevant")
     redundant_count = sum(1 for c in classifications if c.get("category") == "redundant")
     irrelevant_count = sum(1 for c in classifications if c.get("category") == "irrelevant")
-    
+
     # 生成分析文本
     analysis_parts = []
-    
+
     # 1. 信息覆盖分析
     coverage_desc = f"信息覆盖度{coverage*100:.0f}%，共{len(filled)}个信息点已采集"
     if unfilled:
@@ -384,13 +385,13 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
         if len(unfilled) > 3:
             coverage_desc += "等"
     analysis_parts.append(coverage_desc)
-    
+
     # 2. 关键路径分析
     critical_desc = f"关键信息采集率{critical*100:.0f}%，已覆盖{len(critical_filled)}项关键要素"
     if critical_unfilled:
         critical_desc += f"，缺失：{', '.join(critical_unfilled)}"
     analysis_parts.append(critical_desc)
-    
+
     # 3. 问诊逻辑分析
     valid_steps = [s for s in steps if s in IDEAL_ORDER]
     if valid_steps:
@@ -401,7 +402,7 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
     else:
         logic_desc = f"问诊逻辑性{logic*100:.0f}%"
     analysis_parts.append(logic_desc)
-    
+
     # 4. 问诊效率分析
     total_q = len(classifications)
     efficiency_desc = f"问诊效率{efficiency*100:.0f}%，共{total_q}个问题，其中{relevant_count}个有效"
@@ -410,7 +411,7 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
     if irrelevant_count > 0:
         efficiency_desc += f"，{irrelevant_count}个偏离主题"
     analysis_parts.append(efficiency_desc)
-    
+
     return "。".join(analysis_parts) + "。"
 
 
@@ -419,7 +420,7 @@ def _generate_analysis(coverage: float, critical: float, logic: float, efficienc
 async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dict:
     """
     基于结构化建模与可计算指标的问诊过程评估
-    
+
     评估维度：
     1. Coverage (30%): 临床信息 Schema 槽位填充率
     2. Critical (30%): 关键问诊路径覆盖率
@@ -437,10 +438,10 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
                 "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请提取槽位填充信息。"
             },
         ]
-        
+
         slot_result = await call_qwen_chat(slot_messages, temperature=0.2)
         slot_data = _extract_json(slot_result)
-        
+
     except Exception as e:
         logging.error(f"槽位填充 LLM 调用失败: {e}")
         # 降级处理：使用默认空数据
@@ -454,7 +455,7 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
             },
             "critical_slots": {"associated_symptom": False, "risk_factor": False}
         }
-    
+
     try:
         # ── Step 3 & 4: 问诊步骤 + 问题分类（第二次 LLM 调用）──
         logic_messages = [
@@ -466,10 +467,10 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
                 "content": f"【患者信息】\n{patient_info}\n\n【问诊对话记录】\n{conversation_text}\n\n请提取问诊步骤序列和问题分类。"
             },
         ]
-        
+
         logic_result = await call_qwen_chat(logic_messages, temperature=0.2)
         logic_data = _extract_json(logic_result)
-        
+
     except Exception as e:
         logging.error(f"问诊逻辑 LLM 调用失败: {e}")
         # 降级处理
@@ -477,13 +478,13 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
             "inquiry_steps": [],
             "question_classification": []
         }
-    
+
     # ── Step 5: 数学计算综合评分 ──
     coverage = _calculate_coverage(slot_data)
     critical = _calculate_critical(slot_data)
     logic = _calculate_logic(logic_data)
     efficiency = _calculate_efficiency(logic_data)
-    
+
     # 加权计算最终得分
     final_score = (
         WEIGHTS["coverage"] * coverage +
@@ -491,13 +492,13 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
         WEIGHTS["logic"] * logic +
         WEIGHTS["efficiency"] * efficiency
     ) * 100
-    
+
     # 确保分数在 0-100 范围内并取整
     final_score = int(round(max(0.0, min(100.0, final_score))))
-    
+
     # 生成分析文本
     analysis = _generate_analysis(coverage, critical, logic, efficiency, slot_data, logic_data)
-    
+
     # 构建返回结果
     result = {
         "score": final_score,
@@ -509,5 +510,5 @@ async def run_inquiry_analysis(conversation_text: str, patient_info: str) -> dic
             "efficiency": {"score": round(efficiency * 100, 1), "weight": WEIGHTS["efficiency"]},
         }
     }
-    
+
     return {"raw_response": json.dumps(result, ensure_ascii=False)}

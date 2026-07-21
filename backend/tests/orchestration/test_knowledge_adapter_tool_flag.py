@@ -3,12 +3,12 @@
 测试 ENABLE_TOOL_USE 开关控制知识 Agent 走不同路径。
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.orchestration.adapters.knowledge import KnowledgeAdapter
-from app.orchestration.state import EvaluationContext, AgentResultEnvelope
-
+from app.orchestration.state import AgentResultEnvelope, EvaluationContext
 
 # ── Fixtures ────────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,4 @@
+# ruff: noqa: F821
 # -*- coding: utf-8 -*-
 """E2E 集成测试
 
@@ -7,13 +8,11 @@
 - 模拟完整流程：注册 → 登录 → 创建问诊 → 发送消息 → 触发评估 → 获取评估结果
 """
 
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
-
 
 # ── Mock 数据库和外部依赖 ─────────────────────────────────────────────────────
 

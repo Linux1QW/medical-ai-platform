@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """元数据解析测试"""
 
-import pytest
-from app.services.rag.metadata_config import parse_filename, get_enriched_metadata
+from app.services.rag.metadata_config import parse_filename
 
 
 class TestParseFilename:

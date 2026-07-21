@@ -3,10 +3,8 @@
 测试 _map_consistency_to_score_v2() 分数映射函数和返回结构兼容性。
 """
 
-import pytest
 
 from app.services.agents.knowledge_agent import _map_consistency_to_score_v2
-
 
 # ── 分数映射测试 ─────────────────────────────────────────────────────────────────
 
@@ -156,7 +154,7 @@ class TestReturnStructure:
 
     def test_tool_trace_included(self):
         """验证 tool_trace 字段存在且为列表"""
-        from app.services.agents.knowledge_agent import _build_error_result, _format_tool_trace
+        from app.services.agents.knowledge_agent import _format_tool_trace
 
         # _format_tool_trace 应返回列表
         traces = _format_tool_trace([])

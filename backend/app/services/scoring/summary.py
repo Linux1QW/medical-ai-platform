@@ -2,11 +2,12 @@
 """评分摘要生成器 — LLM 摘要 + 确定性降级"""
 
 import logging
-from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
-from app.utils.json_parser import extract_json_from_text
-from app.services.scoring.policies import ScoringPolicy
-from app.services.scoring.calculator import DimensionResult
+
 from app.core.config import settings
+from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
+from app.services.scoring.calculator import DimensionResult
+from app.services.scoring.policies import ScoringPolicy
+from app.utils.json_parser import extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +118,8 @@ class SummaryGenerator:
     ) -> str:
         """使用 Tool Use 调用 LLM 生成摘要"""
         from app.services.tools.scoring import (
-            GetEvaluationCriteria,
             GenerateImprovementPlan,
+            GetEvaluationCriteria,
         )
 
         # 构建维度信息（与普通方法相同）

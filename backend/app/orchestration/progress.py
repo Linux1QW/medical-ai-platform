@@ -1,8 +1,9 @@
 """WebSocket 进度映射器"""
 
 import logging
-from app.orchestration.state import ProgressEvent
+
 from app.core.websocket import manager
+from app.orchestration.state import ProgressEvent
 
 logger = logging.getLogger(__name__)
 

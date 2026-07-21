@@ -10,8 +10,8 @@ import logging
 from collections import OrderedDict
 from typing import List, Optional
 
-from openai import AsyncOpenAI
 import httpx
+from openai import AsyncOpenAI
 
 from app.core.config import settings
 

@@ -2,8 +2,8 @@
 """统一 JSON 提取工具 — 三层解析策略"""
 
 import json
-import re
 import logging
+import re
 from typing import Any, Union
 
 logger = logging.getLogger(__name__)

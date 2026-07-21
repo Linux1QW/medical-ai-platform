@@ -7,13 +7,13 @@
 """
 
 import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.patient import VirtualPatient
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -199,7 +199,7 @@ class TestSendDoctorMessage:
         sample_consultation, sample_patient,
     ):
         """消息数未超限时使用完整最近窗口"""
-        from app.services.consultation_service import send_doctor_message, MEMORY_RECENT_TURNS
+        from app.services.consultation_service import send_doctor_message
 
         # 创建少量消息（不超过压缩阈值）
         few_messages = [
@@ -240,7 +240,7 @@ class TestSendDoctorMessage:
         sample_consultation, sample_patient,
     ):
         """消息数超过压缩阈值时触发早期对话压缩"""
-        from app.services.consultation_service import send_doctor_message, MEMORY_COMPRESS_THRESHOLD
+        from app.services.consultation_service import MEMORY_COMPRESS_THRESHOLD, send_doctor_message
 
         # 创建超过压缩阈值的消息
         many_messages = [
@@ -313,7 +313,7 @@ class TestSendMessageStream:
         assert "event: complete" in last_event
 
         # 解析 complete 事件数据
-        data_line = [l for l in last_event.split("\n") if l.startswith("data: ")][0]
+        data_line = [line for line in last_event.split("\n") if line.startswith("data: ")][0]
         data = json.loads(data_line[6:])
         assert "doctor_msg" in data
         assert "patient_msg" in data
@@ -357,7 +357,7 @@ class TestMakeSSEEvent:
         assert event.endswith("\n\n")
 
         # 验证 JSON 数据可解析
-        data_line = [l for l in event.split("\n") if l.startswith("data: ")][0]
+        data_line = [line for line in event.split("\n") if line.startswith("data: ")][0]
         data = json.loads(data_line[6:])
         assert data["step"] == "test"
         assert data["progress"] == 50

@@ -5,10 +5,8 @@
 """
 
 import inspect
-from typing import Optional, List
 
 import pytest
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # a) Schema 兼容性测试
@@ -92,6 +90,7 @@ class TestEvaluationModelFields:
     def test_dimension_score_types(self):
         """验证各维度分数的类型约束：均为 Float"""
         from sqlalchemy import Float
+
         from app.models.evaluation import Evaluation
 
         mapper = Evaluation.__table__.columns
@@ -126,7 +125,7 @@ class TestEvaluationOutSchema:
 
     def test_evaluation_out_fields(self):
         """验证 EvaluationOut 包含所有必要字段及正确类型"""
-        from app.schemas.evaluation import EvaluationOut, CitationOut
+        from app.schemas.evaluation import EvaluationOut
 
         fields = EvaluationOut.model_fields
 
@@ -360,13 +359,13 @@ class TestAgentSignatures:
 
     def test_agent_functions_are_async(self):
         """验证所有 Agent 主函数均为 async"""
+        from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
+        from app.services.agents.humanistic_agent import run_humanistic_evaluation
         from app.services.agents.inquiry_agent import run_inquiry_analysis
         from app.services.agents.knowledge_agent import run_knowledge_check
-        from app.services.agents.humanistic_agent import run_humanistic_evaluation
-        from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
-        from app.services.agents.treatment_agent import run_treatment_evaluation
         from app.services.agents.scoring_agent import run_scoring
         from app.services.agents.suggestion_agent import run_suggestion
+        from app.services.agents.treatment_agent import run_treatment_evaluation
 
         assert inspect.iscoroutinefunction(run_inquiry_analysis), \
             "run_inquiry_analysis 应为 async"
@@ -471,13 +470,13 @@ class TestAgentSignatures:
 
     def test_agent_return_types(self):
         """验证所有 Agent 函数返回类型注解为 dict"""
+        from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
+        from app.services.agents.humanistic_agent import run_humanistic_evaluation
         from app.services.agents.inquiry_agent import run_inquiry_analysis
         from app.services.agents.knowledge_agent import run_knowledge_check
-        from app.services.agents.humanistic_agent import run_humanistic_evaluation
-        from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
-        from app.services.agents.treatment_agent import run_treatment_evaluation
         from app.services.agents.scoring_agent import run_scoring
         from app.services.agents.suggestion_agent import run_suggestion
+        from app.services.agents.treatment_agent import run_treatment_evaluation
 
         for fn in [
             run_inquiry_analysis, run_knowledge_check,

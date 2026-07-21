@@ -6,11 +6,11 @@
 """
 
 import fnmatch
-import pytest
 from unittest.mock import AsyncMock
 
-import app.services.llm_cache as llm_cache_module
+import pytest
 
+import app.services.llm_cache as llm_cache_module
 
 # ── 全局 mock Redis（llm_cache 模块专用）────────────────────────────────────
 

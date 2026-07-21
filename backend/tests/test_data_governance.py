@@ -8,15 +8,15 @@
 - 数据导出 API：端点可用性
 """
 
-import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.core.config import Settings
-from app.core.permissions import get_user_permissions, PERMISSIONS
-from app.models.user import User
-from app.models.model_version import ModelVersion
+import pytest
 
+from app.core.config import Settings
+from app.core.permissions import PERMISSIONS, get_user_permissions
+from app.models.model_version import ModelVersion
+from app.models.user import User
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -127,9 +127,9 @@ class TestCeleryBeatConfig:
 
     def test_cleanup_task_registered(self):
         """清理任务已注册到 Celery"""
-        from app.celery_app import celery_app
         # 导入任务模块以触发注册
         import app.tasks.data_cleanup  # noqa: F401
+        from app.celery_app import celery_app
         assert "cleanup_expired_records" in celery_app.tasks
 
 
@@ -289,8 +289,6 @@ class TestCleanupTask:
     async def test_cleanup_logic(self):
         """清理逻辑正确删除过期数据"""
         from app.tasks.data_cleanup import _do_cleanup
-        from app.models.audit_log import AuditLog
-        from app.models.evaluation_run import EvaluationRun
 
         mock_result = MagicMock()
         mock_result.rowcount = 5

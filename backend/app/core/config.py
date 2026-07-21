@@ -1,9 +1,9 @@
+import json
 import logging
 import os
+from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List, Optional
-import json
 
 logger = logging.getLogger(__name__)
 

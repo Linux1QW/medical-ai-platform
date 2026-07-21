@@ -8,7 +8,6 @@
 import logging
 
 from app.core.config import settings
-from app.orchestration.state import EvaluationContext
 from app.services.agents.suggestion_agent import run_suggestion
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,6 @@
 """LangGraph Checkpointer 工厂和生命周期管理 — Redis 版本"""
 
 import logging
-from typing import Optional
 
 from app.core.config import settings
 
@@ -12,10 +11,10 @@ _checkpointer = None
 
 async def init_checkpointer(redis_url: str = None, ttl: int = None):
     """初始化 Redis Checkpointer（在 FastAPI lifespan 中调用）
-    
+
     Returns:
         checkpointer 实例，如果 LANGGRAPH_ENABLED=false 则返回 None
-    
+
     Raises:
         RuntimeError: LANGGRAPH_ENABLED=true 但 Redis 初始化失败
     """
@@ -65,7 +64,7 @@ async def close_checkpointer():
 
 def get_checkpointer():
     """获取当前 Checkpointer 实例
-    
+
     Returns:
         checkpointer 实例，如果未初始化则返回 None
     """

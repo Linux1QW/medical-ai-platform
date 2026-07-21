@@ -7,11 +7,10 @@
 
 import json
 import logging
+
 from app.services.qwen_client import call_qwen_chat
+from app.services.scoring.policies import get_default_policy
 from app.utils.json_parser import extract_json_from_text
-from app.services.scoring.policies import get_default_policy, ScoringPolicy
-from app.services.scoring.calculator import ScoreCalculator, DimensionResult
-from app.services.scoring.summary import SummaryGenerator
 
 # ── 保留旧常量引用（兼容基线测试 import） ──────────────────────────
 SCORING_WEIGHTS = get_default_policy().weights
@@ -108,8 +107,7 @@ def _generate_fallback_summary(
 
 # ── LLM Prompts（保留旧引用，供外部直接使用） ─────────────────────
 # 从 scoring_agent.py 原始定义复制，保持向后兼容
-from app.services.scoring.summary import SYSTEM_PROMPT, FEWSHOT_USER, FEWSHOT_ASSISTANT  # noqa: E402
-
+from app.services.scoring.summary import FEWSHOT_ASSISTANT, FEWSHOT_USER, SYSTEM_PROMPT  # noqa: E402
 
 # ── Main Function（保留旧签名） ────────────────────────────────────
 

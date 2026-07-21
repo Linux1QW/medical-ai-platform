@@ -8,8 +8,8 @@
 
 from enum import Enum
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # ── 检索置信度 ─────────────────────────────────────────────────────────────────
 

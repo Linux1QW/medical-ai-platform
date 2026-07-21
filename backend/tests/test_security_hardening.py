@@ -8,13 +8,13 @@
 - 安全配置检查：SECRET_KEY 默认值告警
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.core.validation import strip_html_tags, sanitize_text, contains_html
+import pytest
+
 from app.core.audit import record_audit_log
 from app.core.config import Settings
-
+from app.core.validation import contains_html, sanitize_text, strip_html_tags
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -297,8 +297,10 @@ class TestRateLimitConfig:
     def test_rate_limit_handler_returns_429(self):
         """验证速率限制处理器返回 429"""
         import asyncio
-        from app.main import rate_limit_handler
+
         from slowapi.errors import RateLimitExceeded
+
+        from app.main import rate_limit_handler
 
         mock_request = MagicMock()
         mock_request.state = MagicMock()

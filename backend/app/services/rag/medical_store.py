@@ -8,8 +8,8 @@ from typing import Dict, List, Optional
 import chromadb
 from chromadb.config import Settings
 
-from app.services.rag.embeddings import get_embedding, EMBEDDING_DIM
 from app.core.config import settings
+from app.services.rag.embeddings import EMBEDDING_DIM, get_embedding
 
 logger = logging.getLogger(__name__)
 

@@ -31,4 +31,4 @@ celery_app.conf.beat_schedule = {
 }
 
 # 自动发现 tasks 模块
-celery_app.autodiscover_tasks(["app.tasks"])
+celery_app.autodiscover_tasks(["app"])

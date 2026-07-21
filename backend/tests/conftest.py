@@ -25,6 +25,9 @@ def _build_mock_redis():
             return str(counters[key])
         return store.get(key)
 
+    async def mock_set(key, value, ex=None):
+        store[key] = value
+
     async def mock_setex(key, ttl, value):
         store[key] = value
 
@@ -46,14 +49,30 @@ def _build_mock_redis():
         counters[key] = counters.get(key, 0) + 1
         return counters[key]
 
+    async def mock_hgetall(key):
+        return store.get(key, {})
+
+    async def mock_hincrby(key, field, amount=1):
+        if key not in store:
+            store[key] = {}
+        store[key][field] = store[key].get(field, 0) + amount
+        return store[key][field]
+
+    async def mock_expire(key, ttl):
+        pass
+
     redis_mock = AsyncMock()
     redis_mock.get = mock_get
+    redis_mock.set = mock_set
     redis_mock.setex = mock_setex
     redis_mock.ping = mock_ping
     redis_mock.scan = mock_scan
     redis_mock.delete = mock_delete
     redis_mock.ttl = mock_ttl
     redis_mock.incr = mock_incr
+    redis_mock.hgetall = mock_hgetall
+    redis_mock.hincrby = mock_hincrby
+    redis_mock.expire = mock_expire
     redis_mock._store = store
     redis_mock._counters = counters
 

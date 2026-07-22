@@ -16,7 +16,6 @@ import pytest
 
 from app.services.prompts.manager import PromptManager, get_prompt, get_prompt_manager
 
-
 # ── 测试用临时 prompts 目录 ─────────────────────────────────────────────────────
 
 

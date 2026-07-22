@@ -11,8 +11,8 @@ import json
 import logging
 
 from app.orchestration.state import SafetyResult
-from app.services.qwen_client import call_qwen_chat
 from app.services.prompts import get_prompt
+from app.services.qwen_client import call_qwen_chat
 
 logger = logging.getLogger(__name__)
 

@@ -50,9 +50,10 @@ WEIGHT_GRID = [
 
 async def _score_combo(weights, golden, retriever, top_k):
     """在给定权重下跑完整评估集，返回聚合指标"""
+    from evaluate_retrieval import _build_ranked_and_relevant, _run_retriever
+
     from app.core.config import settings
     from app.services.rag.eval_metrics import aggregate, evaluate_case
-    from evaluate_retrieval import _build_ranked_and_relevant, _run_retriever
 
     settings.RRF_WEIGHT_BM25 = weights[0]
     settings.RRF_WEIGHT_DENSE = weights[1]
@@ -112,7 +113,7 @@ async def tune(golden_path, retriever, top_k, primary):
     best_w, best_score, _ = results[0]
     print(f"\n{'='*70}")
     print(f"🏆 最优权重（按 {primary}）：BM25/Dense/Sparse = {best_w}，{primary}={best_score:.4f}")
-    print(f"   如需固定，请在 config.py 设置 RRF_WEIGHT_BM25/DENSE/SPARSE。")
+    print("   如需固定，请在 config.py 设置 RRF_WEIGHT_BM25/DENSE/SPARSE。")
     print(f"{'='*70}")
     return 0
 

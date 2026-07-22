@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """诊断结果评估智能体 — 评估医生提交的诊断结果的准确性与完整性"""
 
-from app.services.qwen_client import call_qwen_chat
 from app.services.prompts import get_prompt
+from app.services.qwen_client import call_qwen_chat
 
 SYSTEM_PROMPT = get_prompt("diagnosis.system")
 

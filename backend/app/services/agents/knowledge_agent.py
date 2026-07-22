@@ -18,8 +18,8 @@ import uuid
 from typing import Optional
 
 from app.core.config import settings
-from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.prompts import get_prompt
+from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.rag.reranker import two_stage_rerank
 from app.services.rag.retriever import tiered_retrieve
 from app.services.rag.types import (

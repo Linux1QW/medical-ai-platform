@@ -22,7 +22,8 @@ RUN apt-get update && \
 
 # 先复制依赖文件，利用 Docker 层缓存
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # ── Stage 2: Production（仅包含运行时依赖） ──
 FROM python:3.10-slim AS base

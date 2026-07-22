@@ -4,8 +4,8 @@
 import logging
 
 from app.core.config import settings
-from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.prompts import get_prompt
+from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.scoring.calculator import DimensionResult
 from app.services.scoring.policies import ScoringPolicy
 from app.utils.json_parser import extract_json_from_text

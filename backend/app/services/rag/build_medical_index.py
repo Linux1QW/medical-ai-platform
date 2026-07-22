@@ -840,12 +840,12 @@ async def build_medical_index(target_version: str = "rag-v2"):
 
     try:
         logger.info(f"开始构建医学知识库索引，文档目录: {PDF_DIR}，目标版本: {target_version}")
-        
+
         # 1. 验证文档目录
         if not PDF_DIR.exists():
             logger.error(f"文档目录不存在: {PDF_DIR}")
             return
-        
+
         # 2. 扫描支持的文档文件（PDF / Word）
         doc_files = sorted(
             f for f in PDF_DIR.iterdir()
@@ -856,14 +856,14 @@ async def build_medical_index(target_version: str = "rag-v2"):
                 f"未找到可处理的文档文件（{', '.join(SUPPORTED_EXTENSIONS)}）: {PDF_DIR}"
             )
             return
-        
+
         logger.info(f"发现 {len(doc_files)} 个文档文件")
-        
+
         # 3. 提取所有文本块
         all_chunks = []  # [{"id": ..., "text": ..., "source": ..., "page": ...}]
         # 每个 source 的全局递增序号，用于 Small-to-Big 邻居块定位
         source_seq_counter: Dict[str, int] = {}
-        
+
         for doc_path in doc_files:
             pages = extract_document(doc_path)
             await apply_ocr_to_pages(pages)  # 低文本页 OCR 兜底（未启用时零开销）

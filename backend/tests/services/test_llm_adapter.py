@@ -20,7 +20,6 @@ from app.services.llm import (
     register_adapter,
 )
 
-
 # ── ProviderConfig ───────────────────────────────────────────────────────────
 
 class TestProviderConfig:
@@ -184,7 +183,6 @@ class TestRefreshActiveProvider:
 
     def test_failover_manager_switch_drives_real_switch(self):
         """failover_manager.switch_to_next() 的返回可驱动 client 真实切换。"""
-        import json
         from unittest.mock import patch
 
         import app.services.qwen_client as q

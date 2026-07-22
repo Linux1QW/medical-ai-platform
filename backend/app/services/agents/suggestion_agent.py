@@ -11,8 +11,8 @@
 import json
 import logging
 
-from app.services.qwen_client import call_qwen_chat
 from app.services.prompts import get_prompt
+from app.services.qwen_client import call_qwen_chat
 from app.utils.json_parser import extract_json_from_text
 
 # ── System Prompt ────────────────────────────────────────────────────────────

@@ -30,6 +30,7 @@ npm ci
 |---|---|
 | ruff | `ruff check backend/` 零违规（含 B、C90 规则；新函数圈复杂度 ≤ 15，禁止新增 noqa） |
 | 测试 | `pytest tests/` 全过；新功能必须附带测试；覆盖率不得低于 CI 门槛（40%） |
+| 前端 | `npm run lint` 零违规；`npm test`（vitest）全过；`tsc -b` 无类型错误 |
 | 类型 | 公共函数补类型标注，mypy 警告尽量清零 |
 
 提交前本地自查：

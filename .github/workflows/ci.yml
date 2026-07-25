@@ -61,7 +61,7 @@ jobs:
           AUDIT_LOG_ENABLED: 'true'
         run: |
           cd backend
-          python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
+          python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=40
 
       - name: Run RAG eval smoke test (mock mode)
         env:

@@ -45,7 +45,7 @@ CONSISTENCY_SYSTEM_PROMPT = get_prompt("knowledge.consistency_system")
 
 # ── 结构化病例事实提取 ──────────────────────────────────────────────────────────
 
-def extract_clinical_facts(
+def extract_clinical_facts(  # noqa: C901
     conversation_text: str,
     patient_info: str,
     doctor_diagnosis: str,
@@ -733,7 +733,7 @@ class _ToolExecutorBridge:
 
 # ── 主函数：Tool Use 模式知识核对 ─────────────────────────────────────────────
 
-async def run_knowledge_check_with_tools(
+async def run_knowledge_check_with_tools(  # noqa: C901
     consultation,
     diagnosis_text: str = "",
     treatment_text: str = "",
@@ -1149,7 +1149,7 @@ def _parse_react_step(text: str) -> dict:
     return result
 
 
-async def run_knowledge_check_react(
+async def run_knowledge_check_react(  # noqa: C901
     consultation,
     diagnosis_text: str = "",
     treatment_text: str = "",

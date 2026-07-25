@@ -249,7 +249,7 @@ def _calculate_efficiency(logic_data: dict) -> float:
     return relevant_count / total_count if total_count > 0 else 0.0
 
 
-def _generate_analysis(coverage: float, critical: float, logic: float, efficiency: float,
+def _generate_analysis(coverage: float, critical: float, logic: float, efficiency: float,  # noqa: C901
                        slot_data: dict, logic_data: dict) -> str:
     """生成详细的分析文本"""
     slots = slot_data.get("slots", {})

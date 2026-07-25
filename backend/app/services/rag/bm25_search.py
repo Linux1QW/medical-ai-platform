@@ -167,7 +167,7 @@ class BM25Index:
 
         # 转换为与原接口兼容的格式
         final_results = []
-        for idx, score in zip(results[0], scores[0]):
+        for idx, score in zip(results[0], scores[0], strict=False):
             idx = int(idx)
             score = float(score)
             if score <= 0:

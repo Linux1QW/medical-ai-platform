@@ -65,7 +65,7 @@ class ScoreCalculator:
 
         # 2. 收集有效维度（status="scored" 且有 score）
         valid = {}
-        for name, weight in self.policy.weights.items():
+        for name, _weight in self.policy.weights.items():
             dim = dimensions.get(name)
             if dim and dim.status == "scored" and dim.score is not None:
                 valid[name] = dim.score

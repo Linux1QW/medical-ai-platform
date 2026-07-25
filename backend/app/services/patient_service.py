@@ -24,6 +24,8 @@ async def list_patients(
     db: AsyncSession,
     personality_type: Optional[str] = None,
     difficulty_level: Optional[int] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> List[VirtualPatient]:
     query = select(VirtualPatient)
     if personality_type:
@@ -31,6 +33,10 @@ async def list_patients(
     if difficulty_level:
         query = query.where(VirtualPatient.difficulty_level == difficulty_level)
     query = query.order_by(VirtualPatient.id.desc())
+    if offset:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all())
 

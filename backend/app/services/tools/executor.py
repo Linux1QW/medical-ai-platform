@@ -49,7 +49,7 @@ class ToolExecutor:
         self._circuit_failures: dict[str, int] = {}
         self._circuit_open_until: dict[str, float] = {}
 
-    async def execute(
+    async def execute(  # noqa: C901
         self,
         tool_name: str,
         arguments_json: str,

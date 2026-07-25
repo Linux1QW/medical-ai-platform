@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,10 +79,12 @@ async def start_consultation(
 
 @router.get("/", response_model=List[ConsultationOut])
 async def get_my_consultations(
+    limit: int = Query(200, ge=1, le=1000, description="单页返回数量上限"),
+    offset: int = Query(0, ge=0, description="分页偏移量"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    consultations = await list_consultations(db, current_user.id)
+    consultations = await list_consultations(db, current_user.id, limit=limit, offset=offset)
     return [_mask_consultation_patient(c, current_user) for c in consultations]
 
 
@@ -94,6 +96,8 @@ async def get_all_consultations(
     score_max: Optional[float] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
+    limit: int = Query(200, ge=1, le=1000, description="单页返回数量上限"),
+    offset: int = Query(0, ge=0, description="分页偏移量"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -109,7 +113,10 @@ async def get_all_consultations(
         "start_time": start_time,
         "end_time": end_time
     }
-    return [_mask_consultation_patient(c, current_user) for c in await list_consultations(db, doctor_id=None, filters=filters)]
+    return [
+        _mask_consultation_patient(c, current_user)
+        for c in await list_consultations(db, doctor_id=None, filters=filters, limit=limit, offset=offset)
+    ]
 
 
 @router.get("/{consultation_id}", response_model=ConsultationDetail)
@@ -154,7 +161,7 @@ async def send_message(
         raise HTTPException(
             status_code=500,
             detail={"error_code": "CONSULTATION_FAILED", "message": "问诊对话失败，请稍后重试"},
-        )
+        ) from None
     return [
         MessageOut.model_validate(doctor_msg),
         MessageOut.model_validate(patient_msg),

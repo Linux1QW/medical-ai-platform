@@ -48,7 +48,7 @@ MQE_SIMILARITY_THRESHOLD = 0.7  # 扩展查询与原始查询的最低 embedding
 
 def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
     """计算两个向量的余弦相似度"""
-    dot = sum(a * b for a, b in zip(v1, v2))
+    dot = sum(a * b for a, b in zip(v1, v2, strict=False))
     norm1 = math.sqrt(sum(a * a for a in v1))
     norm2 = math.sqrt(sum(b * b for b in v2))
     if norm1 == 0.0 or norm2 == 0.0:
@@ -84,7 +84,7 @@ async def _filter_by_embedding_similarity(
         orig_emb = all_embeddings[0]
 
         filtered = []
-        for query, emb in zip(expanded_queries, all_embeddings[1:]):
+        for query, emb in zip(expanded_queries, all_embeddings[1:], strict=False):
             sim = _cosine_similarity(orig_emb, emb)
             if sim >= threshold:
                 filtered.append(query)
@@ -492,7 +492,7 @@ def reciprocal_rank_fusion(
     return final_results
 
 
-async def hybrid_recall(
+async def hybrid_recall(  # noqa: C901
     query: str,
     top_k: int = 10,
 ) -> tuple:
@@ -991,7 +991,7 @@ def _merge_evidence(
 # 分级检索主入口
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def tiered_retrieve(
+async def tiered_retrieve(  # noqa: C901
     queries: list,
     top_k_per_query: int = 10,
     candidate_limit: int = MAX_RAG_CANDIDATES,

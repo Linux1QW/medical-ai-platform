@@ -203,7 +203,7 @@ async def call_qwen_chat(
         metrics.total_failures += 1
         raise LLMConcurrencyTimeoutError(
             f"LLM 服务繁忙，排队等待超过 {settings.LLM_SEMAPHORE_TIMEOUT}s"
-        )
+        ) from None
 
     wait_elapsed = time.monotonic() - wait_start
     metrics.total_wait_time += wait_elapsed

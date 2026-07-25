@@ -107,7 +107,7 @@ class _ToolExecutorBridge:
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 
-async def run_reflection(
+async def run_reflection(  # noqa: C901
     dimension_results: dict,
     total_score: Optional[float] = None,
 ) -> dict:

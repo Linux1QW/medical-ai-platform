@@ -60,8 +60,10 @@ class TestProviderConfig:
         assert c1.identity() != c2.identity()
 
     def test_frozen(self):
+        import dataclasses
+
         cfg = ProviderConfig(api_key="k", base_url="u", model="m")
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.api_key = "x"  # type: ignore[misc]
 
 

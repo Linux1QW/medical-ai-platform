@@ -67,7 +67,7 @@ def calculate_retrieval_metrics(results: List[RagEvalResult], gold_cases: List[R
     mrr_scores: List[float] = []
     ndcg_scores: List[float] = []
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         if not gold_case.gold_doc_ids:
             continue
 
@@ -107,7 +107,7 @@ def calculate_citation_metrics(results: List[RagEvalResult], gold_cases: List[Ra
     all_allowed_citation_ids: set = set()
     all_gold_citation_ids: List[str] = []
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         for citation in result.citation_data:
             if isinstance(citation, dict) and 'id' in citation:
                 all_used_citation_ids.append(citation['id'])
@@ -148,7 +148,7 @@ def calculate_stance_metrics(results: List[RagEvalResult], gold_cases: List[RagG
     correct_stances = 0
     total_stance_comparisons = 0
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         if result.evidence_stance and gold_case.expected_stance:
             total_stance_comparisons += 1
             if result.evidence_stance.lower() == gold_case.expected_stance.lower():
@@ -180,7 +180,7 @@ def find_failed_cases(results: List[RagEvalResult], gold_cases: List[RagGoldCase
     """Find and categorize failed cases."""
     failed_cases: List[Dict[str, str]] = []
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         # False acceptances
         if gold_case.should_refuse and result.knowledge_score is not None and result.knowledge_score != 0:
             failed_cases.append({
@@ -507,7 +507,7 @@ def _delta_str(delta: Optional[float], digits: int = 1, suffix: str = "%") -> st
     return f"{sign}{delta * 100:.{digits}f}{suffix}"
 
 
-def generate_markdown_report(
+def generate_markdown_report(  # noqa: C901
     report: Dict[str, Any],
     comparison_report: Optional[Dict[str, Any]] = None,
 ) -> str:

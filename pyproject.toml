@@ -10,8 +10,13 @@ target-version = "py310"
 src = ["backend"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]  # 行长度由 black 控制
+select = ["E", "F", "W", "I", "B", "C90"]
+# E501 行长度由 black 控制；B008 为 FastAPI Depends()/Query() 默认参数惯用法误报
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.mccabe]
+# 圈复杂度上限；存量超标函数已逐个 noqa 标记，新代码不得超过
+max-complexity = 15
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

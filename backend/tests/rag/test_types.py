@@ -2,6 +2,7 @@
 """RAG 数据契约模型测试"""
 
 import pytest
+from pydantic import ValidationError
 
 from app.services.rag.types import (
     Citation,
@@ -18,11 +19,11 @@ class TestRetrievalQuery:
         assert q.source == "clinical_facts"
 
     def test_invalid_query_type(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RetrievalQuery(query_type="invalid", text="test", source="clinical_facts")
 
     def test_invalid_source(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RetrievalQuery(query_type="case", text="test", source="invalid_source")
 
 

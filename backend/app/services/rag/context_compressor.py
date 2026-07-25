@@ -33,7 +33,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
     """余弦相似度（向量为空或零向量时返回 0）"""
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0.0 or nb == 0.0:
@@ -81,7 +81,7 @@ async def compress_text(
     q_emb = embeddings[0]
     scored = [
         (i, sent, _cosine(q_emb, emb))
-        for i, (sent, emb) in enumerate(zip(sentences, embeddings[1:]))
+        for i, (sent, emb) in enumerate(zip(sentences, embeddings[1:], strict=False))
     ]
 
     kept = [t for t in scored if t[2] >= min_score]

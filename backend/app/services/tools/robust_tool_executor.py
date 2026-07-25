@@ -268,7 +268,7 @@ class RobustToolExecutor:
             self._stats[tool_name] = ToolCallStats()
         return self._stats[tool_name]
 
-    async def execute(
+    async def execute(  # noqa: C901
         self,
         tool_name: str,
         arguments_json: str,

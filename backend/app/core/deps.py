@@ -41,7 +41,7 @@ async def get_current_user(
         raise HTTPException(
             status_code=401,
             detail={"error_code": "AUTH_INVALID_TOKEN", "message": "无效的认证凭据"},
-        )
+        ) from None
 
     from app.services.user_service import get_user_by_id
 

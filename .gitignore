@@ -7,6 +7,11 @@ dist/
 venv/
 env/
 
+# 测试覆盖率产物
+.coverage
+coverage.xml
+htmlcov/
+
 # Node
 node_modules/
 frontend/dist/
@@ -50,3 +55,6 @@ review_*.txt
 
 # 调试日志
 debug.log
+
+# git 历史重写备份（含旧历史，确认无误后应删除）
+*.bundle

@@ -535,7 +535,7 @@ async def dispatch_and_run(state: EvaluationState) -> dict[str, Any]:
     )
 
     envelopes: list[AgentResultEnvelope] = []
-    for name, result in zip(plan.selected_agents, results):
+    for name, result in zip(plan.selected_agents, results, strict=False):
         if isinstance(result, Exception):
             envelopes.append(
                 AgentResultEnvelope(
@@ -775,7 +775,7 @@ def review_gate_router(state: EvaluationState) -> str:
     return "completed"
 
 
-async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:
+async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:  # noqa: C901
     """生成改进建议 — 优先调用 LLM suggestion agent，失败时回退规则建议
 
     当 ENABLE_LLM_SUGGESTION=true 时，调用 suggestion_agent 进行对比学习分析。

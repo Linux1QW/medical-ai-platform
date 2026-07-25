@@ -314,16 +314,18 @@ class TestRAGTypes:
 
     def test_citation_required_fields(self):
         """验证 Citation 必填字段"""
+        from pydantic import ValidationError
+
         from app.services.rag.types import Citation
 
         # 缺少必填字段应抛出异常
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Citation(claim="test", source="test.pdf")  # 缺少 citation_id
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Citation(citation_id="x", source="test.pdf")  # 缺少 claim
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Citation(citation_id="x", claim="test")  # 缺少 source
 
     def test_retrieval_bundle_status_values(self):

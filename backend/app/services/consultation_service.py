@@ -98,8 +98,14 @@ async def get_consultation(db: AsyncSession, consultation_id: int) -> Optional[C
     return result.scalar_one_or_none()
 
 
-async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, filters: Dict = None) -> List[Dict]:
-    """获取问诊记录列表，联表查询患者信息及评分，支持过滤"""
+async def list_consultations(
+    db: AsyncSession,
+    doctor_id: Optional[int] = None,
+    filters: Dict = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> List[Dict]:
+    """获取问诊记录列表，联表查询患者信息及评分，支持过滤与分页"""
     query = (
         select(
             Consultation,
@@ -133,6 +139,10 @@ async def list_consultations(db: AsyncSession, doctor_id: Optional[int] = None, 
             query = query.where(Consultation.started_at <= filters["end_time"])
 
     query = query.order_by(Consultation.id.desc())
+    if offset:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
 
     result = await db.execute(query)
     rows = result.all()

@@ -1,6 +1,6 @@
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import record_audit_log
@@ -35,10 +35,12 @@ PatientResponse = Union[DoctorPatientOut, PatientOut]
 async def get_patients(
     personality_type: Optional[str] = None,
     difficulty_level: Optional[int] = None,
+    limit: int = Query(200, ge=1, le=1000, description="单页返回数量上限"),
+    offset: int = Query(0, ge=0, description="分页偏移量"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    patients = await list_patients(db, personality_type, difficulty_level)
+    patients = await list_patients(db, personality_type, difficulty_level, limit=limit, offset=offset)
     return [_serialize_patient(p, current_user) for p in patients]
 
 

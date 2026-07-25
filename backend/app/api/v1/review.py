@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime
@@ -11,9 +10,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_admin, get_current_user
+from app.db.session import get_db
 from app.models.user import User
+from app.services.review_service import (
+    ReviewSaveError,
+    finalize_review_state,
+    list_pending_evaluations,
+    load_evaluation_state,
+    save_review_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +61,7 @@ class ReviewRecord(BaseModel):
 async def submit_review(
     evaluation_id: str,
     review: ReviewSubmission,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_admin),
 ):
     """提交复核意见（仅管理员）
@@ -66,7 +75,7 @@ async def submit_review(
     review.reviewer_id = str(current_user.id)
 
     # 1. 加载评估状态
-    state = await _load_evaluation_state(evaluation_id)
+    state = await load_evaluation_state(db, evaluation_id)
     if not state:
         raise HTTPException(status_code=404, detail="Evaluation not found or not pending review")
 
@@ -92,10 +101,25 @@ async def submit_review(
 
     # 4. 保存复核记录
     review_id = str(uuid.uuid4())
-    await _save_review_record(review_id, evaluation_id, review, state)
+    try:
+        await save_review_record(
+            db,
+            review_id=review_id,
+            evaluation_id=evaluation_id,
+            reviewer_id=review.reviewer_id,
+            feedback=review.feedback,
+            review_reason=state.get("review_reason"),
+            score_adjustments=review.score_adjustments,
+        )
+    except ReviewSaveError:
+        # 复核记录写入失败必须显式失败，避免调用方误认为复核已存档
+        raise HTTPException(
+            status_code=500,
+            detail={"error_code": "REVIEW_SAVE_FAILED", "message": "复核记录保存失败，请稍后重试"},
+        ) from None
 
     # 5. 恢复图执行或更新最终结果
-    result = await _resume_or_finalize(evaluation_id, state)
+    result = await finalize_review_state(evaluation_id, state)
 
     return {
         "review_id": review_id,
@@ -107,10 +131,11 @@ async def submit_review(
 @router.get("/{evaluation_id}/status")
 async def get_review_status(
     evaluation_id: str,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """获取评估的复核状态（需登录）"""
-    state = await _load_evaluation_state(evaluation_id)
+    state = await load_evaluation_state(db, evaluation_id)
     if not state:
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
@@ -125,153 +150,10 @@ async def get_review_status(
 
 
 @router.get("/pending")
-async def list_pending_reviews(current_user: User = Depends(get_current_admin)):
-    """列出所有待复核的评估（仅管理员）"""
-    pending = await _list_pending_evaluations()
-    return {"pending_reviews": pending, "total": len(pending)}
-
-
-# ── 辅助函数 ─────────────────────────────────────────────────────────────────
-
-
-async def _load_evaluation_state(evaluation_id: str) -> Optional[dict]:
-    """从 Redis checkpoint 或数据库加载评估状态"""
-    # 尝试从 Redis checkpoint 加载
-    try:
-        from app.services.llm_cache import _get_redis
-
-        redis = await _get_redis()
-        if redis:
-            key = f"eval_checkpoint:{evaluation_id}"
-            data = await redis.get(key)
-            if data:
-                return json.loads(data)
-    except Exception as e:
-        logger.warning(f"Failed to load checkpoint from Redis: {e}")
-
-    # Fallback: 从数据库加载
-    try:
-        from sqlalchemy import text
-
-        from app.db.session import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text(
-                    "SELECT state_json FROM evaluation_checkpoints WHERE evaluation_id = :eid"
-                ),
-                {"eid": evaluation_id},
-            )
-            row = result.fetchone()
-            if row:
-                return json.loads(row[0])
-    except Exception as e:
-        logger.warning(f"Failed to load checkpoint from DB: {e}")
-
-    return None
-
-
-async def _save_review_record(
-    review_id: str, evaluation_id: str, review: ReviewSubmission, state: dict
+async def list_pending_reviews(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
 ):
-    """保存复核记录到数据库"""
-    try:
-        from sqlalchemy import text
-
-        from app.db.session import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                text(
-                    """
-                    INSERT INTO review_records (id, evaluation_id, reviewer_id, feedback,
-                                              review_reason, score_adjustments, created_at)
-                    VALUES (:id, :eval_id, :reviewer, :feedback, :reason, :adjustments, :created_at)
-                """
-                ),
-                {
-                    "id": review_id,
-                    "eval_id": evaluation_id,
-                    "reviewer": review.reviewer_id,
-                    "feedback": review.feedback,
-                    "reason": state.get("review_reason"),
-                    "adjustments": (
-                        json.dumps(review.score_adjustments, ensure_ascii=False)
-                        if review.score_adjustments
-                        else None
-                    ),
-                    "created_at": datetime.now(),
-                },
-            )
-            await session.commit()
-    except Exception as e:
-        # 复核记录写入失败必须显式失败，避免调用方误认为复核已存档
-        logger.error(f"Failed to save review record: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error_code": "REVIEW_SAVE_FAILED", "message": "复核记录保存失败，请稍后重试"},
-        )
-
-
-async def _resume_or_finalize(evaluation_id: str, state: dict) -> dict:
-    """恢复图执行或生成最终结果
-
-    如果 LangGraph 支持从 checkpoint 恢复，则继续执行；
-    否则直接标记为完成并返回当前状态。
-    """
-    state["evaluation_status"] = "completed"
-
-    # 保存更新后的状态到 Redis
-    try:
-        from app.services.llm_cache import _get_redis
-
-        redis = await _get_redis()
-        if redis:
-            key = f"eval_checkpoint:{evaluation_id}"
-            await redis.set(
-                key,
-                json.dumps(state, ensure_ascii=False, default=str),
-                ex=86400,
-            )
-    except Exception as e:
-        logger.warning(f"Failed to save updated state: {e}")
-
-    return {
-        "evaluation_id": evaluation_id,
-        "status": "completed",
-        "review_completed": True,
-    }
-
-
-async def _list_pending_evaluations() -> list:
-    """列出所有待复核的评估"""
-    try:
-        from sqlalchemy import text
-
-        from app.db.session import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text(
-                    """
-                    SELECT id, consultation_id, review_reason, created_at
-                    FROM evaluations
-                    WHERE evaluation_status = 'pending_review'
-                    ORDER BY created_at DESC
-                    LIMIT 50
-                """
-                )
-            )
-            rows = result.fetchall()
-            return [
-                {
-                    "evaluation_id": str(row[0]),
-                    "consultation_id": row[1],
-                    "review_reason": row[2],
-                    "created_at": str(row[3]),
-                }
-                for row in rows
-            ]
-    except Exception as e:
-        logger.warning(f"Failed to list pending evaluations: {e}")
-        return []
+    """列出所有待复核的评估（仅管理员）"""
+    pending = await list_pending_evaluations(db)
+    return {"pending_reviews": pending, "total": len(pending)}

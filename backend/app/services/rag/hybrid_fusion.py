@@ -67,7 +67,7 @@ def weighted_rrf(
 
     # 加权 RRF 计算（RRF 仅依赖排名，不依赖原始分数）
     fused_scores: dict[int, float] = {}
-    for ranking, weight in zip(rankings, weights):
+    for ranking, weight in zip(rankings, weights, strict=False):
         for rank, (doc_id, _score) in enumerate(ranking):
             rrf_score = weight / (k + rank + 1)
             fused_scores[doc_id] = fused_scores.get(doc_id, 0.0) + rrf_score
@@ -100,7 +100,7 @@ def simple_weighted_sum(
         weights = [1.0 / n_sources] * n_sources
 
     fused: dict[int, float] = {}
-    for ranking, weight in zip(rankings, weights):
+    for ranking, weight in zip(rankings, weights, strict=False):
         for doc_id, score in ranking:
             fused[doc_id] = fused.get(doc_id, 0.0) + weight * score
 

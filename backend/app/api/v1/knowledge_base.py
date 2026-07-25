@@ -116,7 +116,7 @@ async def add_pdf(
         result = await index_single_pdf(pdf_path, force_replace=body.force_replace)
     except Exception as e:
         logger.error(f"增量索引失败 [{body.filename}]: {e}")
-        raise HTTPException(status_code=500, detail=f"索引失败: {e}")
+        raise HTTPException(status_code=500, detail=f"索引失败: {e}") from e
 
     # 增量操作完成后重建 BM25 索引
     if result["status"] in ("added", "replaced"):

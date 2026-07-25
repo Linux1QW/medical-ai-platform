@@ -46,7 +46,7 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
 
         # 可重试异常（网络/超时类）
         if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=30)
+            raise self.retry(exc=exc, countdown=30) from exc
         raise
 
 

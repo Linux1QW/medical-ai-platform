@@ -231,7 +231,7 @@ def score_range_accuracy(eval_results: List[RagEvalResult], gold_cases: List[Rag
     """
     pairs_with_ranges = [
         (eval_res, gold_case)
-        for eval_res, gold_case in zip(eval_results, gold_cases)
+        for eval_res, gold_case in zip(eval_results, gold_cases, strict=False)
         if gold_case.expected_score_range is not None and eval_res.knowledge_score is not None
     ]
 
@@ -314,7 +314,7 @@ def refusal_metrics_from_results(results: List[RagEvalResult], gold_cases: List[
     for result in results:
         result.system_refused = compute_system_refused(result)
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         result.false_acceptance = compute_false_acceptance(result, gold_case)
 
     # Count different types of cases
@@ -331,25 +331,25 @@ def refusal_metrics_from_results(results: List[RagEvalResult], gold_cases: List[
 
     # Count correct refusals (where system refused when it should have)
     correct_refusals = sum(
-        1 for result, gold_case in zip(results, gold_cases)
+        1 for result, gold_case in zip(results, gold_cases, strict=False)
         if result.system_refused and gold_case.should_refuse
     )
 
     # Count incorrect refusals (where system refused when it shouldn't have)
     incorrect_refusals = sum(
-        1 for result, gold_case in zip(results, gold_cases)
+        1 for result, gold_case in zip(results, gold_cases, strict=False)
         if result.system_refused and not gold_case.should_refuse
     )
 
     # Count correct acceptances (where system didn't refuse when it shouldn't have)
     correct_acceptances = sum(
-        1 for result, gold_case in zip(results, gold_cases)
+        1 for result, gold_case in zip(results, gold_cases, strict=False)
         if not result.system_refused and not gold_case.should_refuse
     )
 
     # Count incorrect acceptances (where system didn't refuse when it should have)
     incorrect_acceptances = sum(
-        1 for result, gold_case in zip(results, gold_cases)
+        1 for result, gold_case in zip(results, gold_cases, strict=False)
         if not result.system_refused and gold_case.should_refuse
     )
 
@@ -518,7 +518,7 @@ def aggregate_metrics_by_dimension(
     """
     groups = defaultdict(list)
 
-    for result, gold_case in zip(results, gold_cases):
+    for result, gold_case in zip(results, gold_cases, strict=False):
         if hasattr(gold_case, dimension):
             dim_value = getattr(gold_case, dimension)
             if dim_value is not None:
@@ -552,7 +552,7 @@ def final_answer_keyword_coverage(eval_results: List[RagEvalResult], gold_cases:
     total_expected_keywords = 0
     total_covered_keywords = 0
 
-    for result, gold_case in zip(eval_results, gold_cases):
+    for result, gold_case in zip(eval_results, gold_cases, strict=False):
         expected_keywords = gold_case.expected_final_answer_keywords or []
         final_answer = result.final_answer_text or ""
 
@@ -588,7 +588,7 @@ def tool_call_accuracy(eval_results: List[RagEvalResult], gold_cases: List[RagGo
 
     correct_cases = 0
 
-    for result, gold_case in zip(eval_results, gold_cases):
+    for result, gold_case in zip(eval_results, gold_cases, strict=False):
         expected_calls = gold_case.expected_tool_calls or []
         actual_calls = result.actual_tool_calls or []
 
@@ -683,7 +683,7 @@ def retrieval_metrics(
     ap_sum = 0.0
 
     for retrieved_ids, gold_ids, grades in zip(
-        retrieved_ids_list, gold_ids_list, relevance_grades_list
+        retrieved_ids_list, gold_ids_list, relevance_grades_list, strict=False
     ):
         # Recall@K
         for k in k_values:
@@ -829,10 +829,10 @@ def refusal_metrics(
         }
 
     # 混淆矩阵
-    tp = sum(1 for p, lbl in zip(predictions, labels) if p and lbl)   # 正确拒绝
-    fp = sum(1 for p, lbl in zip(predictions, labels) if p and not lbl)  # 错误拒绝
-    fn = sum(1 for p, lbl in zip(predictions, labels) if not p and lbl)  # 错误接受
-    tn = sum(1 for p, lbl in zip(predictions, labels) if not p and not lbl)  # 正确接受
+    tp = sum(1 for p, lbl in zip(predictions, labels, strict=False) if p and lbl)   # 正确拒绝
+    fp = sum(1 for p, lbl in zip(predictions, labels, strict=False) if p and not lbl)  # 错误拒绝
+    fn = sum(1 for p, lbl in zip(predictions, labels, strict=False) if not p and lbl)  # 错误接受
+    tn = sum(1 for p, lbl in zip(predictions, labels, strict=False) if not p and not lbl)  # 正确接受
 
     accuracy = (tp + tn) / n
 
@@ -856,7 +856,7 @@ def refusal_metrics(
     }
 
 
-def tool_use_metrics(
+def tool_use_metrics(  # noqa: C901
     tool_call_logs: List[Dict[str, Any]],
     expected_results: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
@@ -976,7 +976,7 @@ def tool_use_metrics(
                 f"tool_call_logs ({total}) 长度不一致"
             )
         correct = 0
-        for log, expected in zip(tool_call_logs, expected_results):
+        for log, expected in zip(tool_call_logs, expected_results, strict=False):
             expected_tool = expected.get("expected_tool")
             expected_output = expected.get("expected_output")
             actual_name = log.get("name")

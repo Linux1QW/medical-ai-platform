@@ -35,8 +35,8 @@ def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON，解析失败时抛出 ValidationError"""
     try:
         return extract_json_from_text(text)
-    except ValueError:
-        raise EvaluationValidationError("评估格式异常，无法解析 JSON", text)
+    except ValueError as e:
+        raise EvaluationValidationError("评估格式异常，无法解析 JSON", text) from e
 
 
 async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
@@ -465,7 +465,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
                 "error_type": "ValidationError",
                 "message": "评估格式异常，请稍后重试",
             }
-        )
+        ) from e
     except Exception as e:
         logging.error(f"评估流程发生异常: {str(e)}")
         await db.rollback()

@@ -29,6 +29,11 @@ backend/.env
 # RAG index (generated, can be rebuilt via build_index.py)
 backend/data/rag_index/
 
+# RAG 评估报告（生成产物，可通过 evaluation.rag_eval 重新生成）
+backend/backend/
+backend/evaluation/reports/*
+!backend/evaluation/reports/.gitkeep
+
 # OS
 .DS_Store
 Thumbs.db

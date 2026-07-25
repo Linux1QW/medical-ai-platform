@@ -170,6 +170,11 @@ class Settings(BaseSettings):
     ALERT_WEBHOOK_TYPE: str = "dingtalk"  # dingtalk | wecom
     LLM_ERROR_RATE_THRESHOLD: float = 0.1  # 10% 错误率告警
 
+    # /metrics 端点访问保护
+    # 非空时要求请求携带 Authorization: Bearer <token>；
+    # 为空且处于生产环境时拒绝访问，开发环境保持开放便于调试。
+    METRICS_TOKEN: str = ""
+
     # Celery 异步任务队列
     CELERY_BROKER_URL: str = "redis://localhost:6379/4"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/5"

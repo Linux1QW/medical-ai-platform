@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import generate_latest
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
 
 import app.models  # noqa: F401
@@ -23,6 +25,7 @@ from app.orchestration.adapters import register_all as register_all_adapters
 from app.orchestration.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
 from app.services.jwt_blacklist import close_blacklist_redis
 from app.services.llm_cache import LLMResponseCache, close_cache_redis
+from app.services.llm_cache import _get_redis as _get_cache_redis
 from app.services.observability.metrics import (
     CACHE_HIT_RATE,
     HTTP_REQUEST_DURATION,
@@ -224,6 +227,22 @@ async def health_check():
     else:
         langgraph_status = "disabled"
 
+    # ── 依赖连通性检查（MySQL / Redis）──
+    checks = {"mysql": "ok", "redis": "ok"}
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(sa_text("SELECT 1"))
+    except Exception as e:
+        checks["mysql"] = "unavailable"
+        logger.warning(f"Health check: MySQL unavailable: {e}")
+    try:
+        redis_client = await _get_cache_redis()
+        if redis_client is None or not await redis_client.ping():
+            checks["redis"] = "unavailable"
+    except Exception as e:
+        checks["redis"] = "unavailable"
+        logger.warning(f"Health check: Redis unavailable: {e}")
+
     llm_cache_stats = await LLMResponseCache.get_stats()
     retrieval_cache_stats = await get_retrieval_cache_stats()
 
@@ -234,8 +253,10 @@ async def health_check():
     except Exception:
         pass
 
-    return {
-        "status": "ok",
+    healthy = all(v == "ok" for v in checks.values())
+    body = {
+        "status": "ok" if healthy else "degraded",
+        "checks": checks,
         "version": settings.VERSION,
         "llm": get_llm_metrics(),
         "llm_cache": llm_cache_stats,
@@ -244,11 +265,21 @@ async def health_check():
         "langgraph_enabled": settings.LANGGRAPH_ENABLED,
         "checkpointer": langgraph_status,
     }
+    if not healthy:
+        return JSONResponse(status_code=503, content=jsonable_encoder(body))
+    return body
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics():
-    """Prometheus 指标导出端点"""
+async def metrics(request: Request):
+    """Prometheus 指标导出端点（METRICS_TOKEN 非空时需 Bearer 鉴权）"""
+    if settings.METRICS_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {settings.METRICS_TOKEN}":
+            raise HTTPException(status_code=403, detail="Forbidden")
+    elif settings.ENVIRONMENT == "production":
+        # 生产环境未配置 METRICS_TOKEN 时默认关闭，避免内部指标外泄
+        raise HTTPException(status_code=403, detail="Forbidden")
     return Response(
         content=generate_latest(),
         media_type="text/plain; version=0.0.4; charset=utf-8",

@@ -3,8 +3,8 @@ import getpass
 import os
 import sys
 
-# 将当前目录添加到路径以便导入 app
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 将 backend 目录加入路径以便导入 app
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine

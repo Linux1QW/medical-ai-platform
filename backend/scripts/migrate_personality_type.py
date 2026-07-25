@@ -7,10 +7,15 @@
 3. 将列改回 ENUM 并使用中文值
 """
 import asyncio
+import sys
+from pathlib import Path
 
-from sqlalchemy import text
+# 将 backend 目录加入路径以便导入 app
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.db.session import AsyncSessionLocal
+from sqlalchemy import text  # noqa: E402
+
+from app.db.session import AsyncSessionLocal  # noqa: E402
 
 
 async def migrate():

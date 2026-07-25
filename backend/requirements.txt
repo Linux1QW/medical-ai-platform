@@ -13,20 +13,21 @@ openai==1.58.1
 email-validator==2.2.0
 chromadb==1.5.7
 pymupdf==1.27.2.2
-dashscope>=1.20.0
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+dashscope==1.26.4
+pytest==9.1.1
+pytest-asyncio==1.4.0
 langgraph==1.2.6
 langgraph-checkpoint-redis==0.4.1
 redis==7.4.1
-slowapi>=0.1.9
-jieba>=0.42.1
-pre-commit>=3.5.0
-ruff>=0.4.0
-python-json-logger>=2.0.7
-celery[redis]>=5.3.0
-langfuse>=2.0.0
-prometheus-client>=0.20.0
-bm25s>=0.2.0
-httpx>=0.27.0
+slowapi==0.1.10
+jieba==0.42.1
+pre-commit==4.6.1
+ruff==0.15.22
+python-json-logger==4.1.0
+celery[redis]==5.6.3
+# langfuse 锁定 2.x：代码使用 v2 的 client.trace() API，3.x+ 已改为 OTel 风格不兼容
+langfuse==2.60.10
+prometheus-client==0.25.0
+bm25s==0.3.9
+httpx==0.28.1
 # FlagEmbedding>=1.2.0  # 可选：BGE-M3 双表示，需 GPU 环境，手动安装: pip install FlagEmbedding

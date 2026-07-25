@@ -1,11 +1,18 @@
 import asyncio
+import sys
+from pathlib import Path
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+# 将 backend 目录加入路径以便导入 app
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+
+from app.core.config import settings  # noqa: E402
 
 
 async def migrate():
-    engine = create_async_engine('mysql+aiomysql://root:***REMOVED***@localhost:3306/medical_ai')
+    engine = create_async_engine(settings.DATABASE_URL)
     async with engine.connect() as conn:
         try:
             # 1. 检查 consultations 表是否缺少 max_rounds

@@ -12,21 +12,21 @@ router = APIRouter()
 
 
 @router.post("/cache/retrieval/clear")
-async def clear_cache():
-    """清除检索缓存"""
+async def clear_cache(current_user: User = Depends(get_current_admin)):
+    """清除检索缓存（仅管理员）"""
     deleted = await clear_retrieval_cache()
     return {"message": "检索缓存已清除", "deleted": deleted}
 
 
 @router.get("/cache/retrieval/stats")
-async def cache_stats():
-    """获取检索缓存统计信息"""
+async def cache_stats(current_user: User = Depends(get_current_admin)):
+    """获取检索缓存统计信息（仅管理员）"""
     return await get_retrieval_cache_stats()
 
 
 @router.get("/cache-stats")
-async def cache_stats_all():
-    """获取所有缓存详细统计信息（LLM + 检索）"""
+async def cache_stats_all(current_user: User = Depends(get_current_admin)):
+    """获取所有缓存详细统计信息（LLM + 检索，仅管理员）"""
     llm_stats = await LLMResponseCache.get_stats()
     retrieval_stats = await get_retrieval_cache_stats()
     return {

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ChromaDB 医学知识存储 — 基于向量检索的医学指南管理"""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -201,9 +202,12 @@ class MedicalKnowledgeStore:
         # 1. 异步获取查询向量
         query_embedding = await get_embedding(query_text)
 
-        # 2. 同步执行 ChromaDB 查询（可选带 where_document 预过滤 + 回退）
-        results = self._query_with_fallback(
-            query_embedding, top_k, where_document
+        # 2. ChromaDB 查询为同步阻塞调用，放入线程池避免阻塞事件循环
+        #    （与 retriever 中 BM25 / sparse 检索的 run_in_executor 模式一致）
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: self._query_with_fallback(query_embedding, top_k, where_document),
         )
 
         # 3. 格式化结果

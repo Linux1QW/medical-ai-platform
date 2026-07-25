@@ -202,10 +202,10 @@ npm run dev
 ### 数据库迁移
 ```bash
 # 初始化数据库
-python migrate_db.py
+python scripts/migrate_db.py
 
 # 创建管理员账户
-python init_admin.py
+python scripts/init_admin.py
 ```
 
 ## 测试

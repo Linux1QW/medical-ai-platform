@@ -593,7 +593,7 @@ curl http://localhost:80
 
 ```bash
 # 进入 Backend 容器
-docker compose exec backend python backend/init_admin.py
+docker compose exec backend python backend/scripts/init_admin.py
 ```
 
 ### 3.3 配置说明
@@ -607,7 +607,7 @@ MySQL 容器首次启动时自动执行：
 数据库迁移脚本：
 ```bash
 # 执行数据库迁移
-docker compose exec backend python backend/migrate_db.py
+docker compose exec backend python backend/scripts/migrate_db.py
 ```
 
 #### 向量数据库初始化

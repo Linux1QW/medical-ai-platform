@@ -161,6 +161,43 @@ jobs:
           cd backend
           python -m compileall app/ -q
 
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      # 安全扫描当前为告警模式（continue-on-error），存量漏洞清零后再改为阻断
+      - name: pip-audit (backend dependencies)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (frontend dependencies)
+        continue-on-error: true
+        run: |
+          cd frontend
+          npm audit --audit-level=high
+
+      - name: Trivy filesystem scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
   docker-build:
     needs: [backend-test, frontend-build]
     runs-on: ubuntu-latest

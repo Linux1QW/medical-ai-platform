@@ -22,7 +22,7 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
 # Stage 2: Production with Nginx
-FROM nginx:1.27-alpine AS production
+FROM nginx:1.31-alpine AS production
 
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html

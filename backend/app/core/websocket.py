@@ -11,7 +11,12 @@ class ConnectionManager:
         self.active_connections: Dict[int, List[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, consultation_id: int):
+        """accept + 注册（未鉴权场景慎用，鉴权后请用 register）"""
         await websocket.accept()
+        self.register(websocket, consultation_id)
+
+    def register(self, websocket: WebSocket, consultation_id: int):
+        """注册已 accept（且已鉴权）的连接"""
         if consultation_id not in self.active_connections:
             self.active_connections[consultation_id] = []
         self.active_connections[consultation_id].append(websocket)

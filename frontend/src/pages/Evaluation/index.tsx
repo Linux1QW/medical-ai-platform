@@ -111,15 +111,17 @@ const EvaluationPage: React.FC = () => {
     setProgress(0);
     setProgressMsg('正在初始化评估环境...');
     
-    // 建立 WebSocket 连接以接收进度推送
+    // 建立 WebSocket 连接以接收进度推送（token 通过首条消息发送，避免暴露在 URL）
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const token = sessionStorage.getItem('token') || '';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/evaluations/ws/${id}?token=${encodeURIComponent(token)}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/evaluations/ws/${id}`;
     const ws = new WebSocket(wsUrl);
-    
+    let wsAuthed = false;
+
     // 设置 WebSocket 事件处理
     ws.onopen = () => {
-      console.log('WebSocket connected for evaluation progress');
+      // 首条消息传递 JWT 完成鉴权，服务端验证后回复 auth_ok
+      ws.send(JSON.stringify({ type: 'auth', token }));
     };
 
     ws.onerror = (error) => {
@@ -129,6 +131,11 @@ const EvaluationPage: React.FC = () => {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'auth_ok') {
+          wsAuthed = true;
+          console.log('WebSocket authenticated for evaluation progress');
+          return;
+        }
         console.log('Progress update:', data);
         setProgress(data.progress);
         setProgressMsg(data.message);
@@ -141,19 +148,19 @@ const EvaluationPage: React.FC = () => {
       console.log('WebSocket connection closed');
     };
 
-    // 等待 WebSocket 连接就绪（最多等待 3 秒）
+    // 等待 WebSocket 鉴权完成（最多等待 3 秒）
     const waitForConnection = () => new Promise<void>((resolve) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (wsAuthed) {
         resolve();
         return;
       }
       const checkInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (wsAuthed) {
           clearInterval(checkInterval);
           resolve();
         }
       }, 100);
-      // 3秒超时，即使连接未就绪也继续执行
+      // 3秒超时，即使鉴权未完成也继续执行
       setTimeout(() => {
         clearInterval(checkInterval);
         resolve();

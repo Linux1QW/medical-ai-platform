@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import require_consultation_access
@@ -23,14 +26,38 @@ from app.services.user_service import get_user_by_id
 router = APIRouter()
 
 
+# 连接建立后等待首条鉴权消息的最长时间（秒）
+WS_AUTH_TIMEOUT = 5
+
+
 @router.websocket("/ws/{consultation_id}")
 async def evaluation_progress_ws(
     websocket: WebSocket,
     consultation_id: int,
-    token: str = Query(...),
 ):
-    """评估进度推送 WebSocket（需 JWT 鉴权）"""
-    payload = decode_access_token(token)
+    """评估进度推送 WebSocket（需 JWT 鉴权）
+
+    鉴权方式：连接建立后客户端须在 WS_AUTH_TIMEOUT 秒内发送首条消息
+    {"type": "auth", "token": "<JWT>"}，避免 token 暴露在 URL / 访问日志中。
+    鉴权成功后服务端回复 {"type": "auth_ok"}。
+    """
+    await websocket.accept()
+
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT)
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="鉴权超时")
+        return
+    except WebSocketDisconnect:
+        return
+
+    try:
+        auth_msg = json.loads(raw)
+        token = auth_msg.get("token") if isinstance(auth_msg, dict) else None
+    except json.JSONDecodeError:
+        token = None
+
+    payload = decode_access_token(token) if token else None
     if payload is None:
         await websocket.close(code=1008, reason="无效的认证凭据")
         return
@@ -53,7 +80,8 @@ async def evaluation_progress_ws(
             await websocket.close(code=1008, reason="无权访问该问诊记录")
             return
 
-    await manager.connect(websocket, consultation_id)
+    await websocket.send_json({"type": "auth_ok"})
+    manager.register(websocket, consultation_id)
     try:
         while True:
             await websocket.receive_text()

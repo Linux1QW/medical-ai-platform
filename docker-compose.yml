@@ -158,7 +158,8 @@ services:
       target: production
     container_name: medical-ai-celery-worker
     restart: unless-stopped
-    command: celery -A app.celery_app worker --beat --loglevel=info --concurrency=2
+    # beat 已拆为独立服务，worker 可安全水平扩容而不会重复触发定时任务
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
     environment:
       # 数据库
       MYSQL_HOST: mysql
@@ -190,6 +191,37 @@ services:
         limits:
           memory: 1G
           cpus: "1.0"
+    networks:
+      - backend-net
+
+  # ── Celery Beat（定时任务调度，全局单实例，与 worker 分离避免扩容时重复调度）──
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    container_name: medical-ai-celery-beat
+    restart: unless-stopped
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      # 数据库（celery_app 加载全局配置需要）
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-medical_ai}
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/4
+      CELERY_RESULT_BACKEND: redis://redis:6379/5
+      TZ: Asia/Shanghai
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     networks:
       - backend-net
 

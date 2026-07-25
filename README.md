@@ -45,7 +45,7 @@
 - **BM25 关键词检索**（权重 0.30）：基于 `bm25s` 引擎，相较 `rank_bm25` 实现 10x 索引速度和 5x 内存效率提升
 - **Dense Vector 语义检索**（权重 0.45）：基于 BGE 系列模型的稠密向量检索
 - **Learned Sparse 检索**（权重 0.25，可选）：基于 BGE-M3 的稀疏表示检索
-- **加权 RRF 融合**：采用 Weighted Reciprocal Rank Fusion 算法，医学场景调优参数 k=35，实现三路检索结果的最优融合
+- **加权 RRF 融合**：采用 Weighted Reciprocal Rank Fusion 算法（k=60），实现三路检索结果的最优融合
 
 ### BGE-M3 双表示模型（可选）
 - BGE-M3 模型同时提供 dense + learned sparse 双表示，一次推理即可生成两种检索信号
@@ -212,7 +212,7 @@ python scripts/init_admin.py
 
 ### 后端测试
 - **框架**: pytest
-- **测试数量**: 403 个测试用例全部通过（25 skipped）
+- **测试数量**: 550 个测试用例全部通过（18 skipped），CI 强制覆盖率门槛 40%
 - **覆盖范围**: 单元测试、集成测试、端到端测试
 
 ### 前端构建
@@ -327,6 +327,12 @@ medical-ai-platform/
 - 模块化设计便于拆分
 - API 设计遵循 RESTful 规范
 - 配置中心化管理
+
+---
+
+## 版权声明
+
+Copyright © 2026。本项目为私有软件，保留所有权利（All Rights Reserved）。未经作者书面授权，任何个人或组织不得复制、修改、分发或商用本项目的任何部分。团队内部协作规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 

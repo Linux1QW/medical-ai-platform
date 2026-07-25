@@ -173,6 +173,24 @@ async def request_log_middleware(request: Request, call_next):
     return response
 
 
+# Swagger UI / ReDoc 依赖内联脚本与 CDN 资源，严格 CSP 会将其破坏，故豁免
+_CSP_EXEMPT_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """统一注入安全响应头（纯 API 后端，默认拒绝一切内嵌/脚本加载）"""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if not request.url.path.startswith(_CSP_EXEMPT_PATHS):
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+    if settings.ENVIRONMENT == "production":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     detail = exc.detail

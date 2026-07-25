@@ -282,6 +282,7 @@ medical-ai-platform/
 - Langfuse 链路追踪，端到端可视化 Agent 推理过程
 - Prometheus 指标暴露（HTTP 请求量、延迟分布、检索命中率等）
 - 告警管理器（AlertManager），支持阈值告警与异常通知
+- 监控面板开箱即用：`docker compose --profile monitoring up -d` 启动 Prometheus + Grafana（配置见 `monitoring/`，预置总览 dashboard，需在 `.env` 设置 `GRAFANA_ADMIN_PASSWORD`）
 
 ### 安全性
 - HTTPS/TLS 传输加密

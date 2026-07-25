@@ -266,6 +266,57 @@ services:
       - frontend-net
       - backend-net
 
+  # ── 监控（可选 profile，启动：docker compose --profile monitoring up -d）──
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: medical-ai-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - backend-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: medical-ai-grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?请在 .env 中设置 GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - backend-net
+
 # ──────────────────────────────────────────
 # 网络
 # ──────────────────────────────────────────
@@ -287,3 +338,7 @@ volumes:
     name: medical-ai-redis-data
   chroma_data:
     name: medical-ai-chroma-data
+  prometheus_data:
+    name: medical-ai-prometheus-data
+  grafana_data:
+    name: medical-ai-grafana-data

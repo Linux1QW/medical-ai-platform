@@ -1,0 +1,27 @@
+# Prometheus 抓取配置（medical-ai-platform）
+# 与 docker-compose --profile monitoring 配套使用：
+#   docker compose --profile monitoring up -d
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # 后端 FastAPI /metrics（prometheus_client 导出）
+  - job_name: backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: medical-ai-backend
+    # 生产环境 METRICS_TOKEN 非空时启用 Bearer 鉴权：
+    # 1. 将 token 写入 monitoring/metrics_token（勿提交 git）
+    # 2. 在 docker-compose 中挂载到 /etc/prometheus/metrics_token
+    # 3. 取消以下注释
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/metrics_token
+
+  # Prometheus 自监控
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

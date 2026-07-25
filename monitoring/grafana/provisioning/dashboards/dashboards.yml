@@ -1,0 +1,13 @@
+# Grafana dashboard 自动加载配置
+apiVersion: 1
+
+providers:
+  - name: medical-ai-dashboards
+    orgId: 1
+    folder: Medical AI
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

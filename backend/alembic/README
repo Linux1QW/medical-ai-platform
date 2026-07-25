@@ -1,0 +1,41 @@
+# Alembic 数据库迁移
+
+自 baseline `0c1dfb4fea5f` 起，数据库结构变更统一由 Alembic 管理；
+`database/migrate_v2~v10.sql` 已归档至 `database/archive/`，仅作历史参考。
+
+## 日常用法
+
+```bash
+cd backend
+
+# 修改 app/models/ 后自动生成迁移（务必人工 review 生成的脚本）
+venv\Scripts\python.exe -m alembic revision --autogenerate -m "描述"
+
+# 应用迁移到 .env 所配置的数据库
+venv\Scripts\python.exe -m alembic upgrade head
+
+# 查看当前版本 / 历史
+venv\Scripts\python.exe -m alembic current
+venv\Scripts\python.exe -m alembic history
+```
+
+连接串由 `env.py` 从 `app/core/config.py` 的 `Settings`（读取 `backend/.env`）注入；
+可用环境变量 `ALEMBIC_DATABASE_URL` 临时覆盖（如对临时库做实验）。
+
+## 存量环境接入
+
+- 已有数据的库（表已通过 `database/init.sql` + migrate_v*.sql 建好）：
+  执行 `alembic stamp head` 标记为 baseline，之后增量走 `upgrade head`。
+- 全新空库：直接 `alembic upgrade head` 一次建出全部 12 张表。
+
+## 已知漂移（baseline 时未强行修复）
+
+`alembic check` 会报告存量库与 ORM 模型间的历史差异，属预期噪音，包括：
+
+- 索引命名：init.sql 用 `idx_*`，ORM 约定生成 `ix_*`
+- 个别类型映射：`TIMESTAMP` vs `DateTime`、`CHAR(36)` vs `VARCHAR(36)` 等
+- 列注释的编码差异（历史建库时控制台编码所致）
+- server_default 差异（已在 env.py 关闭该比对）
+
+生成新迁移时若 autogenerate 混入上述历史噪音，请手工从脚本中删除，
+只保留本次真实变更。

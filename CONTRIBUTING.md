@@ -48,7 +48,7 @@ venv\Scripts\python.exe -m pytest tests/ -q
 - 分层：`api（路由）→ services（业务）→ rag / llm / agents（能力层）`，路由层禁止直写 SQL
 - 配置一律进 `app/core/config.py` 的 `Settings`，禁止散落硬编码；新增配置项须同步 `.env.example`
 - 错误响应统一 `{"error_code": ..., "message": ...}` 结构，经全局异常处理器输出
-- 数据库结构变更需提供迁移 SQL（`database/` 目录）并在 PR 描述中说明
+- 数据库结构变更统一走 Alembic（`backend/alembic/`，用法见其 README），禁止再新增手写迁移 SQL
 
 ## PR 流程
 

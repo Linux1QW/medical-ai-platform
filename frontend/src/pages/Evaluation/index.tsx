@@ -53,6 +53,27 @@ const EvaluationPage: React.FC = () => {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  const startPolling = useCallback(() => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    pollingRef.current = window.setInterval(async () => {
+      try {
+        const data = await getEvaluation(Number(id));
+        if (data) {
+          setEvaluation(data);
+          setGenerating(false);
+          setLockActive(false);
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          message.success('评估报告已生成');
+        }
+      } catch {
+        // 评估尚未完成
+      }
+    }, 5000);
+  }, [id]);
+
   // 页面加载时检查是否有进行中的评估
   useEffect(() => {
     if (!id) return;
@@ -82,28 +103,7 @@ const EvaluationPage: React.FC = () => {
         pollingRef.current = null;
       }
     };
-  }, [id]);
-
-  const startPolling = () => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = window.setInterval(async () => {
-      try {
-        const data = await getEvaluation(Number(id));
-        if (data) {
-          setEvaluation(data);
-          setGenerating(false);
-          setLockActive(false);
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          message.success('评估报告已生成');
-        }
-      } catch {
-        // 评估尚未完成
-      }
-    }, 5000);
-  };
+  }, [id, evaluation, startPolling]);
 
   const handleGenerate = async (isAutoRetry = false) => {
     if (!id) return;

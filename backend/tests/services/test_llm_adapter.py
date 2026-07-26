@@ -141,6 +141,9 @@ class TestOpenAICompatibleAdapter:
 
 class TestRefreshActiveProvider:
     def _snapshot(self, q):
+        # 懒初始化后模块级全局可能为 None，先触发创建以获得可对比的基线
+        q.get_active_adapter()
+        q._get_client()
         return (q._active_adapter, q._active_model, q.client)
 
     def _restore(self, q, snap):
@@ -212,5 +215,59 @@ class TestRefreshActiveProvider:
             assert q.client.api_key == "k2"
             assert str(q.client.base_url).rstrip("/") == "https://p2/v1"
             assert q._active_model == "m2"
+        finally:
+            self._restore(q, snap)
+
+
+# ── 懒初始化（回归去全局单例 import 副作用）──────────────────────────────
+
+class TestLazyInitialization:
+    def _reset(self, q):
+        snap = (q._active_adapter, q._active_model, q.client)
+        q._active_adapter = None
+        q._active_model = None
+        q.client = None
+        return snap
+
+    def _restore(self, q, snap):
+        q._active_adapter, q._active_model, q.client = snap
+
+    def test_get_client_lazy_creates(self):
+        """全局为 None 时，首次 _get_client() 才创建适配器与客户端。"""
+        import app.services.qwen_client as q
+        snap = self._reset(q)
+        try:
+            assert q._active_adapter is None
+            assert q.client is None
+            c = q._get_client()
+            assert isinstance(c, AsyncOpenAI)
+            assert q._active_adapter is not None
+            assert q.client is c
+            # 二次调用复用同一实例
+            assert q._get_client() is c
+        finally:
+            self._restore(q, snap)
+
+    def test_injected_client_takes_priority(self):
+        """测试注入的模块级 client 优先于懒创建（兼容既有 patch 方式）。"""
+        import app.services.qwen_client as q
+        snap = self._reset(q)
+        try:
+            sentinel = object()
+            q.client = sentinel
+            assert q._get_client() is sentinel
+            # 未触碰适配器：不会因注入而创建真实连接
+            assert q._active_adapter is None
+        finally:
+            self._restore(q, snap)
+
+    def test_get_active_model_lazy(self):
+        """_get_active_model() 在未初始化时触发懒初始化并返回模型名。"""
+        import app.services.qwen_client as q
+        snap = self._reset(q)
+        try:
+            model = q._get_active_model()
+            assert isinstance(model, str) and model
+            assert q._active_adapter is not None
         finally:
             self._restore(q, snap)

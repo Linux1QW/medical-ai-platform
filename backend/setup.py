@@ -25,7 +25,7 @@ setup(
         "pytest-asyncio>=0.21.0",
         "langgraph==1.2.6",
         "langgraph-checkpoint-redis==0.4.1",
-        "redis==7.4.1",
+        "redis==8.0.1",
         "slowapi>=0.1.9",
     ],
     author="Medical AI Platform Team",

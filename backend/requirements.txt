@@ -19,7 +19,8 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 langgraph==1.2.6
 langgraph-checkpoint-redis==0.4.1
-redis==7.4.1
+# redis 锁定 <6.5：celery[redis] 依赖的 kombu 要求 redis<6.5，7.x 会导致依赖冲突
+redis==6.4.0
 slowapi==0.1.10
 jieba==0.42.1
 pre-commit==4.6.1

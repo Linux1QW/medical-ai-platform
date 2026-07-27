@@ -45,11 +45,13 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
     try:
         # from_conn_string 是 async context manager，长驻服务用 AsyncExitStack 持有；
         # 进入上下文时内部已执行 asetup() 创建 Redis 索引（幂等操作）
+        # REDIS_CHECKPOINT_TTL 单位秒，AsyncRedisSaver 的 ttl 配置单位分钟
+        ttl_config = {"default_ttl": max(1, ttl // 60)} if ttl and ttl > 0 else None
         _exit_stack = AsyncExitStack()
         _checkpointer = await _exit_stack.enter_async_context(
-            AsyncRedisSaver.from_conn_string(redis_url)
+            AsyncRedisSaver.from_conn_string(redis_url, ttl=ttl_config)
         )
-        logger.info(f"LangGraph Redis Checkpointer 已初始化: {redis_url}")
+        logger.info(f"LangGraph Redis Checkpointer 已初始化: {redis_url} (ttl={ttl_config})")
         return _checkpointer
     except Exception as e:
         _exit_stack = None
@@ -62,10 +64,17 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
 
 
 async def close_checkpointer():
-    """关闭 Checkpointer（在 FastAPI shutdown 中调用）"""
+    """关闭 Checkpointer（在 FastAPI shutdown 或 Celery worker 任务重建前调用）
+
+    关闭异常仅告警不上抛：Celery 任务间事件循环已切换时，
+    旧连接绑定的循环已关闭，aclose 可能报错，但全局引用必须被清理。
+    """
     global _checkpointer, _exit_stack
     if _exit_stack is not None:
-        await _exit_stack.aclose()
+        try:
+            await _exit_stack.aclose()
+        except Exception as e:
+            logger.warning(f"关闭 Checkpointer 时出错（已忽略，可能因事件循环已切换）: {e}")
         _exit_stack = None
         _checkpointer = None
         logger.info("LangGraph Redis Checkpointer 已关闭")

@@ -142,6 +142,10 @@ class Settings(BaseSettings):
     AGENT_TIMEOUT_SECONDS: int = 180              # 旧编排路径单个评估 Agent 超时（秒）
     EVALUATION_RUN_TIMEOUT_SECONDS: int = 240     # 评估级 deadline：单次评估 run 总时长预算（秒，0 = 不限制；需小于 Celery 软超时 300s 以保证优雅降级）
     TOOL_ROLE_WHITELIST_ENABLED: bool = True      # 按 agent 角色收紧工具白名单（最小权限，executor 强制校验 + LLM 侧 schema 过滤）
+    EVAL_RESUME_FROM_CHECKPOINT: bool = True      # Celery 重试时从 LangGraph checkpoint 断点续跑（复用失败 run 的 thread，避免从头重跑）
+    EVAL_CONTEXT_COMPRESS_ENABLED: bool = True    # 评估上下文压缩：对话超预算时早期消息摘要化（摘要按内容哈希缓存到 Redis）
+    EVAL_CONTEXT_COMPRESS_THRESHOLD_CHARS: int = 6000  # 对话全文超过该字符数触发压缩（0 = 不压缩）
+    EVAL_CONTEXT_RECENT_KEEP_MESSAGES: int = 20   # 压缩时保留近期完整消息条数（早于此窗口的消息进摘要）
 
     # ReAct 模式配置
     ENABLE_REACT_KNOWLEDGE: bool = True           # Knowledge Agent 启用 ReAct 模式

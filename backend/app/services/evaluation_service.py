@@ -47,15 +47,21 @@ def _extract_json(text: str) -> dict:
     return data
 
 
-async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
-    """运行评估 — 根据配置选择 LangGraph 图或旧编排"""
+async def run_evaluation(db: AsyncSession, consultation_id: int, resume: bool = False) -> Evaluation:
+    """运行评估 — 根据配置选择 LangGraph 图或旧编排
+
+    Args:
+        resume: Celery 重试时为 True，尝试从上次失败 run 的 checkpoint 断点续跑
+    """
     if settings.LANGGRAPH_ENABLED:
-        return await _run_evaluation_graph(db, consultation_id)
+        return await _run_evaluation_graph(db, consultation_id, resume=resume)
     else:
         return await _run_evaluation_legacy(db, consultation_id)
 
 
-async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evaluation:
+async def _run_evaluation_graph(
+    db: AsyncSession, consultation_id: int, resume: bool = False
+) -> Evaluation:
     """LangGraph 图执行路径"""
     import uuid
     from datetime import datetime
@@ -92,12 +98,19 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
     )
     messages = msgs.scalars().all()
 
-    conversation_text = "\n".join(
-        f"{'医生' if m.role == 'doctor' else '患者'}: {m.content}" for m in messages
+    # 长对话超预算时早期消息摘要化（带 Redis 增量缓存，失败降级全量拼接）
+    from app.services.context_budget import build_eval_conversation_text
+
+    conversation_text = await build_eval_conversation_text(
+        messages, patient_profile=patient.chief_complaint or ""
     )
 
-    # 2. 构建初始 State
-    run_id = str(uuid.uuid4())
+    # 2. 构建初始 State（断点续跑时复用失败 run 的标识，保持 checkpoint thread 一致）
+    resume_run = None
+    if resume and settings.EVAL_RESUME_FROM_CHECKPOINT:
+        resume_run = await _find_resumable_run(db, consultation_id)
+
+    run_id = resume_run.id if resume_run is not None else str(uuid.uuid4())
     consultation_type = get_consultation_type(consultation)
     submission_flags = build_submission_flags(consultation)
 
@@ -121,20 +134,29 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
         submission_flags=submission_flags,
     )
 
-    # 3. 创建 EvaluationRun
-    eval_run = EvaluationRun(
-        id=run_id,
-        consultation_id=consultation_id,
-        graph_version=settings.LANGGRAPH_GRAPH_VERSION,
-        scoring_policy_version="v1",
-        checkpoint_thread_id=f"evaluation:{run_id}",
-        status="running",
-        selected_agents=None,
-        started_at=datetime.utcnow(),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    db.add(eval_run)
+    # 3. 创建/复用 EvaluationRun（断点续跑时翻回 running 并递增 attempt）
+    if resume_run is not None:
+        eval_run = resume_run
+        eval_run.status = "running"
+        eval_run.attempt += 1
+        eval_run.error_type = None
+        eval_run.error_message = None
+        eval_run.finished_at = None
+        eval_run.updated_at = datetime.utcnow()
+    else:
+        eval_run = EvaluationRun(
+            id=run_id,
+            consultation_id=consultation_id,
+            graph_version=settings.LANGGRAPH_GRAPH_VERSION,
+            scoring_policy_version="v1",
+            checkpoint_thread_id=f"evaluation:{run_id}",
+            status="running",
+            selected_agents=None,
+            started_at=datetime.utcnow(),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(eval_run)
     await db.flush()
 
     # 4. 执行图
@@ -145,11 +167,16 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
 
         config = {
             "configurable": {
-                "thread_id": f"evaluation:{run_id}",
+                "thread_id": eval_run.checkpoint_thread_id,
             }
         }
 
-        final_state = await _invoke_graph_with_deadline(graph, initial_state, config)
+        # 断点续跑：存在未完成的 checkpoint 时以 None 输入从断点恢复，否则全新执行
+        graph_input = initial_state
+        if resume_run is not None:
+            graph_input = await _resolve_graph_input(graph, config, initial_state)
+
+        final_state = await _invoke_graph_with_deadline(graph, graph_input, config)
 
         # 5. 发送进度事件
         progress_events = final_state.get("progress_events", [])
@@ -209,6 +236,42 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
         eval_run.finished_at = datetime.utcnow()
         await db.commit()
         raise
+
+
+async def _find_resumable_run(db: AsyncSession, consultation_id: int):
+    """查找最近一次 failed 的 EvaluationRun 用于断点续跑（无则返回 None）"""
+    from sqlalchemy import select
+
+    from app.models.evaluation_run import EvaluationRun
+
+    result = await db.execute(
+        select(EvaluationRun)
+        .where(
+            EvaluationRun.consultation_id == consultation_id,
+            EvaluationRun.status == "failed",
+        )
+        .order_by(EvaluationRun.started_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _resolve_graph_input(graph, config, initial_state):
+    """断点续跑时解析图输入
+
+    thread 存在未完成的 checkpoint（values 非空且有待执行节点）时返回 None，
+    LangGraph 以空输入 + 同 thread_id 调用即从最后一个成功 superstep 恢复；
+    无 checkpoint 或读取失败时降级为全新执行（返回 initial_state）。
+    """
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception as e:
+        logging.warning(f"读取 checkpoint 状态失败，降级为全新执行: {e}")
+        return initial_state
+    if snapshot is not None and getattr(snapshot, "values", None) and getattr(snapshot, "next", None):
+        logging.info(f"从 checkpoint 断点续跑: 待执行节点={snapshot.next}")
+        return None
+    return initial_state
 
 
 async def _invoke_graph_with_deadline(graph, initial_state, config):

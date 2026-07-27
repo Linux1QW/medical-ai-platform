@@ -238,7 +238,7 @@ class TestRunEvaluationDispatch:
                 return_value="graph_result",
             ) as mock_graph:
                 result = await run_evaluation(mock_db, 1)
-                mock_graph.assert_awaited_once_with(mock_db, 1)
+                mock_graph.assert_awaited_once_with(mock_db, 1, resume=False)
                 assert result == "graph_result"
 
     @pytest.mark.asyncio

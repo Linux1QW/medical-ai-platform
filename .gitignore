@@ -56,5 +56,8 @@ review_*.txt
 # 调试日志
 debug.log
 
+# E2E 测试截图（临时产物）
+e2e_*.png
+
 # git 历史重写备份（含旧历史，确认无误后应删除）
 *.bundle

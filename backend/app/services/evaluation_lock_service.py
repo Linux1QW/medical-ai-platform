@@ -103,11 +103,14 @@ async def get_lock_status(
     if not lock:
         return None
 
+    # 过期的 pending/running 锁视为失效（如后端崩溃/重启导致任务丢失），
+    # 避免前端永远显示"评估进行中"；下次 try_acquire_lock 会清理过期锁
+    is_expired = lock.expires_at is not None and lock.expires_at < datetime.utcnow()
     return {
         "consultation_id": lock.consultation_id,
         "status": lock.status,
         "run_id": lock.run_id,
         "locked_at": lock.locked_at.isoformat() if lock.locked_at else None,
         "expires_at": lock.expires_at.isoformat() if lock.expires_at else None,
-        "is_active": lock.status in ("pending", "running"),
+        "is_active": lock.status in ("pending", "running") and not is_expired,
     }

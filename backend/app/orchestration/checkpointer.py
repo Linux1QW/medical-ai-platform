@@ -1,13 +1,15 @@
 """LangGraph Checkpointer 工厂和生命周期管理 — Redis 版本"""
 
 import logging
-from typing import Any, cast
+from contextlib import AsyncExitStack
+from typing import Optional
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 _checkpointer = None
+_exit_stack: Optional[AsyncExitStack] = None
 
 
 async def init_checkpointer(redis_url: str = None, ttl: int = None):
@@ -19,7 +21,7 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
     Raises:
         RuntimeError: LANGGRAPH_ENABLED=true 但 Redis 初始化失败
     """
-    global _checkpointer
+    global _checkpointer, _exit_stack
 
     # LANGGRAPH_ENABLED=false 时跳过 checkpointer 初始化
     if not settings.LANGGRAPH_ENABLED:
@@ -41,12 +43,17 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
         ) from e
 
     try:
-        _checkpointer = cast(Any, AsyncRedisSaver.from_conn_string(redis_url))
-        # 创建 Redis 索引（幂等操作，首次连接时执行一次）
-        await _checkpointer.setup()
+        # from_conn_string 是 async context manager，长驻服务用 AsyncExitStack 持有；
+        # 进入上下文时内部已执行 asetup() 创建 Redis 索引（幂等操作）
+        _exit_stack = AsyncExitStack()
+        _checkpointer = await _exit_stack.enter_async_context(
+            AsyncRedisSaver.from_conn_string(redis_url)
+        )
         logger.info(f"LangGraph Redis Checkpointer 已初始化: {redis_url}")
         return _checkpointer
     except Exception as e:
+        _exit_stack = None
+        _checkpointer = None
         # Redis 连接失败，LANGGRAPH_ENABLED=true 时不允许降级
         raise RuntimeError(
             f"Redis Checkpointer 初始化失败: {e}。"
@@ -56,9 +63,10 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
 
 async def close_checkpointer():
     """关闭 Checkpointer（在 FastAPI shutdown 中调用）"""
-    global _checkpointer
-    if _checkpointer is not None:
-        await _checkpointer.close()
+    global _checkpointer, _exit_stack
+    if _exit_stack is not None:
+        await _exit_stack.aclose()
+        _exit_stack = None
         _checkpointer = None
         logger.info("LangGraph Redis Checkpointer 已关闭")
 

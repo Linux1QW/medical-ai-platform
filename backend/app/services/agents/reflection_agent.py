@@ -164,7 +164,7 @@ async def run_reflection(  # noqa: C901
         registry = ToolRegistry()
         register_consistency_tools(registry)
         executor = create_tool_executor(registry, max_result_chars=3000)
-        budget = create_tool_budget(context.budgets, context.run_id)
+        budget = create_tool_budget(context.budgets, context.run_id or "")
         bridge = _ToolExecutorBridge(executor, context, budget)
 
         # ── Step 3: 构建初始输入 ──

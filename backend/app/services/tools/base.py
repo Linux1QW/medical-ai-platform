@@ -9,7 +9,7 @@ class ToolContext(BaseModel):
     run_id: str | None = None
     agent_name: str = ""
     budgets: dict[str, int] = {}  # {"search_medical_kb": 3, "expand_query": 2, ...}
-    allowed_tools: set[str] | None = None  # 角色工具白名单（None = 不限制）
+    allowed_tools: frozenset[str] | None = None  # 角色工具白名单（None = 不限制）
     allowed_citation_ids: set[str] = set()  # 合法 citation_id 白名单
     evidence_cache: dict[str, Any] = {}  # 缓存已检索的 evidence
     extras: dict[str, Any] = {}  # 扩展字段（如 rag_trace）

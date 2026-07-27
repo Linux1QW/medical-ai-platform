@@ -151,7 +151,7 @@ async def run_knowledge_check_react(  # noqa: C901
         registry = ToolRegistry()
         register_all_tools(registry)
         executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
-        budget = create_tool_budget(context.budgets, context.run_id)
+        budget = create_tool_budget(context.budgets, context.run_id or "")
         bridge = _ToolExecutorBridge(executor, context, budget)
 
         # ── Step 4: 构建初始输入 ──

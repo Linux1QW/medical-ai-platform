@@ -163,7 +163,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
         registry = ToolRegistry()
         register_all_tools(registry)
         executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
-        budget = create_tool_budget(context.budgets, context.run_id)
+        budget = create_tool_budget(context.budgets, context.run_id or "")
         bridge = _ToolExecutorBridge(executor, context, budget)
         # LLM 侧同步收紧：只下发角色白名单内的工具 schema
         tool_schemas = registry.get_openai_schemas(

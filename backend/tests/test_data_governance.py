@@ -306,10 +306,11 @@ class TestCleanupTask:
 
         assert result["audit_logs_deleted"] == 5
         assert result["evaluation_runs_deleted"] == 5
+        assert result["node_results_deleted"] == 5
         assert "audit_cutoff" in result
         assert "run_cutoff" in result
-        # 验证 execute 被调用了两次（审计日志 + 评估运行记录）
-        assert mock_db.execute.call_count == 2
+        # 验证 execute 被调用了三次（审计日志 + 节点审计行 + 评估运行记录）
+        assert mock_db.execute.call_count == 3
         mock_db.commit.assert_called_once()
 
 

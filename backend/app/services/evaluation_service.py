@@ -179,6 +179,11 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
 
         eval_run.finished_at = datetime.utcnow()
 
+        # 7.5 持久化 run 级 trace 树：每个 agent 节点一行（含工具调用 trace）+ 节点错误
+        node_rows = _build_node_results(run_id, final_state)
+        if node_rows:
+            db.add_all(node_rows)
+
         # 8. 保存 Evaluation
         db.add(evaluation)
         consultation.status = "evaluated"
@@ -193,13 +198,101 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
         return evaluation
 
     except Exception as e:
+        from app.core.failure_reasons import classify_failure
+
         logging.error(f"LangGraph 评估流程异常: {e}")
         eval_run.status = "failed"
-        eval_run.error_type = type(e).__name__
-        eval_run.error_message = str(e)[:500]
+        # error_type 存标准化原因码（供监控聚合），原始类名保留在 error_message
+        eval_run.error_type = classify_failure(e)
+        eval_run.error_message = f"{type(e).__name__}: {e}"[:500]
         eval_run.finished_at = datetime.utcnow()
         await db.commit()
         raise
+
+
+def _build_node_results(run_id: str, state: dict) -> list:
+    """从 final state 构建 EvaluationNodeResult 审计行（run 级 trace 树）
+
+    以 run_id 为根：
+    - 每个 agent 执行一行（优先用 execution_results，含耗时/时间戳，
+      result_summary.trace 携带工具调用明细，不再仅 knowledge 一路落库）
+    - 未被 agent 行覆盖的 node_errors 各补一行 error 记录
+    """
+    from datetime import datetime
+
+    from app.models.evaluation_node_result import EvaluationNodeResult
+
+    def _parse_ts(value):
+        try:
+            return datetime.fromisoformat(value) if value else None
+        except (TypeError, ValueError):
+            return None
+
+    node_errors = list(state.get("node_errors") or [])
+    error_by_node = {err.node_name: err for err in node_errors}
+
+    rows: list[EvaluationNodeResult] = []
+    covered_agents: set[str] = set()
+
+    for result in state.get("execution_results") or []:
+        envelope = result.envelope
+        matched_error = error_by_node.get(f"run_agent:{result.agent_name}")
+        rows.append(
+            EvaluationNodeResult(
+                run_id=run_id,
+                node_name=f"agent:{result.agent_name}",
+                status=result.status,
+                duration_ms=result.duration_ms,
+                result_summary={
+                    "step_id": result.step_id,
+                    "score": result.score,
+                    "skip_reason": envelope.skip_reason if envelope else None,
+                    "review_reason": envelope.review_reason if envelope else None,
+                    "trace": envelope.trace if envelope else {},
+                },
+                error_type=matched_error.error_type if matched_error else None,
+                started_at=_parse_ts(result.started_at),
+                finished_at=_parse_ts(result.finished_at),
+            )
+        )
+        covered_agents.add(result.agent_name)
+
+    # 旧 dispatch_and_run 路径只产生 agent_results，兼容补齐
+    for envelope in state.get("agent_results") or []:
+        if envelope.agent_name in covered_agents:
+            continue
+        rows.append(
+            EvaluationNodeResult(
+                run_id=run_id,
+                node_name=f"agent:{envelope.agent_name}",
+                status=envelope.status,
+                result_summary={
+                    "score": envelope.score,
+                    "skip_reason": envelope.skip_reason,
+                    "review_reason": envelope.review_reason,
+                    "trace": envelope.trace,
+                },
+            )
+        )
+        covered_agents.add(envelope.agent_name)
+
+    # 非 agent 节点的错误（或 agent 行未覆盖的）单独落审计行
+    for err in node_errors:
+        agent_name = err.node_name.split(":", 1)[1] if ":" in err.node_name else None
+        if agent_name and agent_name in covered_agents:
+            continue
+        rows.append(
+            EvaluationNodeResult(
+                run_id=run_id,
+                node_name=err.node_name,
+                attempt=err.attempt,
+                status="error",
+                result_summary={"error_message": err.error_message},
+                error_type=err.error_type,
+            )
+        )
+
+    return rows
 
 
 def _build_evaluation_from_state(state: dict, consultation_id: int) -> Evaluation:

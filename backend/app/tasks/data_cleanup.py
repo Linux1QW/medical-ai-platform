@@ -29,10 +29,11 @@ def cleanup_expired_records() -> dict:
 
 async def _do_cleanup() -> dict:
     """执行清理逻辑"""
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
 
     from app.db.session import AsyncSessionLocal
     from app.models.audit_log import AuditLog
+    from app.models.evaluation_node_result import EvaluationNodeResult
     from app.models.evaluation_run import EvaluationRun
 
     async with AsyncSessionLocal() as db:
@@ -45,8 +46,19 @@ async def _do_cleanup() -> dict:
         )
         audit_deleted = audit_result.rowcount
 
-        # 清理过期评估运行记录
+        # 先清理过期运行的节点审计行（外键依赖，须先于 evaluation_runs 删除）
         run_cutoff = now - timedelta(days=settings.EVALUATION_RUN_RETENTION_DAYS)
+        expired_run_ids = select(EvaluationRun.id).where(
+            EvaluationRun.created_at < run_cutoff
+        )
+        node_result = await db.execute(
+            delete(EvaluationNodeResult).where(
+                EvaluationNodeResult.run_id.in_(expired_run_ids)
+            )
+        )
+        node_deleted = node_result.rowcount
+
+        # 清理过期评估运行记录
         run_result = await db.execute(
             delete(EvaluationRun).where(EvaluationRun.created_at < run_cutoff)
         )
@@ -57,6 +69,7 @@ async def _do_cleanup() -> dict:
         return {
             "audit_logs_deleted": audit_deleted,
             "evaluation_runs_deleted": run_deleted,
+            "node_results_deleted": node_deleted,
             "audit_cutoff": audit_cutoff.isoformat(),
             "run_cutoff": run_cutoff.isoformat(),
         }

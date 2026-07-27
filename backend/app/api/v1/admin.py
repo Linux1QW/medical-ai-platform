@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""管理接口 — 缓存清理、数据留存与运维操作"""
+"""管理接口 — 缓存清理、数据留存、运维操作与运行监控"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_admin
+from app.db.session import get_db
+from app.models.evaluation_node_result import EvaluationNodeResult
+from app.models.evaluation_run import EvaluationRun
 from app.models.user import User
 from app.services.llm_cache import LLMResponseCache
 from app.services.rag.retrieval_cache import clear_retrieval_cache, get_retrieval_cache_stats
@@ -44,4 +49,67 @@ async def trigger_cleanup(current_user: User = Depends(get_current_admin)):
     return {
         "message": "清理任务已提交",
         "task_id": result.id,
+    }
+
+
+# ── 运行监控 ────────────────────────────────────────────────────────────
+
+
+@router.get("/monitoring/tool-runtime")
+async def tool_runtime_snapshot(current_user: User = Depends(get_current_admin)):
+    """工具 Harness 运行时快照（熔断器/预算/健康状态，仅管理员）"""
+    from app.services.tools.runtime import get_tool_runtime_snapshot
+
+    return get_tool_runtime_snapshot()
+
+
+@router.get("/monitoring/runs/{run_id}/trace")
+async def get_run_trace(
+    run_id: str,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """run 级 trace 树：以 run_id 为根，聚合各 agent 节点及其工具调用明细（仅管理员）"""
+    run_result = await db.execute(
+        select(EvaluationRun).where(EvaluationRun.id == run_id)
+    )
+    run = run_result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail={"error_code": "RUN_NOT_FOUND"})
+
+    nodes_result = await db.execute(
+        select(EvaluationNodeResult)
+        .where(EvaluationNodeResult.run_id == run_id)
+        .order_by(EvaluationNodeResult.started_at, EvaluationNodeResult.id)
+    )
+    nodes = nodes_result.scalars().all()
+
+    return {
+        "run": {
+            "run_id": run.id,
+            "consultation_id": run.consultation_id,
+            "evaluation_id": run.evaluation_id,
+            "status": run.status,
+            "graph_version": run.graph_version,
+            "selected_agents": run.selected_agents,
+            "error_type": run.error_type,
+            "error_message": run.error_message,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        },
+        "nodes": [
+            {
+                "id": n.id,
+                "node_name": n.node_name,
+                "attempt": n.attempt,
+                "status": n.status,
+                "duration_ms": n.duration_ms,
+                "result_summary": n.result_summary,
+                "error_type": n.error_type,
+                "started_at": n.started_at.isoformat() if n.started_at else None,
+                "finished_at": n.finished_at.isoformat() if n.finished_at else None,
+            }
+            for n in nodes
+        ],
+        "node_count": len(nodes),
     }

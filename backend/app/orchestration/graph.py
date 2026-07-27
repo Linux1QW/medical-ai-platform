@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -16,6 +17,7 @@ from app.orchestration.state import (
     EvaluationPlan,
     EvaluationState,
     ExecutionResult,
+    NodeError,
     PlanStep,
     ProgressEvent,
     ReflectionIssue,
@@ -358,6 +360,8 @@ async def run_agent(state: RunAgentState) -> dict[str, Any]:
     if knowledge_citations and agent_name != "knowledge":
         context = context.model_copy(update={"knowledge_citations": knowledge_citations})
 
+    started_at = datetime.utcnow()
+    node_errors: list[NodeError] = []
     try:
         adapter = get_adapter(agent_name)
         envelope = await adapter.run(context)
@@ -370,8 +374,25 @@ async def run_agent(state: RunAgentState) -> dict[str, Any]:
             human_review_needed=True,
             review_reason=str(e)[:200],
         )
+        node_errors.append(
+            NodeError(
+                node_name=f"run_agent:{agent_name}",
+                error_type=type(e).__name__,
+                error_message=str(e)[:500],
+            )
+        )
+    # 适配器内部已兜底的失败也记入 node_errors，保证 trace 树完整
+    if envelope.status == "error" and not node_errors:
+        node_errors.append(
+            NodeError(
+                node_name=f"run_agent:{agent_name}",
+                error_type="AgentError",
+                error_message=(envelope.review_reason or envelope.analysis)[:500],
+            )
+        )
+    finished_at = datetime.utcnow()
 
-    # 构建执行结果
+    # 构建执行结果（含运行时审计字段，供 EvaluationNodeResult 持久化）
     exec_result = ExecutionResult(
         step_id=step_id,
         agent_name=agent_name,
@@ -379,11 +400,15 @@ async def run_agent(state: RunAgentState) -> dict[str, Any]:
         score=envelope.score,
         analysis=envelope.analysis,
         envelope=envelope,
+        duration_ms=int((finished_at - started_at).total_seconds() * 1000),
+        started_at=started_at.isoformat(),
+        finished_at=finished_at.isoformat(),
     )
 
     return {
         "agent_results": [envelope],
         "execution_results": [exec_result],
+        "node_errors": node_errors,
         "progress_events": [
             ProgressEvent(
                 progress=50,

@@ -91,6 +91,10 @@ class ExecutionResult(BaseModel):
     analysis: str = ""
     execution_order: int = 0
     envelope: AgentResultEnvelope | None = None
+    # 运行时审计（ISO 字符串保证 JSON 可序列化，供 EvaluationNodeResult 持久化）
+    duration_ms: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 # ── Safety 结果 ─────────────────────────────────────────────────────────────

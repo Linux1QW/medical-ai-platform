@@ -46,6 +46,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov httpx
 
+      - name: Run mypy type check (blocking)
+        run: |
+          cd backend
+          python -m mypy app
+
       - name: Run tests with coverage
         env:
           MYSQL_HOST: localhost
@@ -144,17 +149,13 @@ jobs:
 
       - name: Install linting tools
         run: |
-          pip install ruff mypy
-          pip install types-requests types-redis
+          pip install ruff
 
       - name: Run ruff
         run: |
           ruff check backend/
 
-      - name: Run mypy
-        run: |
-          cd backend
-          mypy app/ --ignore-missing-imports --no-error-summary 2>&1 | head -50 || true
+      # mypy 阻断门禁已移至 backend-test 作业（需完整依赖环境，与本地结果一致）
 
       - name: Check Python syntax
         run: |

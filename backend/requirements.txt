@@ -24,6 +24,7 @@ slowapi==0.1.10
 jieba==0.42.1
 pre-commit==4.6.1
 ruff==0.15.22
+mypy==2.3.0
 python-json-logger==4.1.0
 celery[redis]==5.6.3
 # langfuse 锁定 2.x：代码使用 v2 的 client.trace() API，3.x+ 已改为 OTel 风格不兼容

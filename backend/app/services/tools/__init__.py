@@ -13,6 +13,16 @@ from .robust_tool_executor import (
     RobustToolExecutor,
     ToolCallStats,
 )
+from .runtime import (
+    ManagedToolBudget,
+    budget_manager,
+    create_tool_budget,
+    create_tool_executor,
+    get_health_checker,
+    get_tool_runtime_snapshot,
+    start_tool_health_checks,
+    stop_tool_health_checks,
+)
 from .scoring import register_scoring_tools
 from .tool_budget_manager import (
     BudgetAlertLevel,
@@ -59,6 +69,15 @@ __all__ = [
     "BudgetAlertLevel",
     "ToolCostConfig",
     "SessionBudget",
+    # Harness 运行时（接线工厂）
+    "create_tool_executor",
+    "create_tool_budget",
+    "ManagedToolBudget",
+    "budget_manager",
+    "start_tool_health_checks",
+    "stop_tool_health_checks",
+    "get_health_checker",
+    "get_tool_runtime_snapshot",
     # 健康检查
     "ToolHealthChecker",
     "ToolHealthStatus",

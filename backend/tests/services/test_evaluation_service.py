@@ -212,6 +212,7 @@ class TestRunEvaluationLegacy:
 
         # 设置 LANGGRAPH_ENABLED=False 走旧路径
         mock_settings.LANGGRAPH_ENABLED = False
+        mock_settings.AGENT_TIMEOUT_SECONDS = 180  # settings 整体被 mock，需还原真实超时数值
 
         # mock manager.send_progress 为异步方法
         mock_manager.send_progress = AsyncMock()
@@ -296,6 +297,7 @@ class TestRunEvaluationLegacy:
         from app.services.evaluation_service import run_evaluation
 
         mock_settings.LANGGRAPH_ENABLED = False
+        mock_settings.AGENT_TIMEOUT_SECONDS = 180  # settings 整体被 mock，需还原真实超时数值
 
         # mock manager.send_progress 为异步方法
         mock_manager.send_progress = AsyncMock()

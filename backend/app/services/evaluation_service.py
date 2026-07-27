@@ -325,6 +325,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
     # 用于跟踪并行任务进度的计数器
     completed_agents = {"count": 0}
     agent_names = ["病史采集", "医学知识", "沟通交流", "诊断结果", "治疗方案"]
+    failed_agents: list[str] = []
 
     async def run_with_progress(coro, agent_index: int):
         """包装异步任务，完成后更新进度"""
@@ -340,6 +341,35 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         await manager.send_progress(consultation_id, progress, msg)
         return result
 
+    async def run_agent_safe(coro, agent_index: int):
+        """单 Agent 容错包装：超时/异常时返回降级结果，不拖垮其余维度
+
+        与 LangGraph 路径语义对齐：单 Agent 失败 → 该维度降级 + 整体强制人工复核。
+        """
+        name = agent_names[agent_index]
+        try:
+            return await asyncio.wait_for(
+                run_with_progress(coro, agent_index),
+                timeout=settings.AGENT_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logging.error(f"{name}评估Agent执行失败: {e}", exc_info=True)
+            failed_agents.append(name)
+            completed_agents["count"] += 1
+            try:
+                await manager.send_progress(
+                    consultation_id,
+                    10 + completed_agents["count"] * 10,
+                    f"{name}评估失败，其余维度继续...",
+                )
+            except Exception:
+                pass
+            fallback = {
+                "score": 0,
+                "analysis": f"{name}维度自动评估失败（{type(e).__name__}），该结果需人工复核。",
+            }
+            return {"raw_response": json.dumps(fallback, ensure_ascii=False)}
+
     try:
         # 第一阶段：并行调用五个评估智能体
         await manager.send_progress(consultation_id, 5, "正在启动五维评估智能体...")
@@ -353,11 +383,11 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             diagnosis_result,
             treatment_result,
         ) = await asyncio.gather(
-            run_with_progress(run_inquiry_analysis(conversation_text, patient_info), 0),
-            run_with_progress(run_knowledge_check(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 1),
-            run_with_progress(run_humanistic_evaluation(conversation_text, patient_info), 2),
-            run_with_progress(run_diagnosis_evaluation(conversation_text, patient_info, doctor_diagnosis), 3),
-            run_with_progress(run_treatment_evaluation(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 4),
+            run_agent_safe(run_inquiry_analysis(conversation_text, patient_info), 0),
+            run_agent_safe(run_knowledge_check(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 1),
+            run_agent_safe(run_humanistic_evaluation(conversation_text, patient_info), 2),
+            run_agent_safe(run_diagnosis_evaluation(conversation_text, patient_info, doctor_diagnosis), 3),
+            run_agent_safe(run_treatment_evaluation(conversation_text, patient_info, doctor_diagnosis, treatment_plan), 4),
         )
 
         inquiry_data = _extract_json(inquiry_result["raw_response"])
@@ -373,6 +403,11 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         review_reason = knowledge_result.get("review_reason")
         citations = knowledge_result.get("citations", [])
         rag_trace = knowledge_result.get("rag_trace", {})
+
+        # 任一 Agent 执行失败 → 强制人工复核（与 LangGraph 路径语义一致）
+        if failed_agents:
+            human_review_needed = True
+            review_reason = review_reason or ("agent_error: " + "、".join(failed_agents))
 
         # 拒答逻辑：如果 knowledge_agent 标记需要人工复核，knowledge_score 置 None
         knowledge_score_value = knowledge_data.get("score")
@@ -418,15 +453,25 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             humanistic_score_value = humanistic_data.get("score", 0)
             diagnosis_score_value = diagnosis_data.get("score", 0)
             treatment_score_value = treatment_data.get("score", 0)
-            summary = (
-                "知识维度评估证据不足（检索状态：{}，证据立场：{}），总分待人工复核。"
-                "其余维度评估：问诊技巧 {}分，人文关怀 {}分，诊断能力 {}分，治疗方案 {}分。"
-            ).format(
-                RETRIEVAL_STATUS_LABELS.get(retrieval_status, retrieval_status),
-                EVIDENCE_STANCE_LABELS.get(evidence_stance, evidence_stance),
-                inquiry_score_value, humanistic_score_value,
-                diagnosis_score_value, treatment_score_value,
-            )
+            if failed_agents:
+                summary = (
+                    "部分维度自动评估执行失败（{}），总分待人工复核。"
+                    "各维度结果：问诊技巧 {}分，人文关怀 {}分，诊断能力 {}分，治疗方案 {}分。"
+                ).format(
+                    "、".join(failed_agents),
+                    inquiry_score_value, humanistic_score_value,
+                    diagnosis_score_value, treatment_score_value,
+                )
+            else:
+                summary = (
+                    "知识维度评估证据不足（检索状态：{}，证据立场：{}），总分待人工复核。"
+                    "其余维度评估：问诊技巧 {}分，人文关怀 {}分，诊断能力 {}分，治疗方案 {}分。"
+                ).format(
+                    RETRIEVAL_STATUS_LABELS.get(retrieval_status, retrieval_status),
+                    EVIDENCE_STANCE_LABELS.get(evidence_stance, evidence_stance),
+                    inquiry_score_value, humanistic_score_value,
+                    diagnosis_score_value, treatment_score_value,
+                )
 
         evaluation = Evaluation(
             consultation_id=consultation_id,

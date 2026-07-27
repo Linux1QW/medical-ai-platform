@@ -2,10 +2,25 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 
 from app.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+RETRY_BACKOFF_BASE = 30  # 重试退避基础秒数（30s → 60s 指数增长）
+
+# 可重试的异常类型（网络/超时类）；业务性错误（数据缺失、校验失败）重试无意义
+_RETRYABLE_EXC_TYPES = (TimeoutError, ConnectionError, OSError)
+_RETRYABLE_NAME_KEYWORDS = ("timeout", "connection", "network", "unavailable", "ratelimit", "temporar")
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    """判断异常是否值得重试：类型匹配 或 异常类名含网络/超时类关键词"""
+    if isinstance(exc, _RETRYABLE_EXC_TYPES):
+        return True
+    name = type(exc).__name__.lower()
+    return any(keyword in name for keyword in _RETRYABLE_NAME_KEYWORDS)
 
 
 @celery_app.task(bind=True, name="run_evaluation", max_retries=2)
@@ -38,28 +53,47 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
         logger.error(
             f"[Celery] 评估失败: consultation_id={consultation_id}, error={exc}"
         )
-        # 更新锁状态为 failed
+        # 更新锁状态为 failed（running → failed 合法转移）
         try:
             asyncio.run(_mark_lock_failed(consultation_id, str(exc)))
         except Exception:
             logger.exception("更新锁失败状态时出错")
 
-        # 可重试异常（网络/超时类）
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=30) from exc
+        # 仅网络/超时类异常重试；重试前将锁重置为 pending（failed → pending 合法转移），
+        # 使重试执行时的 pending → running 符合状态机，避免锁停留在 failed 与实际运行状态打架
+        will_retry = (
+            self.request.retries < self.max_retries and _is_retryable_error(exc)
+        )
+        if will_retry:
+            try:
+                asyncio.run(_mark_lock_pending_for_retry(consultation_id))
+            except Exception:
+                logger.exception("重试前重置锁状态时出错")
+            countdown = RETRY_BACKOFF_BASE * (2 ** self.request.retries)
+            logger.info(
+                f"[Celery] 将在 {countdown}s 后重试: consultation_id={consultation_id}, "
+                f"retries={self.request.retries + 1}/{self.max_retries}"
+            )
+            raise self.retry(exc=exc, countdown=countdown) from exc
         raise
 
 
 async def _execute_evaluation(consultation_id: int, run_id: str) -> dict:
-    """在异步上下文中执行评估"""
+    """在异步上下文中执行评估（附带锁心跳续期后台任务）"""
     from app.db.session import AsyncSessionLocal
     from app.services.evaluation_lock_service import update_lock_status
     from app.services.evaluation_service import run_evaluation
 
     async with AsyncSessionLocal() as db:
+        heartbeat_task: asyncio.Task | None = None
         try:
             await update_lock_status(db, consultation_id, "running")
             await db.commit()
+
+            # 启动心跳续期：防止长评估期间锁 TTL 过期被并发请求清理
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_loop(consultation_id, run_id)
+            )
 
             evaluation = await run_evaluation(db, consultation_id)
 
@@ -80,6 +114,42 @@ async def _execute_evaluation(consultation_id: int, run_id: str) -> dict:
             await db.rollback()
             raise exc
 
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
+
+
+async def _heartbeat_loop(consultation_id: int, run_id: str) -> None:
+    """锁心跳续期循环：每 HEARTBEAT_INTERVAL 秒刷新 heartbeat_at 并延长 TTL
+
+    使用独立 DB 会话，避免与评估主流程的事务互相干扰。
+    续期失败（锁丢失/已进入终态）时停止心跳，续期异常则下轮重试。
+    """
+    from app.db.session import AsyncSessionLocal
+    from app.services.evaluation_lock_service import HEARTBEAT_INTERVAL, renew_lock
+
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
+        try:
+            async with AsyncSessionLocal() as db:
+                renewed = await renew_lock(db, consultation_id, run_id)
+                await db.commit()
+            if not renewed:
+                logger.warning(
+                    f"[Heartbeat] 锁续期失败（锁丢失或非 running），停止心跳: "
+                    f"consultation_id={consultation_id}"
+                )
+                return
+            logger.debug(
+                f"[Heartbeat] 锁续期成功: consultation_id={consultation_id}"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[Heartbeat] 续期异常（下轮重试）: {e}")
+
 
 async def _mark_lock_failed(consultation_id: int, error: str) -> None:
     """标记评估锁为失败状态"""
@@ -88,4 +158,14 @@ async def _mark_lock_failed(consultation_id: int, error: str) -> None:
 
     async with AsyncSessionLocal() as db:
         await update_lock_status(db, consultation_id, "failed", error_message=error[:500])
+        await db.commit()
+
+
+async def _mark_lock_pending_for_retry(consultation_id: int) -> None:
+    """重试前将锁重置为 pending（failed → pending 合法转移，并恢复短 TTL）"""
+    from app.db.session import AsyncSessionLocal
+    from app.services.evaluation_lock_service import update_lock_status
+
+    async with AsyncSessionLocal() as db:
+        await update_lock_status(db, consultation_id, "pending")
         await db.commit()

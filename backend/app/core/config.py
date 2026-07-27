@@ -130,6 +130,17 @@ class Settings(BaseSettings):
     KNOWLEDGE_TOOL_MAX_HYDE_CALLS: int = 1
     TOOL_USE_FALLBACK_TO_LEGACY: bool = True
 
+    # 工具执行加固（Harness 接线）
+    TOOL_EXECUTOR_HARDENED: bool = True           # 使用 RobustToolExecutor（重试/熔断/结果校验）
+    TOOL_EXECUTOR_MAX_RETRIES: int = 2            # 工具调用最大重试次数（仅超时/网络类异常）
+    TOOL_EXECUTOR_RETRY_BASE_DELAY: float = 0.5   # 重试基础延迟（秒，指数退避+抖动）
+    TOOL_CIRCUIT_BREAKER_THRESHOLD: int = 5       # 熔断阈值（连续失败次数）
+    TOOL_CIRCUIT_BREAKER_RECOVERY: float = 30.0   # 熔断恢复窗口（秒）
+    TOOL_BUDGET_MANAGER_ENABLED: bool = True      # 启用 ToolBudgetManager（成本/总量/三级预警）
+    TOOL_HEALTH_CHECK_ENABLED: bool = False       # 后台工具健康探测（探测会真实调用工具，含 LLM 成本，默认关闭）
+    TOOL_HEALTH_CHECK_INTERVAL: float = 300.0     # 健康探测间隔（秒）
+    AGENT_TIMEOUT_SECONDS: int = 180              # 旧编排路径单个评估 Agent 超时（秒）
+
     # ReAct 模式配置
     ENABLE_REACT_KNOWLEDGE: bool = True           # Knowledge Agent 启用 ReAct 模式
     ENABLE_REACT_REFLECTION: bool = True          # Reflection Agent 启用 ReAct 模式

@@ -62,7 +62,14 @@ async def lifespan(app: FastAPI):
         ttl=settings.REDIS_CHECKPOINT_TTL,
     )
 
+    # 启动工具健康探测（TOOL_HEALTH_CHECK_ENABLED=false 时无操作）
+    from app.services.tools.runtime import start_tool_health_checks, stop_tool_health_checks
+    await start_tool_health_checks()
+
     yield
+
+    # 停止工具健康探测
+    await stop_tool_health_checks()
 
     # 关闭 checkpointer（None 时无操作）
     await close_checkpointer()

@@ -25,6 +25,7 @@ from app.services.tools.base import ToolContext
 from app.services.tools.budget import ToolBudget
 from app.services.tools.executor import ToolExecutor
 from app.services.tools.registry import ToolRegistry
+from app.services.tools.runtime import create_tool_budget, create_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +160,8 @@ async def run_knowledge_check_with_tools(  # noqa: C901
         # ── Step 4: 构造 ToolRegistry + ToolExecutor + ToolBudget ──
         registry = ToolRegistry()
         register_all_tools(registry)
-        executor = ToolExecutor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
-        budget = ToolBudget(context.budgets)
+        executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
+        budget = create_tool_budget(context.budgets, context.run_id)
         bridge = _ToolExecutorBridge(executor, context, budget)
 
         # ── Step 5: 构造 System Prompt ──

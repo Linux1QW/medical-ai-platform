@@ -232,6 +232,9 @@ class RobustToolExecutor:
         enable_retry: bool = True,
         enable_circuit_breaker: bool = True,
         enable_validation: bool = True,
+        circuit_breakers: dict[str, CircuitBreaker] | None = None,
+        stats: dict[str, "ToolCallStats"] | None = None,
+        health_checker=None,
     ):
         self.registry = registry
         self.max_result_chars = max_result_chars
@@ -240,15 +243,20 @@ class RobustToolExecutor:
         self.enable_circuit_breaker = enable_circuit_breaker
         self.enable_validation = enable_validation
 
-        # 每个工具独立的熔断器
-        self._circuit_breakers: dict[str, CircuitBreaker] = {}
+        # 每个工具独立的熔断器（可传入进程级共享字典，使熔断状态跨评估生效）
+        self._circuit_breakers: dict[str, CircuitBreaker] = (
+            circuit_breakers if circuit_breakers is not None else {}
+        )
         self._cb_threshold = circuit_breaker_threshold
         self._cb_recovery = circuit_breaker_recovery
 
-        # 执行统计
-        self._stats: dict[str, ToolCallStats] = {}
+        # 执行统计（同样支持进程级共享）
+        self._stats: dict[str, ToolCallStats] = stats if stats is not None else {}
 
-        # 执行 trace
+        # 可选健康检查器：执行前门控，不健康时直接返回降级结果
+        self.health_checker = health_checker
+
+        # 执行 trace（始终单次运行独立）
         self.traces: list[dict] = []
 
         # 结果验证器
@@ -302,6 +310,25 @@ class RobustToolExecutor:
                                error="Budget exceeded")
             return self._error_result(trace_id, "budget_exceeded",
                                       f"Tool '{tool_name}' budget exceeded")
+
+        # ── 2.5 健康门控：工具不健康时跳过执行，直接返回预置降级结果 ──
+        if self.health_checker is not None and not self.health_checker.is_healthy(tool_name):
+            elapsed = self._elapsed(start_time)
+            status_value = self.health_checker.get_status(tool_name).value
+            self._record_trace(trace_id, tool_name, {}, "unhealthy_skipped", elapsed,
+                               error=f"Tool unhealthy: {status_value}")
+            return {
+                "ok": False,
+                "data": self.health_checker.get_degraded_result(tool_name),
+                "error": {
+                    "code": "tool_unhealthy",
+                    "message": f"Tool '{tool_name}' 健康检查未通过（{status_value}），返回降级结果",
+                },
+                "degraded": True,
+                "trace_id": trace_id,
+                "circuit_state": self._get_circuit_breaker(tool_name).state.value,
+                "retries": 0,
+            }
 
         # ── 3. 熔断器检查 ──
         cb = self._get_circuit_breaker(tool_name)

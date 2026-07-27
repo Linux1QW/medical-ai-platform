@@ -11,6 +11,7 @@ from app.models.evaluation_lock import EvaluationLock
 logger = logging.getLogger(__name__)
 
 EVALUATION_TIMEOUT = 300  # 5 分钟
+HEARTBEAT_INTERVAL = 60  # 心跳续期间隔（秒），需明显小于 EVALUATION_TIMEOUT
 
 
 async def try_acquire_lock(
@@ -85,7 +86,35 @@ async def update_lock_status(
         lock.error_message = error_message[:500]
     if new_status in ("completed", "needs_review", "failed"):
         lock.expires_at = datetime.utcnow() + timedelta(hours=24)
+    elif new_status == "pending":
+        # failed → pending（Celery 重试前重置）：恢复短 TTL，
+        # 避免重试丢失时锁以 24h 过期时间长期占位
+        lock.expires_at = datetime.utcnow() + timedelta(seconds=EVALUATION_TIMEOUT)
 
+    await db.flush()
+    return True
+
+
+async def renew_lock(
+    db: AsyncSession, consultation_id: int, run_id: str
+) -> bool:
+    """心跳续期：仅当锁仍归属当前 run 且处于 running 时刷新过期时间
+
+    长评估（RAG 慢 + 多 Agent）可能逼近固定 TTL，心跳续期避免
+    运行中的锁被下一次 try_acquire_lock 判定过期而被物理删除。
+    """
+    result = await db.execute(
+        select(EvaluationLock).where(
+            EvaluationLock.consultation_id == consultation_id
+        )
+    )
+    lock = result.scalar_one_or_none()
+    if not lock or lock.run_id != run_id or lock.status != "running":
+        return False
+
+    now = datetime.utcnow()
+    lock.heartbeat_at = now
+    lock.expires_at = now + timedelta(seconds=EVALUATION_TIMEOUT)
     await db.flush()
     return True
 

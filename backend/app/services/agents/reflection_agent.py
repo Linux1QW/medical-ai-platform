@@ -27,6 +27,7 @@ from app.services.tools.budget import ToolBudget
 from app.services.tools.consistency import register_consistency_tools
 from app.services.tools.executor import ToolExecutor
 from app.services.tools.registry import ToolRegistry
+from app.services.tools.runtime import create_tool_budget, create_tool_executor
 from app.utils.json_parser import extract_json_dict_from_text
 
 logger = logging.getLogger(__name__)
@@ -160,8 +161,8 @@ async def run_reflection(  # noqa: C901
 
         registry = ToolRegistry()
         register_consistency_tools(registry)
-        executor = ToolExecutor(registry, max_result_chars=3000)
-        budget = ToolBudget(context.budgets)
+        executor = create_tool_executor(registry, max_result_chars=3000)
+        budget = create_tool_budget(context.budgets, context.run_id)
         bridge = _ToolExecutorBridge(executor, context, budget)
 
         # ── Step 3: 构建初始输入 ──

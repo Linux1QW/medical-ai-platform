@@ -31,9 +31,8 @@ from app.services.prompts import get_prompt
 from app.services.rag.types import EvidenceItem
 from app.services.tools import register_all_tools
 from app.services.tools.base import ToolContext
-from app.services.tools.budget import ToolBudget
-from app.services.tools.executor import ToolExecutor
 from app.services.tools.registry import ToolRegistry
+from app.services.tools.runtime import create_tool_budget, create_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +148,8 @@ async def run_knowledge_check_react(  # noqa: C901
 
         registry = ToolRegistry()
         register_all_tools(registry)
-        executor = ToolExecutor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
-        budget = ToolBudget(context.budgets)
+        executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
+        budget = create_tool_budget(context.budgets, context.run_id)
         bridge = _ToolExecutorBridge(executor, context, budget)
 
         # ── Step 4: 构建初始输入 ──

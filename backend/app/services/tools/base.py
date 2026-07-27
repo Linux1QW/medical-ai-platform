@@ -20,18 +20,22 @@ class BaseTool(ABC):
     """所有工具的基类"""
     name: str = ""
     description: str = ""
-    args_schema: type[BaseModel] = None  # Pydantic 模型，用于参数校验
+    args_schema: type[BaseModel] | None = None  # Pydantic 模型，用于参数校验
     result_schema: type[BaseModel] | None = None  # 可选的返回结构定义
     timeout_seconds: int = 30
     critical: bool = False  # 关键工具失败时标记 degraded
 
     @abstractmethod
-    async def execute(self, args: BaseModel, context: ToolContext) -> dict:
-        """执行工具逻辑，返回结果 dict"""
+    async def execute(self, args: Any, context: ToolContext) -> dict:
+        """执行工具逻辑，返回结果 dict
+
+        args 为各工具 args_schema 对应的 Pydantic 实例，子类可收窄为具体类型。
+        """
         ...
 
     def openai_schema(self) -> dict:
         """生成 OpenAI Function Calling 格式的 tool schema"""
+        assert self.args_schema is not None, f"工具 {self.name} 未定义 args_schema"
         schema = self.args_schema.model_json_schema()
         # 提取 properties 和 required
         properties = schema.get("properties", {})

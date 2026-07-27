@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 async def record_audit_log(
-    db: AsyncSession,
+    db: Optional[AsyncSession],
     user_id: Optional[int],
     action: str,
     request: Optional[Request] = None,

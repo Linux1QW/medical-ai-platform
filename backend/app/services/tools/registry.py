@@ -3,7 +3,8 @@ from .base import BaseTool
 
 class ToolRegistry:
     """单例工具注册表"""
-    _instance = None
+    _instance: "ToolRegistry | None" = None
+    _tools: dict[str, BaseTool]
 
     def __new__(cls):
         if cls._instance is None:

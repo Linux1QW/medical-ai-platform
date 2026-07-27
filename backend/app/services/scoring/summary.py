@@ -8,7 +8,7 @@ from app.services.prompts import get_prompt
 from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
 from app.services.scoring.calculator import DimensionResult
 from app.services.scoring.policies import ScoringPolicy
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -273,4 +273,4 @@ class SummaryGenerator:
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回文本中提取 JSON"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)

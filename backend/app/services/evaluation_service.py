@@ -34,9 +34,12 @@ class EvaluationValidationError(Exception):
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON，解析失败时抛出 ValidationError"""
     try:
-        return extract_json_from_text(text)
+        data = extract_json_from_text(text)
     except ValueError as e:
         raise EvaluationValidationError("评估格式异常，无法解析 JSON", text) from e
+    if not isinstance(data, dict):
+        raise EvaluationValidationError("评估格式异常，JSON 顶层不是对象", text)
+    return data
 
 
 async def run_evaluation(db: AsyncSession, consultation_id: int) -> Evaluation:
@@ -67,15 +70,15 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
     # 1. 加载数据
     await manager.send_progress(consultation_id, 0, "正在初始化...")
 
-    consultation = await db.execute(
+    consultation_result = await db.execute(
         select(Consultation).where(Consultation.id == consultation_id)
     )
-    consultation = consultation.scalar_one()
+    consultation = consultation_result.scalar_one()
 
-    patient = await db.execute(
+    patient_result = await db.execute(
         select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
     )
-    patient = patient.scalar_one()
+    patient = patient_result.scalar_one()
 
     msgs = await db.execute(
         select(ConsultationMessage)
@@ -257,7 +260,11 @@ def _build_evaluation_from_state(state: dict, consultation_id: int) -> Evaluatio
         evaluation_status=eval_status,
         # LangGraph 审计字段
         run_id=state.get("run_id"),
-        safety_data=state.get("safety_result").model_dump() if state.get("safety_result") else None,
+        safety_data=(
+            safety_result.model_dump()
+            if (safety_result := state.get("safety_result")) is not None
+            else None
+        ),
         applicable_dimensions=list(dimensions.keys()) if dimensions else None,
         scoring_policy_version=state.get("scoring_policy_version"),
         graph_version=state.get("graph_version"),
@@ -280,15 +287,15 @@ def _parse_symptoms(symptoms_str) -> list[str]:
 async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Evaluation:
     """旧编排路径 — 保留原有代码作为回退"""
     await manager.send_progress(consultation_id, 0, "正在初始化...")
-    consultation = await db.execute(
+    consultation_result = await db.execute(
         select(Consultation).where(Consultation.id == consultation_id)
     )
-    consultation = consultation.scalar_one()
+    consultation = consultation_result.scalar_one()
 
-    patient = await db.execute(
+    patient_result = await db.execute(
         select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
     )
-    patient = patient.scalar_one()
+    patient = patient_result.scalar_one()
 
     msgs = await db.execute(
         select(ConsultationMessage)

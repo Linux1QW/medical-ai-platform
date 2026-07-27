@@ -193,12 +193,11 @@ def rebuild_sparse_index() -> bool:
         from app.services.rag.medical_store import _get_collection_name, get_medical_store
 
         store = get_medical_store()
-        if store.client is None:
-            store._init_client()
+        client = store._ensure_client()
 
         collection_name = _get_collection_name()
         try:
-            collection = store.client.get_collection(collection_name)
+            collection = client.get_collection(collection_name)
         except Exception:
             logger.warning(f"Sparse 索引: collection '{collection_name}' 不存在")
             return False
@@ -209,7 +208,7 @@ def rebuild_sparse_index() -> bool:
 
         # 从 collection 获取所有文档文本
         count = collection.count()
-        all_texts = []
+        all_texts: list[str] = []
         batch_size = 1000
         for offset in range(0, count, batch_size):
             result = collection.get(

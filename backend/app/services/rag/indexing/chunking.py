@@ -220,7 +220,7 @@ def _merge_units(units: List[str], chunk_size: int) -> List[str]:
         return []
 
     chunks = []
-    current_chunk = []
+    current_chunk: list[str] = []
     current_len = 0
 
     for unit in units:

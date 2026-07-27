@@ -3,6 +3,7 @@
 
 import logging
 import time
+from typing import Any, Literal
 
 from app.core.config import settings
 from app.services.observability.langfuse_client import get_tracer
@@ -215,7 +216,7 @@ async def tiered_retrieve(  # noqa: C901
         return RetrievalBundle.model_validate(cached)
 
     start = time.monotonic()
-    trace = {
+    trace: dict[str, Any] = {
         "index_version": settings.ACTIVE_INDEX_VERSION,
         "queries": [{"type": q.query_type, "text": q.text[:100], "source": q.source} for q in queries],
         "levels_attempted": [],
@@ -238,7 +239,7 @@ async def tiered_retrieve(  # noqa: C901
     set(q.query_type for q in queries)
     query_types_with_hits: set = set()
     all_candidates: list = []
-    level_used = "base"
+    level_used: Literal["base", "mqe", "hyde"] = "base"
     decisions: list = []  # 每级决策记录
 
     def _compute_confidence(cands: list, qtypes_hits: set) -> RetrievalConfidence:
@@ -413,7 +414,9 @@ async def tiered_retrieve(  # noqa: C901
     trace["hyde_calls"] = 1 if hyde_success else 0
     trace["retrieval_level"] = "hyde"
     trace["candidate_count"] = len(all_candidates[:candidate_limit])
-    final_status = "candidate" if confidence != RetrievalConfidence.LOW else "insufficient"
+    final_status: Literal["candidate", "insufficient"] = (
+        "candidate" if confidence != RetrievalConfidence.LOW else "insufficient"
+    )
     trace["retrieval_status"] = final_status
     trace.update(_build_confidence_trace(confidence))
     trace["decisions"] = decisions

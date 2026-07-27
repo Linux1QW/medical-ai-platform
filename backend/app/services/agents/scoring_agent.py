@@ -10,7 +10,7 @@ import logging
 
 from app.services.qwen_client import call_qwen_chat
 from app.services.scoring.policies import get_default_policy
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 # ── 保留旧常量引用（兼容基线测试 import） ──────────────────────────
 SCORING_WEIGHTS = get_default_policy().weights
@@ -23,7 +23,7 @@ _DIMENSION_NAMES = get_default_policy().dimension_names
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)
 
 
 def calculate_total(scores: dict) -> int | None:
@@ -194,11 +194,11 @@ async def run_scoring(
         summary = _generate_fallback_summary(scores, analyses, total_score)
 
     # ── Step 4: 构建返回结果 ──
-    result = {
+    final_result = {
         "total_score": total_score,
         "summary": summary,
         "weights": SCORING_WEIGHTS,
         "dimension_scores": scores,
     }
 
-    return {"raw_response": json.dumps(result, ensure_ascii=False), "total_score": total_score, "summary": summary}
+    return {"raw_response": json.dumps(final_result, ensure_ascii=False), "total_score": total_score, "summary": summary}

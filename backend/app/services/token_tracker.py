@@ -8,7 +8,7 @@ Key 格式：
 
 import logging
 from datetime import date, timedelta
-from typing import Optional
+from typing import Awaitable, Optional, cast
 
 import redis.asyncio as aioredis
 
@@ -68,17 +68,18 @@ class TokenTracker:
 
         try:
             # 按模型+日期
+            # redis-py 的方法签名为 Awaitable[T] | T（同步/异步共享），异步客户端下 cast 收窄
             model_key = f"token_usage:{model}:{today}"
-            await redis.hincrby(model_key, "prompt_tokens", prompt_tokens)
-            await redis.hincrby(model_key, "completion_tokens", completion_tokens)
-            await redis.hincrby(model_key, "total_tokens", total)
+            await cast(Awaitable[int], redis.hincrby(model_key, "prompt_tokens", prompt_tokens))
+            await cast(Awaitable[int], redis.hincrby(model_key, "completion_tokens", completion_tokens))
+            await cast(Awaitable[int], redis.hincrby(model_key, "total_tokens", total))
             await redis.expire(model_key, 86400 * 7)  # 保留 7 天
 
             # 全局日汇总
             daily_key = f"token_usage:daily:{today}"
-            await redis.hincrby(daily_key, "prompt_tokens", prompt_tokens)
-            await redis.hincrby(daily_key, "completion_tokens", completion_tokens)
-            await redis.hincrby(daily_key, "total_tokens", total)
+            await cast(Awaitable[int], redis.hincrby(daily_key, "prompt_tokens", prompt_tokens))
+            await cast(Awaitable[int], redis.hincrby(daily_key, "completion_tokens", completion_tokens))
+            await cast(Awaitable[int], redis.hincrby(daily_key, "total_tokens", total))
             await redis.expire(daily_key, 86400 * 7)
         except Exception as e:
             logger.debug(f"Token 用量记录异常: {e}")
@@ -92,7 +93,7 @@ class TokenTracker:
         target = date_str or _today_str()
         key = f"token_usage:daily:{target}"
         try:
-            data = await redis.hgetall(key)
+            data = await cast(Awaitable[dict], redis.hgetall(key))
             if not data:
                 return {"date": target, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             return {
@@ -117,7 +118,7 @@ class TokenTracker:
             d = (today - timedelta(days=i)).isoformat()
             key = f"token_usage:{model}:{d}"
             try:
-                data = await redis.hgetall(key)
+                data = await cast(Awaitable[dict], redis.hgetall(key))
                 if data:
                     result.append({
                         "date": d,

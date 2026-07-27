@@ -98,6 +98,14 @@ async def get_consultation(db: AsyncSession, consultation_id: int) -> Optional[C
     return result.scalar_one_or_none()
 
 
+async def _get_consultation_or_raise(db: AsyncSession, consultation_id: int) -> Consultation:
+    """获取问诊记录，不存在时抛出 ValueError（用于必须存在的场景）"""
+    consultation = await get_consultation(db, consultation_id)
+    if consultation is None:
+        raise ValueError(f"问诊记录不存在: {consultation_id}")
+    return consultation
+
+
 async def list_consultations(
     db: AsyncSession,
     doctor_id: Optional[int] = None,
@@ -252,7 +260,7 @@ async def send_doctor_message(
     )
     db.add(doctor_msg)
 
-    consultation = await get_consultation(db, consultation_id)
+    consultation = await _get_consultation_or_raise(db, consultation_id)
     patient_result = await db.execute(
         select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
     )
@@ -343,7 +351,7 @@ async def send_doctor_message_stream(
             "message": "正在加载患者信息...",
             "progress": 30,
         })
-        consultation = await get_consultation(db, consultation_id)
+        consultation = await _get_consultation_or_raise(db, consultation_id)
         patient_result = await db.execute(
             select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
         )
@@ -449,7 +457,7 @@ async def send_doctor_message_stream(
 
 
 async def end_consultation(db: AsyncSession, consultation_id: int) -> Consultation:
-    consultation = await get_consultation(db, consultation_id)
+    consultation = await _get_consultation_or_raise(db, consultation_id)
     consultation.status = "completed"
     consultation.ended_at = datetime.utcnow()
     await db.commit()
@@ -461,7 +469,7 @@ async def submit_diagnosis(
     db: AsyncSession, consultation_id: int, diagnosis: str, treatment_plan: str
 ) -> Consultation:
     """医生提交诊断结果和治疗方案，同时结束问诊"""
-    consultation = await get_consultation(db, consultation_id)
+    consultation = await _get_consultation_or_raise(db, consultation_id)
     consultation.diagnosis = diagnosis
     consultation.treatment_plan = treatment_plan
     consultation.status = "completed"

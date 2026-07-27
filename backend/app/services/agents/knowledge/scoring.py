@@ -10,12 +10,12 @@
 from typing import Optional
 
 from app.services.rag.types import ClinicalFacts
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON（三层解析策略）"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)
 
 
 def _map_consistency_to_score(stance: str, confidence: float) -> int:

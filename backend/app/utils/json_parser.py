@@ -62,3 +62,11 @@ def extract_json_from_text(
 
     logger.warning("JSON extraction failed, returning default value")
     return default if default is not None else {}
+
+
+def extract_json_dict_from_text(text: str) -> dict:
+    """提取 JSON 并要求顶层为对象，否则抛出 ValueError（供需要 dict 的调用方使用）"""
+    data = extract_json_from_text(text)
+    if not isinstance(data, dict):
+        raise ValueError(f"JSON 顶层不是对象: {type(data).__name__}")
+    return data

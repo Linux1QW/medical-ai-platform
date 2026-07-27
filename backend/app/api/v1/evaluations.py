@@ -64,7 +64,7 @@ async def evaluation_progress_ws(
 
     user_id_str = payload.get("sub")
     try:
-        user_id = int(user_id_str)
+        user_id = int(user_id_str or "")
     except (TypeError, ValueError):
         await websocket.close(code=1008, reason="无效的认证凭据")
         return
@@ -145,6 +145,7 @@ async def create_evaluation(
             # 生产模式：通过 Celery 异步提交
             from app.tasks.evaluation_task import run_evaluation_task
 
+            assert lock is not None
             task = run_evaluation_task.delay(
                 consultation_id=data.consultation_id,
                 run_id=lock.run_id,

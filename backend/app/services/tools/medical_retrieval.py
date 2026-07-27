@@ -16,7 +16,7 @@
 
 import logging
 import time
-from typing import List
+from typing import List, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -110,7 +110,10 @@ class SearchMedicalKB(BaseTool):
             }
 
         # 将 query_type 映射为 RetrievalQuery 支持的类型
-        rq_type = args.query_type if args.query_type in ("case", "diagnosis", "treatment") else "case"
+        rq_type = cast(
+            Literal["case", "diagnosis", "treatment"],
+            args.query_type if args.query_type in ("case", "diagnosis", "treatment") else "case",
+        )
 
         start_time = time.monotonic()
         try:

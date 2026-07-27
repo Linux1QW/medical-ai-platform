@@ -6,7 +6,7 @@ import logging
 
 from app.services.prompts import get_prompt
 from app.services.qwen_client import call_qwen_chat
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 # ── 临床 Schema 定义 ──
 CLINICAL_SCHEMA = {
@@ -157,7 +157,7 @@ LOGIC_EFFICIENCY_FEWSHOT_ASSISTANT = """{
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)
 
 
 def _calculate_coverage(slot_data: dict) -> float:
@@ -213,7 +213,7 @@ def _calculate_logic(logic_data: dict) -> float:
         return 1.0  # 步骤太少，默认满分
 
     # 计算顺序偏差
-    order_violations = 0
+    order_violations = 0.0
     for i in range(len(valid_steps) - 1):
         current_idx = IDEAL_ORDER.index(valid_steps[i]) if valid_steps[i] in IDEAL_ORDER else -1
         next_idx = IDEAL_ORDER.index(valid_steps[i + 1]) if valid_steps[i + 1] in IDEAL_ORDER else -1

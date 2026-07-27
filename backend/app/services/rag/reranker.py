@@ -466,10 +466,11 @@ async def rerank_documents(
         return documents[:top_k] if documents else []
 
     # dict → EvidenceItem
-    evidence_items = []
+    evidence_items: list[EvidenceItem] = []
     for doc in documents:
+        raw_id = doc.get("doc_id", doc.get("id"))
         item = EvidenceItem(
-            doc_id=doc.get("doc_id", doc.get("id", str(len(evidence_items)))),
+            doc_id=str(raw_id) if raw_id is not None else str(len(evidence_items)),
             text=doc.get("text", ""),
             source=doc.get("source", ""),
             page=doc.get("page"),

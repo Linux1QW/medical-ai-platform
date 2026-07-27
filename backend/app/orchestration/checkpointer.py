@@ -1,6 +1,7 @@
 """LangGraph Checkpointer 工厂和生命周期管理 — Redis 版本"""
 
 import logging
+from typing import Any, cast
 
 from app.core.config import settings
 
@@ -40,7 +41,7 @@ async def init_checkpointer(redis_url: str = None, ttl: int = None):
         ) from e
 
     try:
-        _checkpointer = AsyncRedisSaver.from_conn_string(redis_url)
+        _checkpointer = cast(Any, AsyncRedisSaver.from_conn_string(redis_url))
         # 创建 Redis 索引（幂等操作，首次连接时执行一次）
         await _checkpointer.setup()
         logger.info(f"LangGraph Redis Checkpointer 已初始化: {redis_url}")

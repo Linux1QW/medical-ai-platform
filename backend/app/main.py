@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
 
-import app.models  # noqa: F401
+from app import models as _models  # noqa: F401
 from app.api.v1 import router as api_v1_router
 from app.core.config import settings
 from app.core.limiter import limiter

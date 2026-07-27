@@ -50,7 +50,7 @@ def setup_logging() -> None:
     handler.setLevel(log_level)
 
     if settings.LOG_FORMAT.lower() == "json":
-        formatter = CustomJsonFormatter(
+        formatter: logging.Formatter = CustomJsonFormatter(
             "%(timestamp)s %(level)s %(name)s %(message)s"
         )
         handler.setFormatter(formatter)

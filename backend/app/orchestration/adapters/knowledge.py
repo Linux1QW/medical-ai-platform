@@ -4,7 +4,7 @@ import logging
 
 from app.core.config import settings
 from app.orchestration.adapters.base import BaseAgentAdapter
-from app.orchestration.state import AgentResultEnvelope, EvaluationContext
+from app.orchestration.state import AgentResultEnvelope, AgentStatus, EvaluationContext
 from app.services.agents.knowledge_agent import (
     run_knowledge_check,
     run_knowledge_check_react,
@@ -101,6 +101,7 @@ class KnowledgeAdapter(BaseAgentAdapter):
             human_review_needed = True
 
         # 确定状态：score=None 表示拒答/证据不足
+        status: AgentStatus
         if score is None:
             status = "insufficient"
         else:

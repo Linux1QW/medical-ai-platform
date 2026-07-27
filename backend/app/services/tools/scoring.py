@@ -12,7 +12,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 from ..qwen_client import call_qwen_chat
 from ..scoring.policies import ScoringPolicy, get_default_policy
@@ -64,7 +64,7 @@ class GetEvaluationCriteria(BaseTool):
         dimension_filter = getattr(args, "dimension", None)
 
         # 构建维度信息
-        dimensions_info = {}
+        dimensions_info: dict[str, dict] = {}
         for dim_name, weight in self.policy.weights.items():
             # 如果指定了维度过滤，只返回指定维度
             if dimension_filter and dim_name != dimension_filter:
@@ -274,7 +274,7 @@ class GenerateImprovementPlan(BaseTool):
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回文本中提取 JSON"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)
 
 
 # ── 注册函数 ──────────────────────────────────────────────────────────────────

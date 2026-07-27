@@ -4,9 +4,10 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import chromadb
+from chromadb.api import ClientAPI
 from chromadb.config import Settings
 
 from app.core.config import settings
@@ -99,11 +100,11 @@ def _reset_collection_cache() -> None:
 class MedicalKnowledgeStore:
     """基于 ChromaDB 的医学指南向量存储"""
 
-    def __init__(self):
-        self.client: Optional[chromadb.PersistentClient] = None
+    def __init__(self) -> None:
+        self.client: Optional[ClientAPI] = None
         self.collection: Optional[chromadb.Collection] = None
 
-    def _init_client(self):
+    def _init_client(self) -> None:
         """初始化 ChromaDB 客户端（持久化模式）"""
         PERSIST_DIR.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(
@@ -117,7 +118,21 @@ class MedicalKnowledgeStore:
         )
         logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR} (collection={collection_name})")
 
-    def refresh_collection(self):
+    def _ensure_client(self) -> ClientAPI:
+        """返回已初始化的 client（用于类型收窄）"""
+        if self.client is None:
+            self._init_client()
+        assert self.client is not None
+        return self.client
+
+    def _ensure_collection(self) -> chromadb.Collection:
+        """返回已初始化的 collection（用于类型收窄）"""
+        if self.collection is None:
+            self._init_client()
+        assert self.collection is not None
+        return self.collection
+
+    def refresh_collection(self) -> None:
         """重新解析并更新 collection 引用（版本切换后调用）"""
         if self.client is None:
             self._init_client()
@@ -138,7 +153,7 @@ class MedicalKnowledgeStore:
         documents: List[str],
         embeddings: List[List[float]],
         metadatas: List[Dict],
-    ):
+    ) -> None:
         """添加文档块到集合
 
         Args:
@@ -147,8 +162,7 @@ class MedicalKnowledgeStore:
             embeddings: 文档向量列表
             metadatas: 文档元数据列表（包含 source, page 等）
         """
-        if self.collection is None:
-            self._init_client()
+        collection = self._ensure_collection()
 
         # ChromaDB 单次添加上限约 5000 条，分批处理
         batch_size = 1000
@@ -160,11 +174,11 @@ class MedicalKnowledgeStore:
             batch_embs = embeddings[i : i + batch_size]
             batch_metas = metadatas[i : i + batch_size]
 
-            self.collection.add(
+            collection.add(
                 ids=batch_ids,
                 documents=batch_docs,
-                embeddings=batch_embs,
-                metadatas=batch_metas,
+                embeddings=cast(Any, batch_embs),
+                metadatas=cast(Any, batch_metas),
             )
             logger.debug(
                 f"已添加批次 {i // batch_size + 1}/{(total - 1) // batch_size + 1}: "
@@ -192,10 +206,9 @@ class MedicalKnowledgeStore:
         Returns:
             医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
         """
-        if self.collection is None:
-            self._init_client()
+        collection = self._ensure_collection()
 
-        if self.collection.count() == 0:
+        if collection.count() == 0:
             logger.debug("医学知识库为空，无检索结果")
             return []
 
@@ -220,13 +233,14 @@ class MedicalKnowledgeStore:
         query_embedding: List[float],
         top_k: int,
         where_document: Optional[Dict],
-    ) -> Dict:
+    ) -> Any:
         """执行 ChromaDB 查询；带过滤时命中不足则回退无过滤查询"""
-        include = ["documents", "metadatas", "distances"]
+        collection = self._ensure_collection()
+        include: Any = ["documents", "metadatas", "distances"]
         if where_document:
             try:
-                filtered = self.collection.query(
-                    query_embeddings=[query_embedding],
+                filtered = collection.query(
+                    query_embeddings=cast(Any, [query_embedding]),
                     n_results=top_k,
                     where_document=where_document,
                     include=include,
@@ -248,8 +262,8 @@ class MedicalKnowledgeStore:
             except Exception as e:
                 logger.warning(f"metadata 预过滤查询失败，回退无过滤：{e}")
 
-        return self.collection.query(
-            query_embeddings=[query_embedding],
+        return collection.query(
+            query_embeddings=cast(Any, [query_embedding]),
             n_results=top_k,
             include=include,
         )
@@ -308,23 +322,21 @@ class MedicalKnowledgeStore:
 
     def get_all_sources(self) -> List[str]:
         """返回知识库中所有已索引的来源文件名（去重列表）"""
-        if self.collection is None:
-            self._init_client()
-        if self.collection.count() == 0:
+        collection = self._ensure_collection()
+        if collection.count() == 0:
             return []
-        result = self.collection.get(include=["metadatas"])
-        sources = set()
+        result = collection.get(include=["metadatas"])
+        sources: set[str] = set()
         for meta in result.get("metadatas") or []:
             src = meta.get("source", "")
-            if src:
+            if isinstance(src, str) and src:
                 sources.add(src)
         return sorted(sources)
 
     def get_source_doc_count(self, source: str) -> int:
         """返回指定来源的文档块数量"""
-        if self.collection is None:
-            self._init_client()
-        result = self.collection.get(
+        collection = self._ensure_collection()
+        result = collection.get(
             where={"source": source},
             include=[],
         )
@@ -344,8 +356,7 @@ class MedicalKnowledgeStore:
             {chunk_seq: {"text": ..., "page": ...}} 映射（仅邻居，不含中心块）。
             无邻居或查询失败时返回空 dict。
         """
-        if self.collection is None:
-            self._init_client()
+        collection = self._ensure_collection()
         if window <= 0 or chunk_seq is None or chunk_seq < 0:
             return {}
         wanted = [
@@ -356,13 +367,13 @@ class MedicalKnowledgeStore:
         if not wanted:
             return {}
         try:
-            result = self.collection.get(
-                where={
+            result = collection.get(
+                where=cast(Any, {
                     "$and": [
                         {"source": source},
                         {"chunk_seq": {"$in": wanted}},
                     ]
-                },
+                }),
                 include=["documents", "metadatas"],
             )
         except Exception as e:
@@ -376,6 +387,8 @@ class MedicalKnowledgeStore:
         for i in range(len(ids)):
             meta = metas[i] if i < len(metas) else {}
             seq = meta.get("chunk_seq", -1)
+            if not isinstance(seq, int):
+                continue
             neighbors[seq] = {
                 "text": docs[i] if i < len(docs) else "",
                 "page": meta.get("page", 0),
@@ -384,17 +397,16 @@ class MedicalKnowledgeStore:
 
     def delete_by_source(self, source: str) -> int:
         """删除指定来源的全部文档块，返回删除条数"""
-        if self.collection is None:
-            self._init_client()
+        collection = self._ensure_collection()
         # 先查出 IDs，ChromaDB 的 delete(where=...) 并非所有版本都稳定，
         # 以 ID 列表删除最为可靠
-        result = self.collection.get(
+        result = collection.get(
             where={"source": source},
             include=[],
         )
         ids = result.get("ids") or []
         if ids:
-            self.collection.delete(ids=ids)
+            collection.delete(ids=ids)
             logger.info(f"已删除来源 '{source}' 的 {len(ids)} 条文档")
         return len(ids)
 
@@ -415,9 +427,8 @@ def get_medical_store() -> MedicalKnowledgeStore:
 def list_index_versions() -> list[str]:
     """列出所有存在的索引版本"""
     store = get_medical_store()
-    if store.client is None:
-        store._init_client()
-    collections = store.client.list_collections()
+    client = store._ensure_client()
+    collections = client.list_collections()
     versions = []
     for col in collections:
         if col.name.startswith("medical_guidelines_"):
@@ -429,11 +440,10 @@ def list_index_versions() -> list[str]:
 def get_collection_count(collection_name: str = None) -> int:
     """获取指定 collection 的文档数"""
     store = get_medical_store()
-    if store.client is None:
-        store._init_client()
+    client = store._ensure_client()
     name = collection_name or _get_collection_name()
     try:
-        col = store.client.get_collection(name)
+        col = client.get_collection(name)
         return col.count()
     except Exception:
         return 0

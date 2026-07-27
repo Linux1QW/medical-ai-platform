@@ -3,7 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 
-from app.orchestration.state import AgentResultEnvelope, EvaluationContext
+from app.orchestration.state import AgentName, AgentResultEnvelope, EvaluationContext
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class BaseAgentAdapter(ABC):
     run() 负责统一异常处理、JSON 解析和 Pydantic 校验。
     """
 
-    agent_name: str = ""
+    agent_name: AgentName
 
     async def run(self, context: EvaluationContext) -> AgentResultEnvelope:
         """统一执行入口：调用 Agent → 解析 → 校验 → 返回 Envelope"""

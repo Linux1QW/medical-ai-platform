@@ -1,6 +1,8 @@
 from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
@@ -10,15 +12,15 @@ class EvaluationLock(Base):
 
     __tablename__ = "evaluation_locks"
 
-    consultation_id = Column(
+    consultation_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("consultations.id"), primary_key=True
     )
-    status = Column(String(20), nullable=False, default="pending")
-    run_id = Column(String(36), nullable=True)
-    locked_at = Column(DateTime, default=datetime.utcnow)
-    heartbeat_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=False)
-    error_message = Column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    locked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     VALID_TRANSITIONS = {
         "pending": {"running", "failed"},

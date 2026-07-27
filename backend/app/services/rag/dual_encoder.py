@@ -9,7 +9,7 @@
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -31,7 +31,7 @@ class DualEncoder:
         model_path: Optional[str] = None,
         use_fp16: Optional[bool] = None,
     ):
-        self._model = None
+        self._model: Any = None
         self._model_path = model_path or settings.BGE_M3_MODEL_PATH
         self._use_fp16 = use_fp16 if use_fp16 is not None else settings.BGE_M3_USE_FP16
         self._loaded = False
@@ -45,7 +45,7 @@ class DualEncoder:
         if self._loaded:
             return
         try:
-            from FlagEmbedding import BGEM3FlagModel  # type: ignore[import-untyped]
+            from FlagEmbedding import BGEM3FlagModel
 
             self._model = BGEM3FlagModel(
                 self._model_path,

@@ -4,7 +4,7 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
@@ -64,7 +64,7 @@ def _get_active_model() -> str:
     """获取当前活跃模型名（必要时触发适配器懒初始化）。"""
     if _active_model is None:
         _ensure_adapter()
-    return _active_model
+    return _active_model or settings.QWEN_MODEL
 
 
 def get_active_adapter() -> ProviderAdapter:
@@ -278,7 +278,7 @@ async def _execute_with_retry(
         try:
             response = await _get_client().chat.completions.create(
                 model=model or _get_active_model(),
-                messages=messages,
+                messages=cast(Any, messages),
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
@@ -329,7 +329,7 @@ async def _execute_with_retry(
             # 报告成功（重置 failover 计数）
             failover_manager.report_success()
             alert_manager.record_llm_success()
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
 
         except (APITimeoutError, APIConnectionError, RateLimitError, APIError) as e:
             exec_elapsed = time.monotonic() - exec_start
@@ -388,6 +388,9 @@ async def _execute_with_retry(
             logger.error(f"LLM调用发生未知异常: {str(e)}\n{traceback.format_exc()}")
             raise
 
+    # 重试循环要么返回要么抛异常，此处仅为类型完备性
+    raise RuntimeError("LLM 调用重试逻辑异常退出")
+
 
 # ── Tool Calling 辅助函数 ───────────────────────────────────────────────────────
 
@@ -413,9 +416,9 @@ async def _call_qwen_api_with_tools(
         try:
             response = await _get_client().chat.completions.create(
                 model=model,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
+                messages=cast(Any, messages),
+                tools=cast(Any, tools),
+                tool_choice=cast(Any, tool_choice),
                 temperature=temperature,
                 max_tokens=max_tokens,
             )

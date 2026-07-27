@@ -195,7 +195,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
 
         if tool_result.degraded:
             logger.warning(f"[ToolUse] LLM 调用降级: {tool_result.error}")
-            return _build_error_result(tool_result.error, executor.get_traces())
+            return _build_error_result(tool_result.error or "LLM 调用降级", executor.get_traces())
 
         # ── Step 8: 解析最终 JSON（复用 _extract_json）──
         try:
@@ -392,7 +392,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
 
 def _build_rag_trace(tool_traces: list[dict], context: ToolContext) -> dict:
     """从工具执行 trace 中提取检索相关信息构建 rag_trace"""
-    rag_trace = {
+    rag_trace: dict = {
         "queries": [],
         "retrieval_level": "level0",
         "evidence_count": len(context.evidence_cache),

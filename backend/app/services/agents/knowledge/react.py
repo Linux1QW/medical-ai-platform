@@ -48,7 +48,7 @@ def _parse_react_step(text: str) -> dict:
     Returns:
         dict 含 thought, action, action_input, final_answer, is_final
     """
-    result = {
+    result: dict = {
         "thought": "",
         "action": "",
         "action_input": {},

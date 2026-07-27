@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 from pathlib import Path
+from typing import Any, cast
 
 from app.services.rag.medical_store import get_medical_store
 
@@ -29,12 +30,11 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
 
     # 验证新版本 collection 存在
     store = get_medical_store()
-    if store.client is None:
-        store._init_client()
+    client = store._ensure_client()
 
     new_collection_name = f"medical_guidelines_{new_version}"
     try:
-        col = store.client.get_collection(new_collection_name)
+        col = client.get_collection(new_collection_name)
         doc_count = col.count()
     except Exception:
         return {"error": f"Collection '{new_collection_name}' 不存在"}
@@ -166,7 +166,7 @@ async def _health_check_index(timeout: float = 10.0) -> bool:
 
             # 执行向量查询
             results = store.collection.query(
-                query_embeddings=[query_embedding],
+                query_embeddings=cast(Any, [query_embedding]),
                 n_results=3,
             )
 

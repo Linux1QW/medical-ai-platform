@@ -2,7 +2,7 @@
 """HyDE（Hypothetical Document Embeddings）— 假设性文档增强检索"""
 
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.embeddings import get_embedding
@@ -92,7 +92,7 @@ async def hyde_retrieve(query: str, top_k: int = 5) -> List[Dict]:
             return []
 
         results = store.collection.query(
-            query_embeddings=[hyde_embedding],
+            query_embeddings=cast(Any, [hyde_embedding]),
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )

@@ -29,6 +29,8 @@ class DiagnosisAdapter(BaseAgentAdapter):
         data = extract_json_from_text(
             raw_response, default={}, raise_on_failure=False
         ) if isinstance(raw_response, str) else raw_response
+        if not isinstance(data, dict):
+            data = {}
 
         score = data.get("score")
         analysis = data.get("analysis", "")

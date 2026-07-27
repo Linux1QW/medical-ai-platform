@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -448,7 +448,7 @@ async def aggregate_results(state: EvaluationState) -> dict[str, Any]:
         for exec_result in exec_results:
             dim = StateDimensionResult(
                 dimension=exec_result.agent_name,
-                status="scored" if exec_result.status == "success" else exec_result.status,
+                status=cast(Any, "scored" if exec_result.status == "success" else exec_result.status),
                 score=exec_result.score,
                 analysis=exec_result.analysis,
             )
@@ -458,7 +458,7 @@ async def aggregate_results(state: EvaluationState) -> dict[str, Any]:
         for result in state.get("agent_results", []):
             dim = StateDimensionResult(
                 dimension=result.agent_name,
-                status="scored" if result.status == "success" else result.status,
+                status=cast(Any, "scored" if result.status == "success" else result.status),
                 score=result.score,
                 analysis=result.analysis,
             )
@@ -536,7 +536,7 @@ async def dispatch_and_run(state: EvaluationState) -> dict[str, Any]:
 
     envelopes: list[AgentResultEnvelope] = []
     for name, result in zip(plan.selected_agents, results, strict=False):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             envelopes.append(
                 AgentResultEnvelope(
                     agent_name=name,  # type: ignore[arg-type]
@@ -867,7 +867,7 @@ async def generate_suggestion(state: EvaluationState) -> dict[str, Any]:  # noqa
         logger.error(f"LLM suggestion failed, falling back to rule-based: {e}", exc_info=True)
 
     # 降级：规则建议（原有逻辑）
-    suggestions: list[str] = []
+    suggestions = []
     for name, dim in dimension_results.items():
         if dim.status == "scored" and dim.score is not None and dim.score < 70:
             suggestions.append(f"{name}维度得分较低({dim.score}分)，建议重点改进")
@@ -907,8 +907,8 @@ async def finalize_completed(state: EvaluationState) -> dict[str, Any]:
     generator = SummaryGenerator(policy)
 
     summary = await generator.generate(
-        state.get("dimension_results", {}),
-        state.get("total_score"),
+        cast(Any, state.get("dimension_results", {})),
+        cast(Any, state.get("total_score")),
     )
 
     return {

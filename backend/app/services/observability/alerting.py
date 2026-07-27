@@ -19,6 +19,7 @@ class AlertManager:
     """告警管理器"""
 
     _instance: Optional["AlertManager"] = None
+    _http_client: httpx.AsyncClient
 
     def __new__(cls):
         if cls._instance is None:

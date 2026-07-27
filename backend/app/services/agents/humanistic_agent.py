@@ -6,7 +6,7 @@ import logging
 
 from app.services.prompts import get_prompt
 from app.services.qwen_client import call_qwen_chat
-from app.utils.json_parser import extract_json_from_text
+from app.utils.json_parser import extract_json_dict_from_text
 
 # ── 权重配置 ──
 WEIGHTS = {
@@ -134,7 +134,7 @@ BEHAVIOR_FEWSHOT_ASSISTANT = """{
 
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON"""
-    return extract_json_from_text(text)
+    return extract_json_dict_from_text(text)
 
 
 def _calculate_empathy_score(empathy_data: dict) -> float:
@@ -160,7 +160,7 @@ def _calculate_behavior_score(behavior_data: dict) -> float:
     if not utterances:
         return 0.5  # 默认中等得分
 
-    total_weight = 0
+    total_weight = 0.0
     for utterance in utterances:
         behavior_type = utterance.get("behavior", "ignore")
         weight = BEHAVIOR_WEIGHTS.get(behavior_type, 0.0)
@@ -259,7 +259,7 @@ async def run_humanistic_evaluation(conversation_text: str, patient_info: str) -
     """
     # 默认降级数据
     default_empathy_data = {"empathy": 5, "politeness": 5, "clarity": 5}
-    default_behavior_data = {"utterances": []}
+    default_behavior_data: dict = {"utterances": []}
 
     try:
         # ── Step 1: 文本共情评估（第一次 LLM 调用）──

@@ -1,7 +1,15 @@
 """场景分类与动态路由"""
 
+from typing import cast
+
 from app.models.consultation import Consultation
-from app.orchestration.state import EvaluationPlan, PlanStep, RoutePlan, SubmissionFlags
+from app.orchestration.state import (
+    ConsultationType,
+    EvaluationPlan,
+    PlanStep,
+    RoutePlan,
+    SubmissionFlags,
+)
 
 # ── 路由矩阵 ──────────────────────────────────────────────────────────────
 
@@ -50,6 +58,7 @@ def build_route_plan(
     """根据场景和提交状态构建路由计划"""
     if consultation_type not in _ROUTE_MATRIX:
         consultation_type = "initial"
+    normalized_type = cast(ConsultationType, consultation_type)
 
     matrix = _ROUTE_MATRIX[consultation_type]
     selected = list(matrix["required"])
@@ -67,18 +76,18 @@ def build_route_plan(
             selected.append(agent_name)
 
     return RoutePlan(
-        consultation_type=consultation_type,
+        consultation_type=normalized_type,
         selected_agents=selected,
         skipped_agents=skipped,
         skip_reasons=skip_reasons,
     )
 
 
-def get_consultation_type(consultation: Consultation) -> str:
+def get_consultation_type(consultation: Consultation) -> ConsultationType:
     """从 Consultation 获取问诊类型，兼容旧数据"""
     ct = getattr(consultation, "consultation_type", None)
-    if ct and ct.strip():
-        return ct
+    if ct and ct.strip() and ct in _ROUTE_MATRIX:
+        return cast(ConsultationType, ct)
     return "initial"
 
 
@@ -105,6 +114,7 @@ def build_evaluation_plan(
     """
     if consultation_type not in _ROUTE_MATRIX:
         consultation_type = "initial"
+    normalized_type = cast(ConsultationType, consultation_type)
 
     matrix = _ROUTE_MATRIX[consultation_type]
     steps: list[PlanStep] = []
@@ -141,7 +151,7 @@ def build_evaluation_plan(
             ))
 
     return EvaluationPlan(
-        consultation_type=consultation_type,
+        consultation_type=normalized_type,
         steps=steps,
         skipped_agents=skipped,
         skip_reasons=skip_reasons,

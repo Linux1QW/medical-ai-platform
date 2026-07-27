@@ -7,6 +7,9 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
+# 问诊场景类型（路由/计划共用）
+ConsultationType = Literal["initial", "follow_up", "emergency", "communication"]
+
 # ── 输入上下文 ──────────────────────────────────────────────────────────────
 
 class EvaluationContext(BaseModel):
@@ -35,7 +38,7 @@ class SubmissionFlags(BaseModel):
 
 class RoutePlan(BaseModel):
     """动态路由计划（旧版，保留向后兼容）"""
-    consultation_type: Literal["initial", "follow_up", "emergency", "communication"] = "initial"
+    consultation_type: ConsultationType = "initial"
     selected_agents: list[str] = Field(default_factory=list)
     skipped_agents: list[str] = Field(default_factory=list)
     skip_reasons: dict[str, str] = Field(default_factory=dict)
@@ -62,7 +65,7 @@ class EvaluationPlan(BaseModel):
     - validate_plan 节点校验其完整性
     - execute 阶段基于 steps 执行（Send fan-out 按 steps 分发）
     """
-    consultation_type: Literal["initial", "follow_up", "emergency", "communication"] = "initial"
+    consultation_type: ConsultationType = "initial"
     steps: list[PlanStep] = Field(default_factory=list)
     skipped_agents: list[str] = Field(default_factory=list)
     skip_reasons: dict[str, str] = Field(default_factory=dict)
@@ -103,10 +106,14 @@ class SafetyResult(BaseModel):
 
 # ── Agent 结果 ──────────────────────────────────────────────────────────────
 
+AgentName = Literal["inquiry", "diagnosis", "treatment", "knowledge", "humanistic"]
+AgentStatus = Literal["success", "skipped", "insufficient", "error"]
+
+
 class AgentResultEnvelope(BaseModel):
     """标准化 Agent 返回信封"""
-    agent_name: Literal["inquiry", "diagnosis", "treatment", "knowledge", "humanistic"]
-    status: Literal["success", "skipped", "insufficient", "error"] = "success"
+    agent_name: AgentName
+    status: AgentStatus = "success"
     score: float | None = Field(default=None, ge=0, le=100)
     analysis: str = ""
     skip_reason: str | None = None

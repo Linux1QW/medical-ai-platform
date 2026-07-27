@@ -107,7 +107,7 @@ def aggregate(case_metrics: List[Dict[str, float]]) -> Dict[str, float]:
     """对多个查询的 metric 字典按键求宏平均（macro-average）"""
     if not case_metrics:
         return {}
-    keys = set()
+    keys: set[str] = set()
     for m in case_metrics:
         keys.update(m.keys())
     agg: Dict[str, float] = {}

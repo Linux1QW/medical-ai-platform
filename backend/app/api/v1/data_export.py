@@ -26,7 +26,7 @@ async def export_my_data(
     )
     consultations = consultations_result.scalars().all()
 
-    export_data = {
+    export_data: dict = {
         "user": {
             "id": current_user.id,
             "username": current_user.username,

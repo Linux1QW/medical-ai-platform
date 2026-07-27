@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from app.core.config import settings
 from app.services.rag.bm25_search import get_bm25_index
@@ -38,7 +38,7 @@ def reciprocal_rank_fusion(
         融合后按 RRF 分数降序排列的文档列表
     """
     # 优先使用稳定的 doc_id 作为去重键；降级到 text[:100]（小概率出现前缀相同但内容不同的情况）
-    doc_scores = {}   # dedup_key -> {"doc": Dict, "rrf_score": float}
+    doc_scores: Dict[str, Dict[str, Any]] = {}   # dedup_key -> {"doc": Dict, "rrf_score": float}
 
     # 处理向量检索结果
     for rank, doc in enumerate(vector_results, 1):
@@ -218,11 +218,11 @@ async def hybrid_recall(  # noqa: C901
     # ── 将融合后的 (doc_id, score) 还原为完整 dict ──
     fused_results: List[Dict] = []
     for doc_id, rrf_score in fused:
-        doc = doc_map.get(doc_id)
-        if doc is None:
+        matched_doc = doc_map.get(doc_id)
+        if matched_doc is None:
             # sparse-only 文档（无 BM25/Dense 匹配），尝试从 sparse 结果还原
             continue
-        doc_copy = dict(doc)
+        doc_copy = dict(matched_doc)
         doc_copy["rrf_score"] = round(rrf_score, 6)
         doc_copy["score"] = doc_copy["rrf_score"]
         fused_results.append(doc_copy)

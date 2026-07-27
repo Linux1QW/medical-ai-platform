@@ -128,7 +128,7 @@ async def run_knowledge_check(
         logger.info(f"引用列表构建完成：{len(citations)}条引用")
 
         # ── Step 7: 确定 retrieval_status 和 evidence_stance ──
-        retrieval_status = bundle.status
+        retrieval_status: str = bundle.status
         if retrieval_status == "candidate":
             retrieval_status = "sufficient"
 

@@ -78,6 +78,15 @@ class ToolExecutor:
             self._record_trace(trace_id, tool_name, {}, "error", elapsed, error=f"Unknown tool: {tool_name}")
             return self._error_result(trace_id, "unknown_tool", f"Tool '{tool_name}' is not registered")
 
+        # 1.5 角色白名单检查：agent 只能调用其角色允许的工具
+        if context is not None and context.allowed_tools is not None \
+                and tool_name not in context.allowed_tools:
+            elapsed = (time.monotonic() - start_time) * 1000
+            self._record_trace(trace_id, tool_name, {}, "forbidden", elapsed,
+                               error=f"Tool forbidden for agent: {context.agent_name}")
+            return self._error_result(trace_id, "tool_forbidden",
+                                      f"Tool '{tool_name}' is not allowed for agent '{context.agent_name}'")
+
         # 2. 预算检查
         if budget and not budget.check(tool_name):
             elapsed = (time.monotonic() - start_time) * 1000

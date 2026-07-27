@@ -30,6 +30,10 @@ ALL_REASONS = frozenset({
 })
 
 
+class EvaluationDeadlineExceeded(TimeoutError):
+    """评估 run 超出总时长预算（评估级 deadline，classify_failure 归为 timeout）"""
+
+
 def classify_failure(exc: BaseException) -> str:
     """将异常映射为标准化失败原因码
 

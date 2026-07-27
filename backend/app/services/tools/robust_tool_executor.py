@@ -303,6 +303,15 @@ class RobustToolExecutor:
             return self._error_result(trace_id, "unknown_tool",
                                       f"Tool '{tool_name}' is not registered")
 
+        # ── 1.5 角色白名单检查：agent 只能调用其角色允许的工具（最小权限）──
+        if context.allowed_tools is not None and tool_name not in context.allowed_tools:
+            elapsed = self._elapsed(start_time)
+            self._record_trace(trace_id, tool_name, {}, "forbidden", elapsed,
+                               error=f"Tool forbidden for agent: {context.agent_name}")
+            return self._error_result(
+                trace_id, "tool_forbidden",
+                f"Tool '{tool_name}' is not allowed for agent '{context.agent_name}'")
+
         # ── 2. 预算检查 ──
         if budget and not budget.check(tool_name):
             elapsed = self._elapsed(start_time)

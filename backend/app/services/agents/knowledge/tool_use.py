@@ -24,6 +24,7 @@ from app.services.tools import register_all_tools
 from app.services.tools.base import ToolContext
 from app.services.tools.budget import ToolBudget
 from app.services.tools.executor import ToolExecutor
+from app.services.tools.policy import get_allowed_tools
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.runtime import create_tool_budget, create_tool_executor
 
@@ -155,6 +156,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
             },
             allowed_citation_ids=set(),
             evidence_cache={},
+            allowed_tools=get_allowed_tools("knowledge_agent"),
         )
 
         # ── Step 4: 构造 ToolRegistry + ToolExecutor + ToolBudget ──
@@ -163,6 +165,10 @@ async def run_knowledge_check_with_tools(  # noqa: C901
         executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
         budget = create_tool_budget(context.budgets, context.run_id)
         bridge = _ToolExecutorBridge(executor, context, budget)
+        # LLM 侧同步收紧：只下发角色白名单内的工具 schema
+        tool_schemas = registry.get_openai_schemas(
+            sorted(context.allowed_tools) if context.allowed_tools else None
+        )
 
         # ── Step 5: 构造 System Prompt ──
         system_prompt = TOOL_USE_SYSTEM_PROMPT
@@ -188,7 +194,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
         # ── Step 7: 调用 call_qwen_with_tools ──
         tool_result = await call_qwen_with_tools(
             messages,
-            tools=registry.get_openai_schemas(),
+            tools=tool_schemas,
             tool_executor=bridge,
             temperature=0.2,
             max_tokens=2000,
@@ -252,7 +258,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
 
             correction_result = await call_qwen_with_tools(
                 correction_messages,
-                tools=registry.get_openai_schemas(),
+                tools=tool_schemas,
                 tool_executor=bridge,
                 temperature=0.1,
                 max_tokens=2000,

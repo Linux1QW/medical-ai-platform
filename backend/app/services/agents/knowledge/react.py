@@ -31,6 +31,7 @@ from app.services.prompts import get_prompt
 from app.services.rag.types import EvidenceItem
 from app.services.tools import register_all_tools
 from app.services.tools.base import ToolContext
+from app.services.tools.policy import get_allowed_tools
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.runtime import create_tool_budget, create_tool_executor
 
@@ -144,6 +145,7 @@ async def run_knowledge_check_react(  # noqa: C901
             },
             allowed_citation_ids=set(),
             evidence_cache={},
+            allowed_tools=get_allowed_tools("knowledge_agent_react"),
         )
 
         registry = ToolRegistry()

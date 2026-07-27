@@ -4,6 +4,7 @@ from .citation import register_citation_tools
 from .consistency import register_consistency_tools
 from .executor import ToolExecutor
 from .medical_retrieval import register_medical_retrieval_tools
+from .policy import AGENT_TOOL_WHITELIST, get_allowed_tools
 from .registry import ToolRegistry
 from .robust_tool_executor import (
     CircuitBreaker,
@@ -78,6 +79,9 @@ __all__ = [
     "stop_tool_health_checks",
     "get_health_checker",
     "get_tool_runtime_snapshot",
+    # 角色工具白名单
+    "AGENT_TOOL_WHITELIST",
+    "get_allowed_tools",
     # 健康检查
     "ToolHealthChecker",
     "ToolHealthStatus",

@@ -26,6 +26,7 @@ from app.services.tools.base import ToolContext
 from app.services.tools.budget import ToolBudget
 from app.services.tools.consistency import register_consistency_tools
 from app.services.tools.executor import ToolExecutor
+from app.services.tools.policy import get_allowed_tools
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.runtime import create_tool_budget, create_tool_executor
 from app.utils.json_parser import extract_json_dict_from_text
@@ -157,6 +158,7 @@ async def run_reflection(  # noqa: C901
             },
             allowed_citation_ids=set(),
             evidence_cache={},
+            allowed_tools=get_allowed_tools("reflection_agent"),
         )
 
         registry = ToolRegistry()

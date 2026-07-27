@@ -140,6 +140,8 @@ class Settings(BaseSettings):
     TOOL_HEALTH_CHECK_ENABLED: bool = False       # 后台工具健康探测（探测会真实调用工具，含 LLM 成本，默认关闭）
     TOOL_HEALTH_CHECK_INTERVAL: float = 300.0     # 健康探测间隔（秒）
     AGENT_TIMEOUT_SECONDS: int = 180              # 旧编排路径单个评估 Agent 超时（秒）
+    EVALUATION_RUN_TIMEOUT_SECONDS: int = 240     # 评估级 deadline：单次评估 run 总时长预算（秒，0 = 不限制；需小于 Celery 软超时 300s 以保证优雅降级）
+    TOOL_ROLE_WHITELIST_ENABLED: bool = True      # 按 agent 角色收紧工具白名单（最小权限，executor 强制校验 + LLM 侧 schema 过滤）
 
     # ReAct 模式配置
     ENABLE_REACT_KNOWLEDGE: bool = True           # Knowledge Agent 启用 ReAct 模式

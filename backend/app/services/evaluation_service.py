@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.failure_reasons import EvaluationDeadlineExceeded
 from app.core.websocket import manager
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
@@ -148,7 +149,7 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
             }
         }
 
-        final_state = await graph.ainvoke(initial_state, config=config)
+        final_state = await _invoke_graph_with_deadline(graph, initial_state, config)
 
         # 5. 发送进度事件
         progress_events = final_state.get("progress_events", [])
@@ -208,6 +209,26 @@ async def _run_evaluation_graph(db: AsyncSession, consultation_id: int) -> Evalu
         eval_run.finished_at = datetime.utcnow()
         await db.commit()
         raise
+
+
+async def _invoke_graph_with_deadline(graph, initial_state, config):
+    """执行图并施加评估级总时长预算（EVALUATION_RUN_TIMEOUT_SECONDS，0 = 不限制）
+
+    超时抛 EvaluationDeadlineExceeded（TimeoutError 子类）：
+    走既有失败路径落库 error_type="timeout"，并命中 Celery 可重试判定；
+    在 Celery 软超时（300s）强杀前优雅降级，避免 run 状态丢失。
+    """
+    timeout = settings.EVALUATION_RUN_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return await graph.ainvoke(initial_state, config=config)
+    try:
+        return await asyncio.wait_for(
+            graph.ainvoke(initial_state, config=config), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        raise EvaluationDeadlineExceeded(
+            f"评估超出总时长预算 {timeout}s"
+        ) from None
 
 
 def _build_node_results(run_id: str, state: dict) -> list:

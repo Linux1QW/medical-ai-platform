@@ -6,6 +6,7 @@
 """
 
 import app.services.rag.retriever as retriever_mod
+import app.services.rag.retriever.base as retriever_base_mod
 from app.services.rag.types import EvidenceItem
 
 
@@ -26,7 +27,8 @@ class _FakeStore:
 
 
 def _patch_store(monkeypatch, store):
-    monkeypatch.setattr(retriever_mod, "get_medical_store", lambda: store)
+    # expand_context 实现位于 retriever.base 子模块，patch 需指向其命名空间
+    monkeypatch.setattr(retriever_base_mod, "get_medical_store", lambda: store)
 
 
 class TestExpandContext:

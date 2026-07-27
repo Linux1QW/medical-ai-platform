@@ -9,6 +9,43 @@ import { ScoreDisplay, DimensionRadar, getScoreColor, getScoreLevel } from '../.
 
 const { Title, Paragraph, Text } = Typography;
 
+// 后端枚举值中文映射（医学证据详情）
+const RETRIEVAL_STATUS_LABELS: Record<string, string> = {
+  sufficient: '证据充分',
+  insufficient: '证据不足',
+  unavailable: '检索不可用',
+  error: '检索异常',
+};
+
+const EVIDENCE_STANCE_LABELS: Record<string, string> = {
+  supports: '支持诊断',
+  contradicts: '与证据相悖',
+  mixed: '证据立场混合',
+  undetermined: '无法确定',
+};
+
+// review_reason 及后端生成文本大部分为中文，仅翻译其中的英文枚举片段（兼容已入库的历史评估）
+const ENUM_TERM_LABELS: Record<string, string> = {
+  insufficient_evidence: '检索证据不足',
+  knowledge_undetermined: '证据立场无法确定',
+  sufficient: '证据充分',
+  insufficient: '证据不足',
+  unavailable: '检索不可用',
+  undetermined: '无法确定',
+  contradicts: '与证据相悖',
+  supports: '支持诊断',
+  mixed: '证据立场混合',
+  error: '检索异常',
+};
+
+const translateEnumTerms = (text?: string | null) => {
+  if (!text) return text ?? '';
+  return Object.entries(ENUM_TERM_LABELS).reduce(
+    (acc, [code, label]) => acc.replace(new RegExp(`\\b${code}\\b`, 'g'), label),
+    text,
+  );
+};
+
 const EvaluationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
@@ -370,7 +407,7 @@ const EvaluationPage: React.FC = () => {
               ),
               children: (
                 <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, lineHeight: 1.8, color: '#333' }}>
-                  {item.analysis}
+                  {translateEnumTerms(item.analysis)}
                 </Paragraph>
               ),
             };
@@ -391,7 +428,7 @@ const EvaluationPage: React.FC = () => {
                 evaluation.retrieval_status === 'sufficient' ? 'green' :
                 evaluation.retrieval_status === 'insufficient' ? 'orange' :
                 evaluation.retrieval_status === 'error' ? 'red' : 'default'
-              }>{evaluation.retrieval_status}</Tag>
+              }>{RETRIEVAL_STATUS_LABELS[evaluation.retrieval_status ?? ''] ?? evaluation.retrieval_status}</Tag>
             </Col>
             <Col span={8}>
               <Text type="secondary">证据立场：</Text>
@@ -399,7 +436,7 @@ const EvaluationPage: React.FC = () => {
                 evaluation.evidence_stance === 'supports' ? 'green' :
                 evaluation.evidence_stance === 'contradicts' ? 'red' :
                 evaluation.evidence_stance === 'mixed' ? 'orange' : 'default'
-              }>{evaluation.evidence_stance}</Tag>
+              }>{EVIDENCE_STANCE_LABELS[evaluation.evidence_stance ?? ''] ?? evaluation.evidence_stance}</Tag>
             </Col>
             <Col span={8}>
               <Text type="secondary">人工复核：</Text>
@@ -413,7 +450,7 @@ const EvaluationPage: React.FC = () => {
               <Text type="secondary" style={{ fontSize: 12 }}>
                 <WarningOutlined style={{ color: '#faad14', marginRight: 4 }} />复核原因：
               </Text>
-              <Text>{evaluation.review_reason}</Text>
+              <Text>{translateEnumTerms(evaluation.review_reason)}</Text>
             </div>
           )}
           {evaluation.citation_data && evaluation.citation_data.length > 0 && (
@@ -448,7 +485,7 @@ const EvaluationPage: React.FC = () => {
         title={<span><TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />综合评价</span>}
         style={{ marginBottom: 16 }}
       >
-        <Paragraph style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{evaluation.overall_summary}</Paragraph>
+        <Paragraph style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{translateEnumTerms(evaluation.overall_summary)}</Paragraph>
       </Card>
 
       {/* 改进建议 - 结构化展示 */}

@@ -18,6 +18,34 @@ def _extract_json(text: str) -> dict:
     return extract_json_dict_from_text(text)
 
 
+# 机器码 → 用户可读中文（仅用于展示文本，不改变存储/比较用的原值）
+REVIEW_REASON_LABELS = {
+    "insufficient_evidence": "检索证据不足",
+    "knowledge_undetermined": "证据立场无法确定",
+}
+
+RETRIEVAL_STATUS_LABELS = {
+    "sufficient": "证据充分",
+    "insufficient": "证据不足",
+    "unavailable": "检索不可用",
+    "error": "检索异常",
+}
+
+EVIDENCE_STANCE_LABELS = {
+    "supports": "支持诊断",
+    "contradicts": "与证据相悖",
+    "mixed": "证据立场混合",
+    "undetermined": "无法确定",
+}
+
+
+def humanize_review_reason(reason: str) -> str:
+    """将 review_reason 中的英文机器码片段替换为中文（兼容混合文案）"""
+    for code, label in {**REVIEW_REASON_LABELS, **RETRIEVAL_STATUS_LABELS}.items():
+        reason = reason.replace(code, label)
+    return reason
+
+
 def _map_consistency_to_score(stance: str, confidence: float) -> int:
     """将一致性和置信度映射为 0-100 分"""
     base_scores = {
@@ -59,7 +87,8 @@ def _generate_analysis(
 ) -> str:
     """生成 150-300 字的分析文本"""
     if needs_review:
-        analysis = f"医学知识核对无法完成自动评估。原因：{review_reason}。"
+        reason_text = humanize_review_reason(review_reason) if review_reason else "需要人工复核"
+        analysis = f"医学知识核对无法完成自动评估。原因：{reason_text}。"
         analysis += "建议人工复核诊断和治疗方案的合理性。"
         if facts.doctor_diagnoses:
             analysis += f" 医生诊断：{'、'.join(facts.doctor_diagnoses[:3])}。"

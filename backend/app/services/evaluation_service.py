@@ -16,6 +16,10 @@ from app.models.user import User
 from app.services.agents.diagnosis_agent import run_diagnosis_evaluation
 from app.services.agents.humanistic_agent import run_humanistic_evaluation
 from app.services.agents.inquiry_agent import run_inquiry_analysis
+from app.services.agents.knowledge.scoring import (
+    EVIDENCE_STANCE_LABELS,
+    RETRIEVAL_STATUS_LABELS,
+)
 from app.services.agents.knowledge_agent import run_knowledge_check
 from app.services.agents.scoring_agent import run_scoring
 from app.services.agents.suggestion_agent import run_suggestion
@@ -418,7 +422,8 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
                 "知识维度评估证据不足（检索状态：{}，证据立场：{}），总分待人工复核。"
                 "其余维度评估：问诊技巧 {}分，人文关怀 {}分，诊断能力 {}分，治疗方案 {}分。"
             ).format(
-                retrieval_status, evidence_stance,
+                RETRIEVAL_STATUS_LABELS.get(retrieval_status, retrieval_status),
+                EVIDENCE_STANCE_LABELS.get(evidence_stance, evidence_stance),
                 inquiry_score_value, humanistic_score_value,
                 diagnosis_score_value, treatment_score_value,
             )

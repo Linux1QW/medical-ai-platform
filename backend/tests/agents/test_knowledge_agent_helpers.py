@@ -92,7 +92,8 @@ class TestGenerateAnalysis:
     def test_needs_review_path(self):
         text = self._call(needs_review=True, review_reason="insufficient_evidence")
         assert "无法完成自动评估" in text
-        assert "insufficient_evidence" in text
+        # i18n 后 review_reason 机器码展示为中文文案
+        assert "检索证据不足" in text
         assert "人工复核" in text
         # 附带医生诊断
         assert "急性支气管炎" in text

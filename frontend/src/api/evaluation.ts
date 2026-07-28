@@ -19,3 +19,11 @@ export const getEvaluationLockStatus = (consultationId: number) =>
     locked_at: string | null;
     expires_at: string | null;
   }>;
+
+// 取消进行中的评估任务
+export const cancelEvaluation = (consultationId: number) =>
+  request.post(`/evaluations/${consultationId}/cancel`) as Promise<{
+    consultation_id: number;
+    status: string;
+    previous_lock_status: string | null;
+  }>;

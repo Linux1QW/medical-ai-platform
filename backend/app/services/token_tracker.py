@@ -1,9 +1,11 @@
 """
-Token 用量追踪器 — 基于 Redis 的按日/按模型 Token 统计
+Token 用量追踪器 — 基于 Redis 的按日/按模型/按 run Token 统计
 
 Key 格式：
   - token_usage:{model}:{date}   某模型某天的用量
   - token_usage:daily:{date}     当天全局总用量
+  - token_usage:run:{run_id}     某次评估 run 的用量（含按 agent 细分字段，
+    run_id/agent_name 经 contextvars 透传，见 app.core.run_context）
 """
 
 import logging
@@ -13,6 +15,7 @@ from typing import Awaitable, Optional, cast
 import redis.asyncio as aioredis
 
 from app.core.config import settings
+from app.core.run_context import current_agent_name, current_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,18 @@ class TokenTracker:
             await cast(Awaitable[int], redis.hincrby(daily_key, "completion_tokens", completion_tokens))
             await cast(Awaitable[int], redis.hincrby(daily_key, "total_tokens", total))
             await redis.expire(daily_key, 86400 * 7)
+
+            # 按 run 归因（run_id/agent_name 经 contextvars 透传，非评估链路时为 None）
+            run_id = current_run_id.get()
+            if run_id:
+                run_key = f"token_usage:run:{run_id}"
+                await cast(Awaitable[int], redis.hincrby(run_key, "prompt_tokens", prompt_tokens))
+                await cast(Awaitable[int], redis.hincrby(run_key, "completion_tokens", completion_tokens))
+                await cast(Awaitable[int], redis.hincrby(run_key, "total_tokens", total))
+                agent = current_agent_name.get()
+                if agent:
+                    await cast(Awaitable[int], redis.hincrby(run_key, f"agent:{agent}:total_tokens", total))
+                await redis.expire(run_key, 86400 * 7)
         except Exception as e:
             logger.debug(f"Token 用量记录异常: {e}")
 
@@ -131,6 +146,42 @@ class TokenTracker:
             except Exception as e:
                 logger.debug(f"获取模型用量异常: {e}")
         return result
+
+    async def get_run_usage(self, run_id: str) -> dict:
+        """获取某次评估 run 的 Token 用量与成本归因（含按 agent 细分）
+
+        Returns:
+            {prompt_tokens, completion_tokens, total_tokens, estimated_cost,
+             by_agent: {agent_name: total_tokens}}；Redis 不可用/无记录时返回零值
+        """
+        empty = {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "estimated_cost": 0.0, "by_agent": {},
+        }
+        redis = await _get_redis()
+        if redis is None:
+            return empty
+        try:
+            data = await cast(Awaitable[dict], redis.hgetall(f"token_usage:run:{run_id}"))
+        except Exception as e:
+            logger.debug(f"获取 run 用量异常: {e}")
+            return empty
+        if not data:
+            return empty
+
+        total = int(data.get("total_tokens", 0))
+        by_agent = {
+            key.split(":", 2)[1]: int(value)
+            for key, value in data.items()
+            if key.startswith("agent:") and key.endswith(":total_tokens")
+        }
+        return {
+            "prompt_tokens": int(data.get("prompt_tokens", 0)),
+            "completion_tokens": int(data.get("completion_tokens", 0)),
+            "total_tokens": total,
+            "estimated_cost": round(total / 1000 * settings.COST_PER_1K_TOKENS, 4),
+            "by_agent": by_agent,
+        }
 
     async def check_budget(self, daily_limit: float = None) -> dict:
         """检查是否超出每日预算"""

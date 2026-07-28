@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 from typing import List, Optional
@@ -8,7 +9,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.failure_reasons import EvaluationDeadlineExceeded
+from app.core.failure_reasons import EvaluationCancelled, EvaluationDeadlineExceeded
+from app.core.run_context import current_run_id
 from app.core.websocket import manager
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
@@ -25,6 +27,7 @@ from app.services.agents.knowledge_agent import run_knowledge_check
 from app.services.agents.scoring_agent import run_scoring
 from app.services.agents.suggestion_agent import run_suggestion
 from app.services.agents.treatment_agent import run_treatment_evaluation
+from app.services.evaluation_cancel import is_cancel_requested
 from app.utils.json_parser import extract_json_from_text
 
 
@@ -111,6 +114,8 @@ async def _run_evaluation_graph(
         resume_run = await _find_resumable_run(db, consultation_id)
 
     run_id = resume_run.id if resume_run is not None else str(uuid.uuid4())
+    # run 级成本归因：token_tracker 通过 contextvar 读取当前 run_id 记账
+    current_run_id.set(run_id)
     consultation_type = get_consultation_type(consultation)
     submission_flags = build_submission_flags(consultation)
 
@@ -176,7 +181,9 @@ async def _run_evaluation_graph(
         if resume_run is not None:
             graph_input = await _resolve_graph_input(graph, config, initial_state)
 
-        final_state = await _invoke_graph_with_deadline(graph, graph_input, config)
+        final_state = await _invoke_graph_with_deadline(
+            graph, graph_input, config, consultation_id=consultation_id
+        )
 
         # 5. 发送进度事件
         progress_events = final_state.get("progress_events", [])
@@ -274,24 +281,68 @@ async def _resolve_graph_input(graph, config, initial_state):
     return initial_state
 
 
-async def _invoke_graph_with_deadline(graph, initial_state, config):
-    """执行图并施加评估级总时长预算（EVALUATION_RUN_TIMEOUT_SECONDS，0 = 不限制）
+async def _watch_cancel(consultation_id: int, invoke_task: "asyncio.Task") -> None:
+    """取消看守协程 — 轮询 Redis 取消标志，命中后 cancel 图执行任务
 
-    超时抛 EvaluationDeadlineExceeded（TimeoutError 子类）：
-    走既有失败路径落库 error_type="timeout"，并命中 Celery 可重试判定；
-    在 Celery 软超时（300s）强杀前优雅降级，避免 run 状态丢失。
+    与图执行并行运行，由 _invoke_graph_with_deadline 在 finally 中回收；
+    轮询间隔 EVAL_CANCEL_POLL_SECONDS，读取 best-effort（Redis 异常不中断评估）。
+    """
+    poll = settings.EVAL_CANCEL_POLL_SECONDS
+    while not invoke_task.done():
+        await asyncio.sleep(poll)
+        if await is_cancel_requested(consultation_id):
+            logging.info(f"检测到取消请求，中断评估图执行: consultation_id={consultation_id}")
+            invoke_task.cancel()
+            return
+
+
+async def _invoke_graph_with_deadline(graph, initial_state, config, consultation_id=None):
+    """执行图并施加评估级总时长预算 + 协作式取消（Harness 生命周期控制）
+
+    - 超时（EVALUATION_RUN_TIMEOUT_SECONDS，0 = 不限制）抛 EvaluationDeadlineExceeded
+      （TimeoutError 子类）：走既有失败路径落库 error_type="timeout"，
+      并命中 Celery 可重试判定；在 Celery 软超时（300s）强杀前优雅降级。
+    - 用户取消（取消看守 cancel 图任务）抛 EvaluationCancelled：
+      CancelledError 是 BaseException，必须在此转换为普通异常才能被
+      上层 except Exception 捕获落库 error_type="cancelled"（不触发重试）；
+      checkpoint 中已完成节点保留，后续可断点续跑。
     """
     timeout = settings.EVALUATION_RUN_TIMEOUT_SECONDS
-    if timeout <= 0:
-        return await graph.ainvoke(initial_state, config=config)
+    watch_enabled = consultation_id is not None and settings.EVAL_CANCEL_POLL_SECONDS > 0
+    if not watch_enabled:
+        # 无取消看守时保持原有最简路径
+        if timeout <= 0:
+            return await graph.ainvoke(initial_state, config=config)
+        try:
+            return await asyncio.wait_for(
+                graph.ainvoke(initial_state, config=config), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise EvaluationDeadlineExceeded(
+                f"评估超出总时长预算 {timeout}s"
+            ) from None
+
+    invoke_task = asyncio.ensure_future(graph.ainvoke(initial_state, config=config))
+    watcher = asyncio.create_task(_watch_cancel(consultation_id, invoke_task))
     try:
-        return await asyncio.wait_for(
-            graph.ainvoke(initial_state, config=config), timeout=timeout
-        )
+        if timeout > 0:
+            return await asyncio.wait_for(invoke_task, timeout=timeout)
+        return await invoke_task
+    except asyncio.CancelledError:
+        # 区分：看守触发的取消（Redis 标志在）vs 外部取消（如 Celery 强杀）
+        if await is_cancel_requested(consultation_id):
+            raise EvaluationCancelled(
+                f"评估被用户取消: consultation_id={consultation_id}"
+            ) from None
+        raise
     except asyncio.TimeoutError:
         raise EvaluationDeadlineExceeded(
             f"评估超出总时长预算 {timeout}s"
         ) from None
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await watcher
 
 
 def _build_node_results(run_id: str, state: dict) -> list:

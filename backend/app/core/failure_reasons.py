@@ -34,6 +34,10 @@ class EvaluationDeadlineExceeded(TimeoutError):
     """评估 run 超出总时长预算（评估级 deadline，classify_failure 归为 timeout）"""
 
 
+class EvaluationCancelled(Exception):
+    """评估被用户主动取消（classify_failure 归为 cancelled，不触发 Celery 重试）"""
+
+
 def classify_failure(exc: BaseException) -> str:
     """将异常映射为标准化失败原因码
 
@@ -44,7 +48,7 @@ def classify_failure(exc: BaseException) -> str:
     exc_module = type(exc).__module__ or ""
     message = str(exc)
 
-    if isinstance(exc, asyncio.CancelledError):
+    if isinstance(exc, (asyncio.CancelledError, EvaluationCancelled)):
         return REASON_CANCELLED
     if isinstance(exc, TimeoutError) or "timeout" in exc_name:
         return REASON_TIMEOUT

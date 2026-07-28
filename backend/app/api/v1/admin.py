@@ -69,7 +69,9 @@ async def get_run_trace(
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """run 级 trace 树：以 run_id 为根，聚合各 agent 节点及其工具调用明细（仅管理员）"""
+    """run 级 trace 树：以 run_id 为根，聚合各 agent 节点及其工具调用明细与 Token 成本（仅管理员）"""
+    from app.services.token_tracker import token_tracker
+
     run_result = await db.execute(
         select(EvaluationRun).where(EvaluationRun.id == run_id)
     )
@@ -112,4 +114,6 @@ async def get_run_trace(
             for n in nodes
         ],
         "node_count": len(nodes),
+        # run 级 Token 成本归因（含按 agent 细分；Redis 无记录时为零值）
+        "usage": await token_tracker.get_run_usage(run_id),
     }

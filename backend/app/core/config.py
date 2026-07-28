@@ -146,6 +146,7 @@ class Settings(BaseSettings):
     EVAL_CONTEXT_COMPRESS_ENABLED: bool = True    # 评估上下文压缩：对话超预算时早期消息摘要化（摘要按内容哈希缓存到 Redis）
     EVAL_CONTEXT_COMPRESS_THRESHOLD_CHARS: int = 6000  # 对话全文超过该字符数触发压缩（0 = 不压缩）
     EVAL_CONTEXT_RECENT_KEEP_MESSAGES: int = 20   # 压缩时保留近期完整消息条数（早于此窗口的消息进摘要）
+    EVAL_CANCEL_POLL_SECONDS: int = 2             # 评估取消看守轮询取消标志的间隔（秒，0 = 禁用取消看守）
 
     # ReAct 模式配置
     ENABLE_REACT_KNOWLEDGE: bool = True           # Knowledge Agent 启用 ReAct 模式

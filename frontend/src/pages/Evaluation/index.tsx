@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Card, Typography, Progress, Row, Col, Collapse, Button, Spin, message, Tag, Badge } from 'antd';
 import { FileTextOutlined, RobotOutlined, MedicineBoxOutlined, ReadOutlined, HeartOutlined, CheckCircleOutlined, ExperimentOutlined, BulbOutlined, TrophyOutlined, WarningOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getEvaluation, createEvaluation, getEvaluationLockStatus } from '../../api/evaluation';
+import { getEvaluation, createEvaluation, getEvaluationLockStatus, cancelEvaluation } from '../../api/evaluation';
 import { getConsultationDetail } from '../../api/consultation';
 import type { Evaluation, ConsultationDetail, Citation } from '../../types';
 import { ScoreDisplay, DimensionRadar, getScoreColor, getScoreLevel } from '../../components';
@@ -52,6 +52,7 @@ const EvaluationPage: React.FC = () => {
   const [consultation, setConsultation] = useState<ConsultationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
@@ -229,6 +230,28 @@ const EvaluationPage: React.FC = () => {
     }
   };
 
+  // 取消进行中的评估：后端双通道取消（revoke 排队任务 / 看守中断执行中任务）
+  const handleCancel = async () => {
+    if (!id) return;
+    setCancelling(true);
+    try {
+      await cancelEvaluation(Number(id));
+      message.info('已请求取消评估');
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      setGenerating(false);
+      setLockActive(false);
+      setProgress(0);
+      setProgressMsg('');
+    } catch {
+      message.error('取消失败，请稍后重试');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   if (loading) return <Spin style={{ display: 'block', margin: '100px auto' }} size="large" />;
 
   if (generating) {
@@ -245,6 +268,9 @@ const EvaluationPage: React.FC = () => {
               预计剩余时间：约 {Math.max(5, 60 - elapsed)} 秒
             </div>
           )}
+          <Button danger style={{ marginTop: 24 }} loading={cancelling} onClick={handleCancel}>
+            取消评估
+          </Button>
         </div>
       </div>
     );

@@ -15,6 +15,12 @@ from app.core.websocket import manager
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.user import User
 from app.schemas.evaluation import EvaluationOut, EvaluationRequest
+from app.services.evaluation_cancel import (
+    clear_cancel_flag,
+    get_task_id,
+    request_cancel,
+    store_task_id,
+)
 from app.services.evaluation_lock_service import (
     get_lock_status,
     try_acquire_lock,
@@ -120,6 +126,8 @@ async def create_evaluation(
 
     # 3. 执行评估（根据配置选择同步或 Celery 异步）
     try:
+        # 清除残留取消标志，避免上一轮取消误杀本次评估
+        await clear_cancel_flag(data.consultation_id)
         await update_lock_status(db, data.consultation_id, "running")
         await db.commit()
 
@@ -150,6 +158,8 @@ async def create_evaluation(
                 consultation_id=data.consultation_id,
                 run_id=lock.run_id,
             )
+            # 记录 task_id 映射，供取消时 revoke 排队中的任务
+            await store_task_id(data.consultation_id, task.id)
 
             await record_audit_log(
                 db, user_id=current_user.id, action="trigger_evaluation",
@@ -170,6 +180,77 @@ async def create_evaluation(
         except Exception:
             await db.rollback()
         raise
+
+
+@router.post("/{consultation_id}/cancel")
+async def cancel_evaluation(
+    consultation_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = require_permission("evaluation:create"),
+):
+    """取消进行中的评估任务（协作式双通道）
+
+    - 排队未执行：Celery revoke，任务不再启动，pending 锁直接翻 failed
+    - 执行中：置 Redis 取消标志，由评估侧取消看守感知并中断图执行，
+      走既有失败路径落库 error_type="cancelled"（不重试，可断点续跑）
+    """
+    await require_consultation_access(db, consultation_id, current_user)
+
+    lock_status = await get_lock_status(db, consultation_id)
+    if not lock_status or not lock_status.get("is_active"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "NO_ACTIVE_EVALUATION",
+                "message": "当前没有进行中的评估任务",
+            },
+        )
+
+    # 1. 置取消标志（写路径：Redis 不可用时明确报错，不假装取消成功）
+    try:
+        await request_cancel(consultation_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "CANCEL_UNAVAILABLE",
+                "message": "取消服务暂不可用，请稍后重试",
+            },
+        ) from e
+
+    # 2. revoke 排队中的 Celery 任务（best-effort；已在执行的由看守中断）
+    task_id = await get_task_id(consultation_id)
+    if task_id:
+        try:
+            from app.celery_app import celery_app
+
+            celery_app.control.revoke(task_id, terminate=False)
+        except Exception as e:
+            import logging
+
+            logging.warning(f"Celery revoke 失败（不影响取消标志通道）: {e}")
+
+    # 3. pending 锁（任务尚未开始执行）直接翻 failed；
+    #    running 锁由评估侧失败路径落库后翻 failed
+    if lock_status.get("status") == "pending":
+        await update_lock_status(
+            db, consultation_id, "failed", error_message="评估被用户取消"
+        )
+        await db.commit()
+
+    await record_audit_log(
+        db, user_id=current_user.id, action="cancel_evaluation",
+        request=request, resource_id=str(consultation_id),
+        detail=f"请求取消评估: consultation_id={consultation_id}, 锁状态={lock_status.get('status')}",
+    )
+    await db.commit()
+
+    return {
+        "consultation_id": consultation_id,
+        "status": "cancel_requested",
+        "previous_lock_status": lock_status.get("status"),
+    }
 
 
 @router.get("/{consultation_id}/lock-status")

@@ -11,6 +11,7 @@ from typing import Any, TypedDict, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from app.core.run_context import current_agent_name
 from app.orchestration.state import (
     AgentResultEnvelope,
     EvaluationContext,
@@ -352,6 +353,8 @@ async def run_agent(state: RunAgentState) -> dict[str, Any]:
     from app.orchestration.adapters.registry import get_adapter
 
     agent_name = state["agent_name"]
+    # agent 级成本归因：Send 并行分支各自持有任务级上下文副本，互不污染
+    current_agent_name.set(agent_name)
     step_id = state.get("step_id", f"step_{agent_name}")
     context = state["context"]
 

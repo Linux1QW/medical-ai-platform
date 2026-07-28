@@ -10,8 +10,29 @@ from .ab_compare import run_ab_comparison, write_ab_report
 from .config import DEFAULT_CONFIG
 from .dataset_cases import DEFAULT_DATASET_DIR, load_dataset_cases
 from .datasets import load_gold_cases, save_gold_cases
+from .gold_bootstrap import bootstrap_gold_cases
 from .report import generate_json_report, write_json_report, write_markdown_report
 from .runners import create_mock_cases, filter_cases_by_split, run_evaluation
+
+
+def _export_dataset_cases(args) -> int:
+    """dataset/ 真实病例导出模式：转换为 JSONL 后直接退出"""
+    source_dir = Path(args.from_dataset) if args.from_dataset else DEFAULT_DATASET_DIR
+    print(f"Exporting dataset cases from {source_dir}...")
+    dataset_cases = load_dataset_cases(source_dir, limit=args.limit)
+    if args.export_split:
+        dataset_cases = filter_cases_by_split(dataset_cases, args.export_split)
+        print(f"After split filter ({args.export_split}): {len(dataset_cases)} cases")
+    if args.bootstrap_gold:
+        dataset_cases, annotated = bootstrap_gold_cases(dataset_cases)
+        print(f"Gold bootstrap: annotated {annotated}/{len(dataset_cases)} cases")
+    if not dataset_cases:
+        print("No cases to export!")
+        return 1
+    args.export_cases.parent.mkdir(parents=True, exist_ok=True)
+    save_gold_cases(dataset_cases, args.export_cases)
+    print(f"Exported {len(dataset_cases)} cases to: {args.export_cases}")
+    return 0
 
 
 async def main():
@@ -75,21 +96,24 @@ async def main():
         metavar="PATH",
         help="仅将加载的用例导出为 gold cases JSONL 后退出（不执行评测）"
     )
+    parser.add_argument(
+        "--export-split",
+        type=str,
+        default=None,
+        choices=["dev", "test", "regression"],
+        help="导出模式下仅保留指定 split 的用例（省略时导出全部）"
+    )
+    parser.add_argument(
+        "--bootstrap-gold",
+        action="store_true",
+        help="导出前按主诊断/主诉规则表自动生成 gold_relevant_sources 建议（notes 标记 gold=auto-suggested）"
+    )
 
     args = parser.parse_args()
 
-    # dataset/ 真实病例导出模式：转换为 JSONL 后直接退出
+    # dataset/ 真实病例导出模式
     if args.export_cases:
-        source_dir = Path(args.from_dataset) if args.from_dataset else DEFAULT_DATASET_DIR
-        print(f"Exporting dataset cases from {source_dir}...")
-        dataset_cases = load_dataset_cases(source_dir, limit=args.limit)
-        if not dataset_cases:
-            print("No cases to export!")
-            return 1
-        args.export_cases.parent.mkdir(parents=True, exist_ok=True)
-        save_gold_cases(dataset_cases, args.export_cases)
-        print(f"Exported {len(dataset_cases)} cases to: {args.export_cases}")
-        return 0
+        return _export_dataset_cases(args)
 
     # A/B 版本对比模式
     if args.compare_versions:

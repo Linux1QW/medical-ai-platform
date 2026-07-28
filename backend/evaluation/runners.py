@@ -262,7 +262,15 @@ async def run_case(case: RagGoldCase, mode: str) -> RagEvalResult:
     elif mode == "tooluse":
         return await run_case_tooluse(case)
     elif mode == "mock":
-        # Return a mock result for smoke testing
+        # Return a mock result for smoke testing.
+        # 与 gold case 期望对齐（citation id ∈ retrieved_docs、命中 gold_doc_ids/
+        # gold_relevant_sources），使 mock 冒烟的绿路径能通过阈值门，
+        # 作为 CI 阻断门防止评测框架/指标管道本身被改坏。
+        gold_doc_id = case.gold_doc_ids[0] if case.gold_doc_ids else "mock-doc-1"
+        citation_id = case.gold_citation_ids[0] if case.gold_citation_ids else "mock-citation-1"
+        citation_source = (
+            case.gold_relevant_sources[0] if case.gold_relevant_sources else "Mock source"
+        )
         return RagEvalResult(
             case_id=case.case_id,
             mode="mock",
@@ -273,11 +281,11 @@ async def run_case(case: RagGoldCase, mode: str) -> RagEvalResult:
             retrieval_status="sufficient",
             evidence_stance="supports",
             citation_data=[
-                {"id": "mock-citation-1", "text": "Mock citation text", "source": "Mock source"}
+                {"id": citation_id, "text": "Mock citation text", "source": citation_source}
             ],
             rag_trace_data={
                 "queries": ["mock query"],
-                "retrieved_docs": ["mock-doc-1", "mock-doc-2"],
+                "retrieved_docs": [gold_doc_id, citation_id, "mock-doc-2"],
                 "processed_at": "2023-01-01T00:00:00Z"
             },
             tool_trace=[

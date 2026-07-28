@@ -143,6 +143,38 @@ def calculate_citation_metrics(results: List[RagEvalResult], gold_cases: List[Ra
     }
 
 
+def calculate_source_metrics(results: List[RagEvalResult], gold_cases: List[RagGoldCase]) -> Dict[str, float]:
+    """Calculate gold source hit rate.
+
+    真实链路的 rag_trace 不含 retrieved_docs（仅 mock 产出），因此 recall/MRR
+    在真实跑分中无法计算；但 citation_data 每条含 source（来源 PDF 文件名），
+    用 gold_relevant_sources 子串匹配 citation source 是真实链路上可计算的
+    检索质量信号（与 scripts/eval 的 relevant_source_contains 判定口径一致）。
+
+    仅在存在带 gold_relevant_sources 标注的用例时返回指标，
+    避免无标注数据集触发阈值误报。
+    """
+    hits = 0
+    total = 0
+
+    for result, gold_case in zip(results, gold_cases, strict=False):
+        gold_sources = gold_case.gold_relevant_sources or []
+        if not gold_sources or gold_case.should_refuse:
+            continue
+        total += 1
+        cited_sources = [
+            str(c.get('source', ''))
+            for c in result.citation_data
+            if isinstance(c, dict)
+        ]
+        if any(sub in src for src in cited_sources for sub in gold_sources):
+            hits += 1
+
+    if total == 0:
+        return {}
+    return {"source_hit_rate": hits / total}
+
+
 def calculate_stance_metrics(results: List[RagEvalResult], gold_cases: List[RagGoldCase]) -> Dict[str, float]:
     """Calculate stance-related metrics."""
     correct_stances = 0
@@ -440,6 +472,7 @@ def generate_json_report(
     basic_metrics = calculate_basic_metrics(results, gold_cases)
     retrieval_metrics = calculate_retrieval_metrics(results, gold_cases)
     citation_metrics = calculate_citation_metrics(results, gold_cases)
+    source_metrics = calculate_source_metrics(results, gold_cases)
     stance_metrics = calculate_stance_metrics(results, gold_cases)
     tool_use_metrics = calculate_tool_use_specific_metrics(results, gold_cases)
 
@@ -447,6 +480,7 @@ def generate_json_report(
         **basic_metrics,
         **retrieval_metrics,
         **citation_metrics,
+        **source_metrics,
         **stance_metrics,
         **tool_use_metrics,
     }

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """管理接口 — 缓存清理、数据留存、运维操作与运行监控"""
 
+from datetime import date, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_admin
@@ -116,4 +118,86 @@ async def get_run_trace(
         "node_count": len(nodes),
         # run 级 Token 成本归因（含按 agent 细分；Redis 无记录时为零值）
         "usage": await token_tracker.get_run_usage(run_id),
+    }
+
+
+@router.get("/monitoring/failures/summary")
+async def failures_summary(
+    days: int = 7,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """失败归因聚合：按标准化失败原因码统计近 N 天评估 run 失败分布（仅管理员）
+
+    原因码体系见 app.core.failure_reasons（timeout/connection_error/cancelled 等），
+    error_type 非空即计入失败分布，覆盖失败与被取消的 run。
+    """
+    days = max(1, min(days, 90))
+    since = datetime.utcnow() - timedelta(days=days)
+
+    total_result = await db.execute(
+        select(func.count())
+        .select_from(EvaluationRun)
+        .where(EvaluationRun.started_at >= since)
+    )
+    total_runs = total_result.scalar_one() or 0
+
+    grouped_result = await db.execute(
+        select(EvaluationRun.error_type, func.count())
+        .where(EvaluationRun.started_at >= since, EvaluationRun.error_type.isnot(None))
+        .group_by(EvaluationRun.error_type)
+    )
+    by_reason = {row[0]: row[1] for row in grouped_result.all()}
+
+    recent_result = await db.execute(
+        select(EvaluationRun)
+        .where(EvaluationRun.started_at >= since, EvaluationRun.error_type.isnot(None))
+        .order_by(EvaluationRun.started_at.desc())
+        .limit(10)
+    )
+    recent = recent_result.scalars().all()
+
+    failed_runs = sum(by_reason.values())
+    return {
+        "days": days,
+        "total_runs": total_runs,
+        "failed_runs": failed_runs,
+        "failure_rate": round(failed_runs / total_runs, 4) if total_runs else 0.0,
+        "by_reason": by_reason,
+        "recent_failures": [
+            {
+                "run_id": r.id,
+                "consultation_id": r.consultation_id,
+                "status": r.status,
+                "error_type": r.error_type,
+                "error_message": (r.error_message or "")[:200] or None,
+                "attempt": r.attempt,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            }
+            for r in recent
+        ],
+    }
+
+
+@router.get("/monitoring/usage/summary")
+async def usage_summary(
+    days: int = 7,
+    current_user: User = Depends(get_current_admin),
+):
+    """Token 成本聚合：全部 run 的用量汇总/by_agent 排行 + 近 N 天日趋势（仅管理员）
+
+    run 级数据来自 Redis token_usage:run:*（7 天 TTL），Redis 不可用时降级返回零值。
+    """
+    from app.services.token_tracker import token_tracker
+
+    days = max(1, min(days, 30))
+    daily = [
+        await token_tracker.get_daily_usage((date.today() - timedelta(days=i)).isoformat())
+        for i in range(days)
+    ]
+    return {
+        "days": days,
+        "runs": await token_tracker.get_runs_usage_summary(),
+        "daily": daily,
     }

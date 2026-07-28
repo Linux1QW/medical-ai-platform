@@ -68,7 +68,7 @@ jobs:
           cd backend
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=40
 
-      - name: Run RAG eval smoke test (mock mode)
+      - name: Run RAG eval smoke test (mock mode, blocking threshold gate)
         env:
           MYSQL_HOST: localhost
           MYSQL_PORT: 3306
@@ -80,9 +80,11 @@ jobs:
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
           TESTING: 'true'
+        # mock 结果与 gold 期望对齐（绿路径），阈值门不过即失败：
+        # 防止评测框架/指标管道/阈值配置本身被后续改动改坏
         run: |
           cd backend
-          python -m evaluation.rag_eval --mode mock --limit 5 2>&1 || echo "Eval smoke completed with warnings"
+          python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold
 
       - name: Upload coverage to Codecov
         if: always()

@@ -5,6 +5,8 @@ This directory contains gold standard test cases for evaluating RAG (Retrieval-A
 ## File Structure
 
 - `rag_gold_cases.jsonl`: JSON Lines file containing gold standard test cases for RAG evaluation
+- `dataset_gold_cases.jsonl`: 从根目录 `dataset/` 真实门诊病例转换的 regression 回归集（15 例），
+  `gold_relevant_sources` 由规则表自动生成（notes 含 `gold=auto-suggested` 标记，欢迎人工修正）
 
 ## Case Format
 
@@ -54,3 +56,35 @@ These cases are used by the RAG evaluation system to measure:
 - Refusal accuracy
 - Tool use effectiveness
 - Overall RAG performance
+
+## 真实病例回归集（dataset_gold_cases.jsonl）
+
+### 重新生成
+
+从 `dataset/` 转换 regression split 并自动补 gold 来源建议（幂等，已有标注不覆盖）：
+
+```bash
+cd backend
+python -m evaluation.rag_eval --from-dataset \
+    --export-cases evaluation/rag_cases/dataset_gold_cases.jsonl \
+    --export-split regression --bootstrap-gold
+```
+
+### 本地跑真实回归
+
+需要可用的 DASHSCOPE embedding/LLM 额度与已建好的向量知识库：
+
+```bash
+cd backend
+python -m evaluation.rag_eval --cases evaluation/rag_cases/dataset_gold_cases.jsonl \
+    --split regression --mode legacy --output-dir evaluation/reports
+```
+
+关注指标 `source_hit_rate`：citation 来源文件名包含任一 `gold_relevant_sources`
+子串即算命中（与 `scripts/eval/golden_set.json` 的 `relevant_source_contains` 口径一致）。
+真实链路的 `rag_trace` 不含 `retrieved_docs`，因此 recall@k / MRR 仅在 mock 模式有值。
+
+### CI 阻断门
+
+CI 的 backend-test 作业中运行 `--mode mock --fail-on-threshold`：mock 结果与
+gold 期望对齐（绿路径），任何使指标管道/阈值配置失灵的改动都会让该步骤失败。

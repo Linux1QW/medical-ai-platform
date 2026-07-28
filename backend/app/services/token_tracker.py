@@ -183,6 +183,53 @@ class TokenTracker:
             "by_agent": by_agent,
         }
 
+    async def get_runs_usage_summary(self, top_n: int = 10) -> dict:
+        """聚合保留期内（7 天 TTL）全部 run 的 Token 用量与成本归因
+
+        SCAN token_usage:run:* 逐个汇总，含按 agent 细分与成本 Top-N run 排行，
+        供 /monitoring/usage/summary 端点使用。
+
+        Returns:
+            {runs_count, prompt_tokens, completion_tokens, total_tokens,
+             estimated_cost, by_agent, top_runs}；Redis 不可用时返回零值
+        """
+        summary: dict = {
+            "runs_count": 0, "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "estimated_cost": 0.0, "by_agent": {}, "top_runs": [],
+        }
+        redis = await _get_redis()
+        if redis is None:
+            return summary
+        try:
+            run_entries: list = []
+            by_agent: dict = {}
+            async for key in redis.scan_iter(match="token_usage:run:*", count=200):
+                data = await cast(Awaitable[dict], redis.hgetall(key))
+                if not data:
+                    continue
+                total = int(data.get("total_tokens", 0))
+                summary["runs_count"] += 1
+                summary["prompt_tokens"] += int(data.get("prompt_tokens", 0))
+                summary["completion_tokens"] += int(data.get("completion_tokens", 0))
+                summary["total_tokens"] += total
+                for field, value in data.items():
+                    if field.startswith("agent:") and field.endswith(":total_tokens"):
+                        agent = field.split(":", 2)[1]
+                        by_agent[agent] = by_agent.get(agent, 0) + int(value)
+                run_entries.append((str(key).rsplit(":", 1)[-1], total))
+            run_entries.sort(key=lambda item: item[1], reverse=True)
+            summary["by_agent"] = by_agent
+            summary["top_runs"] = [
+                {"run_id": run_id, "total_tokens": total}
+                for run_id, total in run_entries[:top_n]
+            ]
+            summary["estimated_cost"] = round(
+                summary["total_tokens"] / 1000 * settings.COST_PER_1K_TOKENS, 4
+            )
+        except Exception as e:
+            logger.debug(f"聚合 run 用量异常: {e}")
+        return summary
+
     async def check_budget(self, daily_limit: float = None) -> dict:
         """检查是否超出每日预算"""
         limit = daily_limit or settings.TOKEN_DAILY_LIMIT

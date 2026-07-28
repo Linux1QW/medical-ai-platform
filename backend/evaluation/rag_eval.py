@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .ab_compare import run_ab_comparison, write_ab_report
 from .config import DEFAULT_CONFIG
-from .datasets import load_gold_cases
+from .dataset_cases import DEFAULT_DATASET_DIR, load_dataset_cases
+from .datasets import load_gold_cases, save_gold_cases
 from .report import generate_json_report, write_json_report, write_markdown_report
 from .runners import create_mock_cases, filter_cases_by_split, run_evaluation
 
@@ -59,8 +60,36 @@ async def main():
         metavar=("VERSION_A", "VERSION_B"),
         help="对比两个索引版本的检索质量（A/B 测试）"
     )
+    parser.add_argument(
+        "--from-dataset",
+        nargs="?",
+        const=str(DEFAULT_DATASET_DIR),
+        default=None,
+        metavar="DIR",
+        help="从 dataset/ 真实病例目录加载用例（替代 --cases JSONL，省略参数时用仓库根 dataset/）"
+    )
+    parser.add_argument(
+        "--export-cases",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="仅将加载的用例导出为 gold cases JSONL 后退出（不执行评测）"
+    )
 
     args = parser.parse_args()
+
+    # dataset/ 真实病例导出模式：转换为 JSONL 后直接退出
+    if args.export_cases:
+        source_dir = Path(args.from_dataset) if args.from_dataset else DEFAULT_DATASET_DIR
+        print(f"Exporting dataset cases from {source_dir}...")
+        dataset_cases = load_dataset_cases(source_dir, limit=args.limit)
+        if not dataset_cases:
+            print("No cases to export!")
+            return 1
+        args.export_cases.parent.mkdir(parents=True, exist_ok=True)
+        save_gold_cases(dataset_cases, args.export_cases)
+        print(f"Exported {len(dataset_cases)} cases to: {args.export_cases}")
+        return 0
 
     # A/B 版本对比模式
     if args.compare_versions:
@@ -94,7 +123,7 @@ async def main():
         return 0
 
     print(f"Starting RAG evaluation in {args.mode} mode...")
-    print(f"Dataset: {args.cases}")
+    print(f"Dataset: {args.from_dataset or args.cases}")
     print(f"Split: {args.split}")
     print(f"Output directory: {args.output_dir}")
 
@@ -102,6 +131,19 @@ async def main():
     if args.mode == "mock":
         print("Using mock cases for smoke testing...")
         gold_cases = create_mock_cases(args.limit or 5)
+    elif args.from_dataset:
+        print(f"Loading real cases from dataset dir {args.from_dataset}...")
+        gold_cases = load_dataset_cases(Path(args.from_dataset))
+        print(f"Loaded {len(gold_cases)} dataset cases")
+
+        # Filter by split
+        gold_cases = filter_cases_by_split(gold_cases, args.split)
+        print(f"After split filter ({args.split}): {len(gold_cases)} cases")
+
+        # Apply limit
+        if args.limit:
+            gold_cases = gold_cases[:args.limit]
+            print(f"After limit ({args.limit}): {len(gold_cases)} cases")
     else:
         print(f"Loading gold cases from {args.cases}...")
         gold_cases = load_gold_cases(args.cases)
@@ -132,7 +174,7 @@ async def main():
         results=results,
         gold_cases=gold_cases,
         mode=args.mode,
-        dataset_path=str(args.cases),
+        dataset_path=str(args.from_dataset or args.cases),
         split=args.split
     )
 

@@ -40,6 +40,9 @@ class Consultation(Base):
     max_rounds: Mapped[int] = mapped_column(
         Integer, default=20, nullable=True, comment="最大允许问诊轮次"
     )
+    memory_state: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="患者智能体记忆状态（JSON 序列化的 MemoryState）"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)
 
 

@@ -17,6 +17,7 @@ from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
 from app.services.evaluation_service import (
     EvaluationValidationError,
+    _build_disclosure_coverage_text,
     _extract_json,
     _parse_symptoms,
     _score_range_label,
@@ -393,3 +394,37 @@ class TestEvaluationValidationError:
         assert error.message == "解析失败"
         assert error.raw_response == '{"invalid": }'
         assert str(error) == "解析失败"
+
+
+# ── 测试 _build_disclosure_coverage_text（graph/legacy 共用披露账本文本） ──────────
+
+class TestBuildDisclosureCoverageText:
+    """披露账本 -> 评估注入文本，失败/无数据返回 None 静默跳过"""
+
+    def test_valid_memory_state_returns_text(self):
+        """有效账本返回含披露率与未问出事实的文本"""
+        from app.services.agents.patient.memory import Fact, MemoryState
+
+        memory = MemoryState(facts=[
+            Fact(fact_id="f1", content="胸痛", status="disclosed"),
+            Fact(fact_id="f2", content="吸烟史", status="undisclosed"),
+        ])
+        text = _build_disclosure_coverage_text(memory.to_json())
+        assert text is not None
+        assert "事实披露率" in text
+        assert "吸烟史" in text
+
+    def test_none_or_empty_returns_none(self):
+        """无账本（旧会话）返回 None"""
+        assert _build_disclosure_coverage_text(None) is None
+        assert _build_disclosure_coverage_text("") is None
+
+    def test_no_facts_returns_none(self):
+        """账本存在但无事实时返回 None（不注入空统计）"""
+        from app.services.agents.patient.memory import MemoryState
+
+        assert _build_disclosure_coverage_text(MemoryState().to_json()) is None
+
+    def test_invalid_json_returns_none(self):
+        """损坏 JSON 静默跳过返回 None"""
+        assert _build_disclosure_coverage_text("{not json") is None

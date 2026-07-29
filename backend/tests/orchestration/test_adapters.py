@@ -247,3 +247,19 @@ class TestRegistry:
         assert "inquiry" in adapters
         assert "diagnosis" in adapters
         assert len(adapters) == 2
+
+
+# ── 披露账本覆盖报告拼接 Tests ──────────────────────────────────────────────
+
+class TestBuildPatientInfoDisclosureCoverage:
+    def test_appends_coverage_block_when_present(self, sample_context):
+        """context 带披露账本文本时，patient_info 末尾拼接客观统计块"""
+        sample_context.disclosure_coverage = "事实披露率：50.0%（1/2）"
+        info = InquiryAdapter()._build_patient_info(sample_context)
+        assert "【问诊信息披露账本（系统客观统计）】" in info
+        assert "事实披露率：50.0%（1/2）" in info
+
+    def test_no_coverage_block_when_absent(self, sample_context):
+        """默认无披露账本时不拼接该段"""
+        info = InquiryAdapter()._build_patient_info(sample_context)
+        assert "披露账本" not in info

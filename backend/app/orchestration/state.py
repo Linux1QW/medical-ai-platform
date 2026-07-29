@@ -24,6 +24,8 @@ class EvaluationContext(BaseModel):
     treatment_plan: str | None = None
     # Knowledge Agent 检索到的指南证据（由图流程注入，供 Diagnosis/Treatment Agent 使用）
     knowledge_citations: list[dict] = Field(default_factory=list)
+    # 患者智能体披露账本覆盖统计文本（无账本时为 None，由 adapter 拼入 patient_info）
+    disclosure_coverage: str | None = None
 
 
 # ── 提交标志 ────────────────────────────────────────────────────────────────

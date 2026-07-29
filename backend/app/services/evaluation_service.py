@@ -128,6 +128,8 @@ async def _run_evaluation_graph(
         symptoms=_parse_symptoms(patient.symptoms),
         doctor_diagnosis=consultation.diagnosis if consultation.diagnosis and consultation.diagnosis.strip() else None,
         treatment_plan=consultation.treatment_plan if consultation.treatment_plan and consultation.treatment_plan.strip() else None,
+        # 患者智能体披露账本 -> 客观覆盖统计，由 adapter 拼入 patient_info（失败静默跳过）
+        disclosure_coverage=_build_disclosure_coverage_text(consultation.memory_state),
     )
 
     initial_state = EvaluationState(
@@ -516,6 +518,23 @@ def _parse_symptoms(symptoms_str) -> list[str]:
         return [symptoms_str] if symptoms_str else []
 
 
+def _build_disclosure_coverage_text(memory_state) -> str | None:
+    """患者智能体披露账本 -> 评估注入的客观覆盖统计文本
+
+    graph/legacy 两条评估路径共用；无账本/无事实/解析失败返回 None 静默跳过。
+    """
+    try:
+        from app.services.agents.patient.coverage import build_coverage_report, format_coverage_text
+        from app.services.agents.patient.memory import MemoryState
+
+        memory = MemoryState.from_json(memory_state)
+        if memory is not None and memory.facts:
+            return format_coverage_text(build_coverage_report(memory))
+    except Exception as e:
+        logging.warning(f"披露账本注入评估失败，跳过: {e}")
+    return None
+
+
 async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Evaluation:
     """旧编排路径 — 保留原有代码作为回退"""
     await manager.send_progress(consultation_id, 0, "正在初始化...")
@@ -548,16 +567,9 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         f"预期诊断: {patient.expected_diagnosis}"
     )
     # 患者智能体披露账本 -> 客观覆盖统计，增强病史采集评估准确性（失败静默跳过）
-    try:
-        from app.services.agents.patient.coverage import build_coverage_report, format_coverage_text
-        from app.services.agents.patient.memory import MemoryState
-
-        memory = MemoryState.from_json(consultation.memory_state)
-        if memory is not None and memory.facts:
-            coverage_text = format_coverage_text(build_coverage_report(memory))
-            patient_info += f"\n\n【问诊信息披露账本（系统客观统计）】\n{coverage_text}"
-    except Exception as e:
-        logging.warning(f"披露账本注入评估失败，跳过: {e}")
+    coverage_text = _build_disclosure_coverage_text(consultation.memory_state)
+    if coverage_text:
+        patient_info += f"\n\n【问诊信息披露账本（系统客观统计）】\n{coverage_text}"
     doctor_diagnosis = consultation.diagnosis or "（医生未提交诊断结果）"
     treatment_plan = consultation.treatment_plan or "（医生未提交治疗方案）"
 

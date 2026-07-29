@@ -55,4 +55,8 @@ class BaseAgentAdapter(ABC):
             parts.append(f"病史:{context.medical_history}")
         if context.symptoms:
             parts.append(f"症状:{','.join(context.symptoms)}")
-        return "，".join(parts) if parts else "无额外患者信息"
+        info = "，".join(parts) if parts else "无额外患者信息"
+        # 患者智能体披露账本覆盖统计（无账本时为 None，不拼接）
+        if context.disclosure_coverage:
+            info += f"\n\n【问诊信息披露账本（系统客观统计）】\n{context.disclosure_coverage}"
+        return info

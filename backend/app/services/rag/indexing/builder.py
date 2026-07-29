@@ -236,6 +236,7 @@ async def index_single_pdf(
         pages = extract_document(pdf_path)
         await apply_ocr_to_pages(pages)  # 低文本页 OCR 兜底（未启用时零开销）
         chunks = []
+        chunk_seq = 0  # source 内全局递增序号（Small-to-Big 邻居定位，与全量构建路径一致）
         for page_info in pages:
             chunk_items = _extract_chunks_from_page(page_info)
             for idx, item in enumerate(chunk_items):
@@ -250,8 +251,10 @@ async def index_single_pdf(
                         "page": page_info["page"],
                         "heading_path": item.get("heading_path", ""),
                         "content_type": page_info.get("content_type", "text"),
+                        "chunk_seq": chunk_seq,
                     }
                 )
+                chunk_seq += 1
 
         if not chunks:
             logger.warning(f"'{source_name}' 未提取到任何文本块")
@@ -285,6 +288,7 @@ async def index_single_pdf(
                 "page": c["page"],
                 "heading_path": c.get("heading_path", ""),
                 "content_type": c.get("content_type", "text"),
+                "chunk_seq": c.get("chunk_seq", -1),  # Small-to-Big 邻居定位
                 "organization": doc_meta.organization or "",
                 "year": doc_meta.year or 0,
                 "version": doc_meta.version or "",

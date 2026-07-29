@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DashScope Embedding 调用封装 — 使用 text-embedding-v4 模型生成文本向量
+"""DashScope Embedding 调用封装 — 使用 qwen3.7-text-embedding 模型生成文本向量
 
 包含 LRU 内存缓存，对重复查询直接命中缓存，避免重复 API 调用。
 """
@@ -24,7 +24,7 @@ _embed_client = AsyncOpenAI(
     http_client=_http_client,
 )
 
-EMBEDDING_MODEL = "text-embedding-v4"
+EMBEDDING_MODEL = "qwen3.7-text-embedding"
 EMBEDDING_DIM = 1024
 
 # ── LRU 缓存配置 ──────────────────────────────────────────────────────────────
@@ -51,8 +51,11 @@ def clear_embed_cache():
 
 # ── 底层 API 调用（不含缓存逻辑）────────────────────────────────────────────
 async def _get_embeddings_from_api(texts: List[str]) -> List[List[float]]:
-    """直接调用 DashScope API 批量生成向量，含指数退避重试和速率控制。"""
-    batch_size = 6
+    """直接调用 DashScope API 批量生成向量，含指数退避重试和速率控制。
+
+    qwen3.7-text-embedding 单次请求上限 20 条，这里取 10 兼顾吞吐与重试粒度。
+    """
+    batch_size = 10
     max_retries = 3
     all_embeddings: List[List[float]] = []
     total_batches = (len(texts) + batch_size - 1) // batch_size

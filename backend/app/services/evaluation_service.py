@@ -547,6 +547,17 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         f"症状: {patient.symptoms}\n"
         f"预期诊断: {patient.expected_diagnosis}"
     )
+    # 患者智能体披露账本 -> 客观覆盖统计，增强病史采集评估准确性（失败静默跳过）
+    try:
+        from app.services.agents.patient.coverage import build_coverage_report, format_coverage_text
+        from app.services.agents.patient.memory import MemoryState
+
+        memory = MemoryState.from_json(consultation.memory_state)
+        if memory is not None and memory.facts:
+            coverage_text = format_coverage_text(build_coverage_report(memory))
+            patient_info += f"\n\n【问诊信息披露账本（系统客观统计）】\n{coverage_text}"
+    except Exception as e:
+        logging.warning(f"披露账本注入评估失败，跳过: {e}")
     doctor_diagnosis = consultation.diagnosis or "（医生未提交诊断结果）"
     treatment_plan = consultation.treatment_plan or "（医生未提交治疗方案）"
 

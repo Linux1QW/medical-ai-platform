@@ -72,3 +72,13 @@ class TestRespond:
             reply = await agent.respond("你有青霉素过敏吗？", [])
         assert llm.await_count == 2
         assert reply == "没有，我没有过敏。"
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_leaves_memory_untouched(self):
+        """LLM 调用失败向上抛时，记忆不应留下幽灵轮次"""
+        agent = _agent()
+        with patch("app.services.agents.patient.agent.call_qwen_chat", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with pytest.raises(RuntimeError):
+                await agent.respond("哪里不舒服？", [])
+        assert agent.memory.turn == 0
+        assert agent.memory.stage_history == []

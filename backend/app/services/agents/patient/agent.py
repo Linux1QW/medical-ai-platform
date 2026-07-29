@@ -45,16 +45,18 @@ class PatientAgent:
 
     async def respond(self, doctor_message: str, chat_history: list[dict]) -> str:
         """生成一条患者回复并更新记忆状态"""
-        self.memory.turn += 1
         stage = classify_stage(doctor_message, self.memory.stage)
-        self.memory.stage = stage
-        self.memory.stage_history.append(stage)
 
         messages = [{"role": "system", "content": self._build_system_prompt()}]
         messages.extend(chat_history)
         messages.append({"role": "user", "content": doctor_message})
 
         reply = await call_qwen_chat(messages, temperature=0.3)
+
+        # 首次 LLM 调用成功后才落记忆状态，异常向上抛时不留幽灵轮次
+        self.memory.turn += 1
+        self.memory.stage = stage
+        self.memory.stage_history.append(stage)
 
         if check_contradiction(self.memory, reply):
             logger.warning("患者回复与已否认事实矛盾，触发一次重生成")

@@ -64,14 +64,13 @@ class MemoryState(BaseModel):
         return None
 
     def mark(self, fact_ids: list[str], status: FactStatus) -> None:
-        """批量更新事实状态；置为 disclosed 时记录披露轮次。未知 id 静默忽略"""
+        """批量更新事实状态；置为 disclosed 时记录披露轮次，否则清除。未知 id 静默忽略"""
         for fid in fact_ids:
             fact = self.find_fact(fid)
             if fact is None:
                 continue
             fact.status = status
-            if status == "disclosed":
-                fact.disclosed_at_turn = self.turn
+            fact.disclosed_at_turn = self.turn if status == "disclosed" else None
 
 
 # ── 事实抽取 ─────────────────────────────────────────────────────────────────────
@@ -135,6 +134,8 @@ async def extract_facts(chief_complaint: str, medical_history: str, symptoms_raw
         facts: list[Fact] = []
         counters: dict[str, int] = {}
         for item in data.get("facts") or []:
+            if not isinstance(item, dict):
+                continue
             content = str(item.get("content", "")).strip()
             if not content:
                 continue

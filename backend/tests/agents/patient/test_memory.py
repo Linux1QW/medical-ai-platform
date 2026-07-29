@@ -45,6 +45,16 @@ class TestMemoryState:
         assert [f.fact_id for f in m.facts_by_status("denied")] == ["his_001"]
         assert [f.fact_id for f in m.facts_by_status("undisclosed")] == ["sym_001"]
 
+    def test_mark_denied_clears_disclosed_turn(self):
+        """先披露后否认：disclosed_at_turn 应清除，避免与 status 矛盾"""
+        m = _make_memory()
+        m.turn = 3
+        m.mark(["sym_001"], "disclosed")
+        m.mark(["sym_001"], "denied")
+        fact = m.find_fact("sym_001")
+        assert fact.status == "denied"
+        assert fact.disclosed_at_turn is None
+
 
 from unittest.mock import AsyncMock, patch
 
@@ -73,6 +83,14 @@ class TestExtractFacts:
             facts = await extract_facts("上腹痛", "无", "[]")
         assert [f.fact_id for f in facts] == ["sym_001", "lif_001"]
         assert facts[1].disclosure_condition == "empathy_unlock"
+
+    @pytest.mark.asyncio
+    async def test_extract_facts_skips_malformed_items(self):
+        """facts 数组中混入非 dict 元素时跳过而非整体降级"""
+        llm_out = '{"facts": ["脏数据", {"category": "symptom", "content": "上腹隐痛"}]}'
+        with patch("app.services.agents.patient.memory.call_qwen_chat", new=AsyncMock(return_value=llm_out)):
+            facts = await extract_facts("上腹痛", "无", "[]")
+        assert [f.content for f in facts] == ["上腹隐痛"]
 
     @pytest.mark.asyncio
     async def test_extract_facts_llm_failure_falls_back(self):

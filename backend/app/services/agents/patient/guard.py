@@ -30,6 +30,16 @@ def _split_tokens(text: str) -> list[str]:
     return [t.strip() for t in tokens if t.strip()]
 
 
+def _affirmed_hit(text: str, tokens: list[str]) -> bool:
+    """子句级肯定命中：任一 token 出现在不含否定词的子句中才算承认"""
+    for seg in _split_tokens(text):
+        if any(neg in seg for neg in _NEGATION_WORDS):
+            continue
+        if any(t in seg for t in tokens):
+            return True
+    return False
+
+
 async def update_ledger(memory: MemoryState, doctor_message: str, patient_reply: str) -> None:
     """回复后更新披露账本。LLM 判定失败时降级为规则匹配，绝不向上抛异常"""
     pending = memory.facts_by_status("undisclosed")
@@ -55,24 +65,24 @@ async def update_ledger(memory: MemoryState, doctor_message: str, patient_reply:
 
 
 def _rule_based_update(memory: MemoryState, patient_reply: str) -> None:
-    """规则兜底：事实内容的关键片段（≥2字）出现在回复中即视为已披露"""
+    """规则兜底：事实内容的关键片段（≥2字）在无否定词子句中出现即视为已披露"""
     reply = patient_reply or ""
     for fact in memory.facts:
         if fact.status != "undisclosed":
             continue
         tokens = [t for t in _split_tokens(fact.content) if len(t) >= 2]
-        if tokens and any(t in reply for t in tokens):
+        if tokens and _affirmed_hit(reply, tokens):
             fact.status = "disclosed"
             fact.disclosed_at_turn = memory.turn
 
 
 def check_contradiction(memory: MemoryState, reply: str) -> bool:
-    """检测回复是否承认了已否认（denied）的事实——即前后矛盾"""
+    """检测回复是否承认了已否认（denied）的事实——即前后矛盾（子句级否定判定）"""
     text = reply or ""
     for fact in memory.facts_by_status("denied"):
         tokens = [t for t in _split_tokens(fact.content) if len(t) >= 2]
         if not tokens:
             continue
-        if any(t in text for t in tokens) and not any(neg in text for neg in _NEGATION_WORDS):
+        if _affirmed_hit(text, tokens):
             return True
     return False

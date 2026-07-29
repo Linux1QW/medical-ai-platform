@@ -57,6 +57,12 @@ class TestRuleBasedUpdate:
         assert m.find_fact("sym_002").status == "disclosed"
         assert m.find_fact("sym_001").status == "undisclosed"
 
+    def test_negated_clause_not_marked_disclosed(self):
+        """否定句中命中 token 不应误记为已披露"""
+        m = _memory()
+        _rule_based_update(m, "没有反酸烧心。")
+        assert m.find_fact("sym_002").status == "undisclosed"
+
 
 class TestCheckContradiction:
     def test_denied_fact_reasserted_is_contradiction(self):
@@ -68,6 +74,12 @@ class TestCheckContradiction:
         m = _memory()
         m.mark(["his_001"], "denied")
         assert check_contradiction(m, "没有，我没有青霉素过敏。") is False
+
+    def test_unrelated_negation_does_not_mask_contradiction(self):
+        """承认句中夹带无关否定子句，仍应判为矛盾"""
+        m = _memory()
+        m.mark(["his_001"], "denied")
+        assert check_contradiction(m, "对，我青霉素过敏，最近不怎么疼。") is True
 
     def test_no_denied_facts_never_contradicts(self):
         m = _memory()

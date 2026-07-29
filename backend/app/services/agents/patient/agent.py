@@ -14,6 +14,7 @@ from .guard import check_contradiction, update_ledger
 from .memory import MemoryState
 from .planner import classify_stage
 from .prompts import PATIENT_ROLE_WRAPPER
+from .strategy import get_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,12 @@ class PatientAgent:
         if denied:
             lines = "\n".join(f"- {f.content}" for f in denied)
             sections.append("【你已明确否认过的信息（绝对不能再承认）】\n" + lines)
+        strategy = get_strategy(self.patient.personality_type or "", self.memory.stage)
+        sections.append(
+            f"【本轮回复风格】长度：{strategy.reply_length}；语气：{strategy.tone_hint}"
+            + ("；可少量主动补充相关信息" if strategy.volunteer_info else "")
+            + ("；可向医生反问一个问题" if strategy.ask_back else "")
+        )
         return "\n\n".join(sections)
 
     async def respond(self, doctor_message: str, chat_history: list[dict]) -> str:

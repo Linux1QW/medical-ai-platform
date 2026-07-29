@@ -128,3 +128,25 @@ class TestEmotionEngineTool:
         args = EmotionEngineArgs(doctor_message="别担心，慢慢说。", current_emotion="焦虑", personality="焦虑型")
         result = await tool.execute(args, _context())
         assert result == {"behavior": "comfort", "emotion": "缓和"}
+
+
+from app.services.tools.patient import PATIENT_TOOL_BUDGETS, register_patient_tools
+from app.services.tools.policy import AGENT_TOOL_WHITELIST
+from app.services.tools.registry import ToolRegistry
+
+
+class TestPatientToolRegistration:
+    def test_register_idempotent(self):
+        registry = ToolRegistry()
+        register_patient_tools(registry)
+        register_patient_tools(registry)  # 幂等不报错
+        names = set(registry.list_tools())  # list_tools 返回工具名列表
+        assert {"query_plausible_symptom", "physiology_calculator", "emotion_engine"} <= names
+
+    def test_whitelist_registered(self):
+        assert AGENT_TOOL_WHITELIST["patient_agent"] == frozenset(
+            {"query_plausible_symptom", "physiology_calculator", "emotion_engine"}
+        )
+
+    def test_budget_limits(self):
+        assert PATIENT_TOOL_BUDGETS == {"query_plausible_symptom": 5}

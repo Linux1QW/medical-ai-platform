@@ -27,6 +27,11 @@ AGENT_TOOL_WHITELIST: dict[str, frozenset[str]] = {
         "detect_score_contradictions",
         "summarize_evaluation",
     }),
+    "patient_agent": frozenset({
+        "query_plausible_symptom",
+        "physiology_calculator",
+        "emotion_engine",
+    }),
 }
 
 

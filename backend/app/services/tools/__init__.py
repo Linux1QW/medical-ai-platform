@@ -4,6 +4,7 @@ from .citation import register_citation_tools
 from .consistency import register_consistency_tools
 from .executor import ToolExecutor
 from .medical_retrieval import register_medical_retrieval_tools
+from .patient import PATIENT_TOOL_BUDGETS, register_patient_tools
 from .policy import AGENT_TOOL_WHITELIST, get_allowed_tools
 from .registry import ToolRegistry
 from .robust_tool_executor import (
@@ -48,6 +49,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     register_medical_retrieval_tools(registry)
     register_citation_tools(registry)
     register_consistency_tools(registry)
+    register_patient_tools(registry)
 
 
 __all__ = [
@@ -91,4 +93,6 @@ __all__ = [
     "register_all_tools",
     "register_scoring_tools",
     "register_consistency_tools",
+    "register_patient_tools",
+    "PATIENT_TOOL_BUDGETS",
 ]

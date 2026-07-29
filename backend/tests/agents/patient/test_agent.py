@@ -82,3 +82,17 @@ class TestRespond:
                 await agent.respond("哪里不舒服？", [])
         assert agent.memory.turn == 0
         assert agent.memory.stage_history == []
+
+    @pytest.mark.asyncio
+    async def test_emotion_updated_each_turn(self):
+        agent = _agent()
+        agent.memory.emotion = "焦虑"
+        with patch("app.services.agents.patient.agent.call_qwen_chat", new=AsyncMock(return_value="嗯。")), \
+             patch("app.services.agents.patient.agent.update_ledger", new=AsyncMock()):
+            await agent.respond("别担心，慢慢说。", [])
+        assert agent.memory.emotion == "缓和"
+
+    def test_emotion_injected_into_prompt(self):
+        agent = _agent()
+        agent.memory.emotion = "恐慌"
+        assert "当前情绪状态：恐慌" in agent._build_system_prompt()

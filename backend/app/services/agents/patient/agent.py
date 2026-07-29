@@ -7,6 +7,7 @@ respond 内部失败会向上抛出，由 consultation_service 回退旧无记�
 import logging
 
 from app.services.qwen_client import call_qwen_chat
+from app.services.tools.patient.emotion import classify_doctor_behavior, update_emotion
 
 from .guard import check_contradiction, update_ledger
 from .memory import MemoryState
@@ -31,6 +32,7 @@ class PatientAgent:
     def _build_system_prompt(self) -> str:
         """角色包装 + 披露账本注入（已披露保持一致 / 已否认绝不翻供）"""
         sections = [PATIENT_ROLE_WRAPPER.format(system_prompt=self.patient.system_prompt or "")]
+        sections.append(f"【当前情绪状态：{self.memory.emotion}】请在语气中自然体现这种情绪。")
         disclosed = self.memory.facts_by_status("disclosed")
         if disclosed:
             lines = "\n".join(f"- {f.content}" for f in disclosed)
@@ -57,6 +59,12 @@ class PatientAgent:
         self.memory.turn += 1
         self.memory.stage = stage
         self.memory.stage_history.append(stage)
+
+        # 情绪前置路由：行为分类 + 情绪转移（纯规则，零成本）
+        behavior = classify_doctor_behavior(doctor_message)
+        self.memory.emotion = update_emotion(
+            self.memory.emotion, behavior, self.patient.personality_type or ""
+        )
 
         if check_contradiction(self.memory, reply):
             logger.warning("患者回复与已否认事实矛盾，触发一次重生成")

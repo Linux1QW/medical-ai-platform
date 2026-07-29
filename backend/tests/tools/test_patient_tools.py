@@ -48,3 +48,41 @@ class TestQueryPlausibleSymptom:
         with patch("app.services.tools.patient.plausible_symptom.tiered_retrieve", new=AsyncMock(side_effect=RuntimeError("boom"))):
             result = await tool.execute(args, _context())
         assert result == {"verdict": "uncertain", "reason": "知识库裁决失败，保守处理", "degraded": True}
+
+
+from app.services.tools.patient.physiology import (
+    PhysiologyCalculator,
+    PhysiologyCalculatorArgs,
+)
+
+
+class TestPhysiologyCalculator:
+    @pytest.mark.asyncio
+    async def test_deterministic_same_seed(self):
+        tool = PhysiologyCalculator()
+        args = PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42, abnormal=False)
+        r1 = await tool.execute(args, _context())
+        r2 = await tool.execute(args, _context())
+        assert r1 == r2
+        assert r1["unit"] == "℃"
+        assert 36.0 <= float(r1["value"]) <= 37.2
+
+    @pytest.mark.asyncio
+    async def test_abnormal_range_differs(self):
+        tool = PhysiologyCalculator()
+        normal = await tool.execute(PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42, abnormal=False), _context())
+        fever = await tool.execute(PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42, abnormal=True), _context())
+        assert float(fever["value"]) >= 37.8
+        assert float(fever["value"]) != float(normal["value"])
+
+    @pytest.mark.asyncio
+    async def test_blood_pressure_format(self):
+        tool = PhysiologyCalculator()
+        r = await tool.execute(PhysiologyCalculatorArgs(vital="blood_pressure", consultation_id=7, abnormal=False), _context())
+        assert "/" in r["value"] and r["unit"] == "mmHg"
+
+    @pytest.mark.asyncio
+    async def test_unknown_vital_rejected(self):
+        tool = PhysiologyCalculator()
+        r = await tool.execute(PhysiologyCalculatorArgs(vital="unknown_thing", consultation_id=1, abnormal=False), _context())
+        assert r.get("error")

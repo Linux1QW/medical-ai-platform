@@ -96,3 +96,12 @@ class TestRespond:
         agent = _agent()
         agent.memory.emotion = "恐慌"
         assert "当前情绪状态：恐慌" in agent._build_system_prompt()
+
+    @pytest.mark.asyncio
+    async def test_trust_rises_on_comfort(self):
+        agent = _agent()
+        agent.memory.trust = 0.4
+        with patch("app.services.agents.patient.agent.call_qwen_chat", new=AsyncMock(return_value="嗯。")), \
+             patch("app.services.agents.patient.agent.update_ledger", new=AsyncMock()):
+            await agent.respond("别担心，慢慢说。", [])
+        assert abs(agent.memory.trust - 0.5) < 1e-9

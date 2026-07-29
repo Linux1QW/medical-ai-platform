@@ -9,6 +9,7 @@ import logging
 from app.services.qwen_client import call_qwen_chat
 from app.services.tools.patient.emotion import classify_doctor_behavior, update_emotion
 
+from .dynamics import apply_turn_dynamics, initial_trust, locked_facts
 from .guard import check_contradiction, update_ledger
 from .memory import MemoryState
 from .planner import classify_stage
@@ -28,11 +29,21 @@ class PatientAgent:
     def __init__(self, patient, memory: MemoryState):
         self.patient = patient
         self.memory = memory
+        # 首轮按人格初始化信任度（后续轮次沿用持久化值）
+        if memory.turn == 0:
+            memory.trust = initial_trust(patient.personality_type or "")
 
     def _build_system_prompt(self) -> str:
         """角色包装 + 披露账本注入（已披露保持一致 / 已否认绝不翻供）"""
         sections = [PATIENT_ROLE_WRAPPER.format(system_prompt=self.patient.system_prompt or "")]
         sections.append(f"【当前情绪状态：{self.memory.emotion}】请在语气中自然体现这种情绪。")
+        locked = locked_facts(self.memory)
+        if locked:
+            lines = "\n".join(f"- {f.content}" for f in locked)
+            sections.append(
+                "【你暂时不愿意透露的隐私信息】（对医生信任不够，被问到时含糊回避，"
+                "如“这个……不好说”；若医生安慰共情你，后续可以坦白）\n" + lines
+            )
         disclosed = self.memory.facts_by_status("disclosed")
         if disclosed:
             lines = "\n".join(f"- {f.content}" for f in disclosed)
@@ -65,6 +76,7 @@ class PatientAgent:
         self.memory.emotion = update_emotion(
             self.memory.emotion, behavior, self.patient.personality_type or ""
         )
+        apply_turn_dynamics(self.memory, behavior)
 
         if check_contradiction(self.memory, reply):
             logger.warning("患者回复与已否认事实矛盾，触发一次重生成")

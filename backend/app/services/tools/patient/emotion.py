@@ -23,6 +23,7 @@ _EMOTION_TRANSITION = {
     ("缓和", "ignore"): "焦虑",
     ("平静", "ignore"): "不满",
     ("平静", "comfort"): "安心",
+    ("安心", "ignore"): "平静",
     ("不满", "comfort"): "平静",
     ("不满", "explain"): "平静",
     ("不满", "ignore"): "愤怒",

@@ -120,6 +120,10 @@ class TestUpdateEmotion:
     def test_unknown_state_stays(self):
         assert update_emotion("自定义情绪", "explain", "配合型") == "自定义情绪"
 
+    def test_content_state_worsens_on_ignore(self):
+        """安心不是吸收态：持续忽视仍会恶化情绪"""
+        assert update_emotion("安心", "ignore", "配合型") == "平静"
+
 
 class TestEmotionEngineTool:
     @pytest.mark.asyncio

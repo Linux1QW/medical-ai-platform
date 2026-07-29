@@ -86,3 +86,45 @@ class TestPhysiologyCalculator:
         tool = PhysiologyCalculator()
         r = await tool.execute(PhysiologyCalculatorArgs(vital="unknown_thing", consultation_id=1, abnormal=False), _context())
         assert r.get("error")
+
+
+from app.services.tools.patient.emotion import (
+    EmotionEngine,
+    EmotionEngineArgs,
+    classify_doctor_behavior,
+    update_emotion,
+)
+
+
+class TestClassifyDoctorBehavior:
+    def test_comfort(self):
+        assert classify_doctor_behavior("别担心，这个病不严重，我们一起想办法。") == "comfort"
+
+    def test_explain(self):
+        assert classify_doctor_behavior("这个病的原因是胃酸分泌过多，所以会反酸。") == "explain"
+
+    def test_instruction(self):
+        assert classify_doctor_behavior("哪里不舒服？疼了多久了？") == "instruction"
+
+    def test_default_ignore(self):
+        assert classify_doctor_behavior("嗯。") == "ignore"
+
+
+class TestUpdateEmotion:
+    def test_comfort_calms_anxious(self):
+        assert update_emotion("焦虑", "comfort", "焦虑型") == "缓和"
+
+    def test_ignore_worsens(self):
+        assert update_emotion("平静", "ignore", "对抗型") == "不满"
+
+    def test_unknown_state_stays(self):
+        assert update_emotion("自定义情绪", "explain", "配合型") == "自定义情绪"
+
+
+class TestEmotionEngineTool:
+    @pytest.mark.asyncio
+    async def test_tool_wraps_functions(self):
+        tool = EmotionEngine()
+        args = EmotionEngineArgs(doctor_message="别担心，慢慢说。", current_emotion="焦虑", personality="焦虑型")
+        result = await tool.execute(args, _context())
+        assert result == {"behavior": "comfort", "emotion": "缓和"}

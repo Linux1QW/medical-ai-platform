@@ -157,19 +157,21 @@ class TestSendDoctorMessage:
     """测试 send_doctor_message"""
 
     @pytest.mark.asyncio
+    @patch("app.services.consultation_service.extract_facts", new_callable=AsyncMock)
     @patch("app.services.consultation_service.call_qwen_chat", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_consultation", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_messages", new_callable=AsyncMock)
     async def test_send_message_returns_doctor_and_patient_msgs(
-        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_db,
+        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_extract, mock_db,
         sample_consultation, sample_patient, sample_messages,
     ):
-        """发送消息后返回医生消息和患者回复"""
+        """发送消息后返回医生消息和患者回复（走智能体路径）"""
+        from app.services import consultation_service
         from app.services.consultation_service import send_doctor_message
 
         mock_get_msgs.return_value = sample_messages
         mock_get_consult.return_value = sample_consultation
-        mock_qwen.return_value = "我头痛，还有点发烧。"
+        mock_extract.return_value = []
 
         # mock 患者查询
         mock_patient_result = MagicMock()
@@ -182,7 +184,11 @@ class TestSendDoctorMessage:
                 obj.id = 100
         mock_db.refresh = mock_refresh
 
-        doctor_msg, patient_msg = await send_doctor_message(mock_db, 1, "你有什么症状？")
+        with patch.object(
+            consultation_service.PatientAgent, "respond",
+            new=AsyncMock(return_value="我头痛，还有点发烧。"),
+        ):
+            doctor_msg, patient_msg = await send_doctor_message(mock_db, 1, "你有什么症状？")
 
         assert doctor_msg.role == "doctor"
         assert doctor_msg.content == "你有什么症状？"
@@ -191,15 +197,19 @@ class TestSendDoctorMessage:
         mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio
+    @patch("app.services.consultation_service.extract_facts", new_callable=AsyncMock)
     @patch("app.services.consultation_service.call_qwen_chat", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_consultation", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_messages", new_callable=AsyncMock)
     async def test_send_message_memory_window_truncation(
-        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_db,
+        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_extract, mock_db,
         sample_consultation, sample_patient,
     ):
-        """消息数未超限时使用完整最近窗口"""
+        """消息数未超限时使用完整最近窗口（回退旧路径验证滑窗结构）"""
         from app.services.consultation_service import send_doctor_message
+
+        # 强制智能体路径失败，验证旧路径滑窗拼装
+        mock_extract.side_effect = RuntimeError("agent path disabled")
 
         # 创建少量消息（不超过压缩阈值）
         few_messages = [
@@ -231,16 +241,20 @@ class TestSendDoctorMessage:
         assert chat_history[-1]["content"] == "你好"
 
     @pytest.mark.asyncio
+    @patch("app.services.consultation_service.extract_facts", new_callable=AsyncMock)
     @patch("app.services.consultation_service._summarize_early_messages", new_callable=AsyncMock)
     @patch("app.services.consultation_service.call_qwen_chat", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_consultation", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_messages", new_callable=AsyncMock)
     async def test_send_message_memory_compression_triggered(
-        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_summarize, mock_db,
+        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_summarize, mock_extract, mock_db,
         sample_consultation, sample_patient,
     ):
-        """消息数超过压缩阈值时触发早期对话压缩"""
+        """消息数超过压缩阈值时触发早期对话压缩（回退旧路径验证摘要注入）"""
         from app.services.consultation_service import MEMORY_COMPRESS_THRESHOLD, send_doctor_message
+
+        # 强制智能体路径失败，验证旧路径摘要拼装
+        mock_extract.side_effect = RuntimeError("agent path disabled")
 
         # 创建超过压缩阈值的消息
         many_messages = [
@@ -278,16 +292,19 @@ class TestSendMessageStream:
     """测试 send_doctor_message_stream"""
 
     @pytest.mark.asyncio
+    @patch("app.services.consultation_service.extract_facts", new_callable=AsyncMock)
     @patch("app.services.consultation_service.call_qwen_chat", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_consultation", new_callable=AsyncMock)
     @patch("app.services.consultation_service.get_messages", new_callable=AsyncMock)
     async def test_stream_emits_progress_and_complete(
-        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_db,
+        self, mock_get_msgs, mock_get_consult, mock_qwen, mock_extract, mock_db,
         sample_consultation, sample_patient,
     ):
         """SSE 流式响应包含 progress 和 complete 事件"""
         from app.services.consultation_service import send_doctor_message_stream
 
+        # 强制智能体路径失败，走旧路径（call_qwen_chat 已 mock）
+        mock_extract.side_effect = RuntimeError("agent path disabled")
         mock_get_msgs.return_value = []
         mock_get_consult.return_value = sample_consultation
         mock_qwen.return_value = "我头痛。"
@@ -511,3 +528,49 @@ class TestSummarizeEarlyMessages:
 
         result = await _summarize_early_messages(sample_messages, "患者信息")
         assert result == ""
+
+
+# ── 测试 _generate_patient_reply（账本路径 + 异常回退） ────────────────────────────
+
+from app.services import consultation_service
+from app.services.agents.patient.memory import Fact, MemoryState
+
+
+class TestGeneratePatientReplyWithAgent:
+    """_generate_patient_reply：账本路径 + 异常回退"""
+
+    @pytest.mark.asyncio
+    async def test_agent_path_persists_memory(self, sample_consultation, sample_patient, sample_messages):
+        sample_consultation.memory_state = None
+        mock_facts = [Fact(fact_id="sym_001", content="上腹隐痛")]
+        with patch("app.services.consultation_service.extract_facts", new=AsyncMock(return_value=mock_facts)), \
+             patch.object(consultation_service.PatientAgent, "respond", new=AsyncMock(return_value="肚子上面疼。")):
+            reply = await consultation_service._generate_patient_reply(
+                sample_consultation, sample_patient, sample_messages, "哪里不舒服？"
+            )
+        assert reply == "肚子上面疼。"
+        restored = MemoryState.from_json(sample_consultation.memory_state)
+        assert restored is not None
+        assert [f.fact_id for f in restored.facts] == ["sym_001"]
+
+    @pytest.mark.asyncio
+    async def test_agent_failure_falls_back_to_legacy(self, sample_consultation, sample_patient, sample_messages):
+        sample_consultation.memory_state = None
+        with patch("app.services.consultation_service.extract_facts", new=AsyncMock(side_effect=RuntimeError("boom"))), \
+             patch("app.services.consultation_service.call_qwen_chat", new=AsyncMock(return_value="旧路径回复")):
+            reply = await consultation_service._generate_patient_reply(
+                sample_consultation, sample_patient, sample_messages, "哪里不舒服？"
+            )
+        assert reply == "旧路径回复"
+
+    @pytest.mark.asyncio
+    async def test_existing_memory_reused_not_reextracted(self, sample_consultation, sample_patient, sample_messages):
+        existing = MemoryState(facts=[Fact(fact_id="his_001", category="history", content="胃溃疡")], turn=4)
+        sample_consultation.memory_state = existing.to_json()
+        extract_mock = AsyncMock()
+        with patch("app.services.consultation_service.extract_facts", new=extract_mock), \
+             patch.object(consultation_service.PatientAgent, "respond", new=AsyncMock(return_value="嗯。")):
+            await consultation_service._generate_patient_reply(
+                sample_consultation, sample_patient, sample_messages, "嗯"
+            )
+        extract_mock.assert_not_called()

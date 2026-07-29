@@ -11,6 +11,7 @@ from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
 from app.models.user import User
 from app.services.qwen_client import call_qwen_chat
+from app.services.agents.patient import MemoryState, PatientAgent, extract_facts
 from app.services.agents.patient.prompts import PATIENT_ROLE_WRAPPER
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,69 @@ async def _summarize_early_messages(
         return ""
 
 
+async def _build_history(messages: List[ConsultationMessage], patient_prompt: str) -> List[Dict[str, str]]:
+    """滑动窗口 + 早期摘要，返回不含角色包装头的对话历史（两条生成路径共享）"""
+    history: List[Dict[str, str]] = []
+    recent_window = MEMORY_RECENT_TURNS * 2  # 每轮 2 条消息
+    compress_threshold = MEMORY_COMPRESS_THRESHOLD * 2
+
+    if len(messages) > compress_threshold:
+        early_messages = messages[:-recent_window]
+        recent_messages = messages[-recent_window:]
+        summary = await _summarize_early_messages(early_messages, patient_prompt)
+        if summary:
+            history.append({
+                "role": "system",
+                "content": f"《早期问诊记录摘要》（口述展示的症状和对话要点，请保持与此一致）\n{summary}",
+            })
+    else:
+        recent_messages = messages[-recent_window:] if len(messages) > recent_window else messages
+
+    for msg in recent_messages:
+        history.append({
+            "role": "user" if msg.role == "doctor" else "assistant",
+            "content": msg.content,
+        })
+    return history
+
+
+async def _legacy_generate_patient_reply(
+    patient: VirtualPatient, messages: List[ConsultationMessage], content: str
+) -> str:
+    """无记忆旧路径（回退兼容）：角色包装 + 滑窗历史直接调 LLM"""
+    wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
+    chat_history = [{"role": "system", "content": wrapped_prompt}]
+    chat_history.extend(await _build_history(messages, patient.system_prompt or ""))
+    chat_history.append({"role": "user", "content": content})
+    return await call_qwen_chat(chat_history, temperature=0.3)
+
+
+async def _generate_patient_reply(
+    consultation: Consultation,
+    patient: VirtualPatient,
+    messages: List[ConsultationMessage],
+    content: str,
+) -> str:
+    """患者回复生成主入口：优先走披露账本智能体，任意异常回退旧路径，绝不中断问诊"""
+    try:
+        memory = MemoryState.from_json(consultation.memory_state)
+        if memory is None:
+            facts = await extract_facts(
+                patient.chief_complaint or "",
+                patient.medical_history or "",
+                patient.symptoms or "",
+            )
+            memory = MemoryState(facts=facts)
+        agent = PatientAgent(patient, memory)
+        history = await _build_history(messages, patient.system_prompt or "")
+        reply = await agent.respond(content, history)
+        consultation.memory_state = memory.to_json()  # 调用方统一 commit
+        return reply
+    except Exception as e:
+        logger.warning(f"患者智能体路径失败，回退无记忆旧路径: {e}", exc_info=True)
+        return await _legacy_generate_patient_reply(patient, messages, content)
+
+
 async def send_doctor_message(
     db: AsyncSession, consultation_id: int, content: str
 ) -> tuple[ConsultationMessage, ConsultationMessage]:
@@ -201,33 +265,7 @@ async def send_doctor_message(
     )
     patient = patient_result.scalar_one()
 
-    wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
-    chat_history = [{"role": "system", "content": wrapped_prompt}]
-
-    recent_window = MEMORY_RECENT_TURNS * 2  # 每轮 2 条消息
-    compress_threshold = MEMORY_COMPRESS_THRESHOLD * 2
-
-    if len(messages) > compress_threshold:
-        # 将早期对话压缩为摘要，仅保留最近 recent_window 条完整对话
-        early_messages = messages[:-recent_window]
-        recent_messages = messages[-recent_window:]
-        summary = await _summarize_early_messages(early_messages, patient.system_prompt or "")
-        if summary:
-            chat_history.append({
-                "role": "system",
-                "content": f"《早期问诊记录摘要》（口述展示的症状和对话要点，请保持与此一致）\n{summary}",
-            })
-    else:
-        recent_messages = messages[-recent_window:] if len(messages) > recent_window else messages
-
-    for msg in recent_messages:
-        chat_history.append({
-            "role": "user" if msg.role == "doctor" else "assistant",
-            "content": msg.content,
-        })
-    chat_history.append({"role": "user", "content": content})
-
-    patient_reply = await call_qwen_chat(chat_history, temperature=0.3)
+    patient_reply = await _generate_patient_reply(consultation, patient, messages, content)
 
     patient_msg = ConsultationMessage(
         consultation_id=consultation_id,
@@ -298,44 +336,14 @@ async def send_doctor_message_stream(
             "message": "正在构建对话上下文...",
             "progress": 40,
         })
-        wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
-        chat_history = [{"role": "system", "content": wrapped_prompt}]
 
-        recent_window = MEMORY_RECENT_TURNS * 2
-        compress_threshold = MEMORY_COMPRESS_THRESHOLD * 2
-
-        # Step 5: 处理长期记忆压缩（如需要）
-        if len(messages) > compress_threshold:
-            yield _make_sse_event("progress", {
-                "step": "compressing_memory",
-                "message": "正在压缩早期对话记忆...",
-                "progress": 50,
-            })
-            early_messages = messages[:-recent_window]
-            recent_messages = messages[-recent_window:]
-            summary = await _summarize_early_messages(early_messages, patient.system_prompt or "")
-            if summary:
-                chat_history.append({
-                    "role": "system",
-                    "content": f"《早期问诊记录摘要》（口述展示的症状和对话要点，请保持与此一致）\n{summary}",
-                })
-        else:
-            recent_messages = messages[-recent_window:] if len(messages) > recent_window else messages
-
-        for msg in recent_messages:
-            chat_history.append({
-                "role": "user" if msg.role == "doctor" else "assistant",
-                "content": msg.content,
-            })
-        chat_history.append({"role": "user", "content": content})
-
-        # Step 6: 调用 LLM 生成患者回复
+        # Step 5: 调用患者智能体生成回复（内部含滑窗/摘要与异常回退）
         yield _make_sse_event("progress", {
             "step": "generating_reply",
             "message": "患者正在思考回复...",
             "progress": 60,
         })
-        patient_reply = await call_qwen_chat(chat_history, temperature=0.3)
+        patient_reply = await _generate_patient_reply(consultation, patient, messages, content)
 
         # Step 7: 保存患者回复
         yield _make_sse_event("progress", {

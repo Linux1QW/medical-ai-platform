@@ -44,3 +44,38 @@ class TestMemoryState:
         m.mark(["his_001"], "denied")
         assert [f.fact_id for f in m.facts_by_status("denied")] == ["his_001"]
         assert [f.fact_id for f in m.facts_by_status("undisclosed")] == ["sym_001"]
+
+
+from unittest.mock import AsyncMock, patch
+
+from app.services.agents.patient.memory import _rule_based_facts, extract_facts
+
+
+class TestExtractFacts:
+    def test_rule_based_json_list_symptoms(self):
+        facts = _rule_based_facts("头痛三天", "无特殊病史", '["头痛", "低热"]')
+        contents = [f.content for f in facts]
+        assert "头痛三天" in contents and "头痛" in contents and "低热" in contents
+        assert all(f.status == "undisclosed" for f in facts)
+        # "无特殊病史" 不应产生事实
+        assert not [f for f in facts if f.category == "history"]
+
+    def test_rule_based_plain_text_symptoms(self):
+        facts = _rule_based_facts("", "十年前胃溃疡，青霉素过敏", "反酸，烧心")
+        cats = {f.content: f.category for f in facts}
+        assert cats["反酸"] == "symptom" and cats["烧心"] == "symptom"
+        assert cats["十年前胃溃疡"] == "history" and cats["青霉素过敏"] == "history"
+
+    @pytest.mark.asyncio
+    async def test_extract_facts_llm_success(self):
+        llm_out = '{"facts": [{"category": "symptom", "content": "上腹隐痛", "disclosure_condition": "direct_ask"}, {"category": "lifestyle", "content": "长期饮酒", "disclosure_condition": "empathy_unlock"}]}'
+        with patch("app.services.agents.patient.memory.call_qwen_chat", new=AsyncMock(return_value=llm_out)):
+            facts = await extract_facts("上腹痛", "无", "[]")
+        assert [f.fact_id for f in facts] == ["sym_001", "lif_001"]
+        assert facts[1].disclosure_condition == "empathy_unlock"
+
+    @pytest.mark.asyncio
+    async def test_extract_facts_llm_failure_falls_back(self):
+        with patch("app.services.agents.patient.memory.call_qwen_chat", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            facts = await extract_facts("头痛三天", "无", '["头痛"]')
+        assert [f.content for f in facts] == ["头痛三天", "头痛"]

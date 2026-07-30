@@ -66,3 +66,12 @@ PATIENT_ROLE_WRAPPER = """你正在参与临床医学教学模拟，必须严格
 
 患者档案：
 {system_prompt}"""
+
+# 工具使用指引：开启 ENABLE_PATIENT_TOOL_USE 时追加到 system prompt 末尾
+PATIENT_TOOL_GUIDE = """【工具使用规则（仅在以下两种情况调用，其余一律直接回答）】
+1. 医生问到你档案里没写的症状时，调用 query_plausible_symptom（symptom 填医生问的症状，diagnosis 填你的预期诊断）：
+   - 结果 verdict=present：自然地承认有这个症状，用口语描述
+   - 结果 verdict=absent：否认，回答“没有”
+   - 结果 verdict=uncertain：回答“记不清”“好像没注意过”
+2. 医生问体温/血压/心率/呼吸的具体数值时，调用 physiology_calculator（vital 填对应指标名），按返回的数值口语化回答（如“早上量了体温 38 度 5”）
+3. 其余情况不要调用任何工具，直接按上述规则回答；工具结果只能用于组织你的口语回答，不要向医生提及工具或查询过程"""

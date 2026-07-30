@@ -87,6 +87,39 @@ class TestPhysiologyCalculator:
         r = await tool.execute(PhysiologyCalculatorArgs(vital="unknown_thing", consultation_id=1, abnormal=False), _context())
         assert r.get("error")
 
+    @pytest.mark.asyncio
+    async def test_seed_from_context_extras(self):
+        """consultation_id 缺省时从 context.extras 取确定性种子（LLM 不可靠填 ID）"""
+        tool = PhysiologyCalculator()
+        ctx = ToolContext(run_id="t-1", agent_name="patient_agent", extras={"consultation_id": 42})
+        r_extras = await tool.execute(PhysiologyCalculatorArgs(vital="body_temperature"), ctx)
+        r_explicit = await tool.execute(
+            PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42), _context()
+        )
+        assert r_extras == r_explicit
+
+    @pytest.mark.asyncio
+    async def test_same_extras_seed_deterministic(self):
+        """同一 extras 种子多次执行结果确定性"""
+        tool = PhysiologyCalculator()
+        ctx = ToolContext(extras={"consultation_id": 7})
+        r1 = await tool.execute(PhysiologyCalculatorArgs(vital="heart_rate"), ctx)
+        r2 = await tool.execute(PhysiologyCalculatorArgs(vital="heart_rate"), ctx)
+        assert r1 == r2
+
+    @pytest.mark.asyncio
+    async def test_explicit_id_overrides_extras(self):
+        """显式 consultation_id 优先于 extras"""
+        tool = PhysiologyCalculator()
+        ctx = ToolContext(extras={"consultation_id": 99})
+        r_explicit = await tool.execute(
+            PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42), ctx
+        )
+        r_baseline = await tool.execute(
+            PhysiologyCalculatorArgs(vital="body_temperature", consultation_id=42), _context()
+        )
+        assert r_explicit == r_baseline
+
 
 from app.services.tools.patient.emotion import (
     EmotionEngine,

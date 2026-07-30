@@ -3,12 +3,14 @@
 import asyncio
 
 import pytest
+from prometheus_client import REGISTRY
 from pydantic import BaseModel, Field
 
-from app.services.tools.base import BaseTool
+from app.services.tools.base import BaseTool, ToolContext
 from app.services.tools.budget import ToolBudget
-from app.services.tools.executor import ToolExecutor
+from app.services.tools.executor import ToolExecutor, ToolExecutorBridge
 from app.services.tools.registry import ToolRegistry
+from app.services.tools.robust_tool_executor import RobustToolExecutor
 
 # ── 测试用工具定义 ──────────────────────────────────────────────────────────────
 
@@ -184,3 +186,78 @@ async def test_critical_tool_degraded(executor):
     result = await executor.execute("error_tool", '{"query": "test"}')
     assert result["ok"] is False
     assert result["degraded"] is True  # error_tool.critical == True
+
+
+# ── Prometheus 工具指标 ─────────────────────────────────────────────────────────
+
+
+def _calls_total(tool: str, agent: str, status: str) -> float:
+    return REGISTRY.get_sample_value(
+        "tool_calls_total", {"tool": tool, "agent": agent, "status": status}
+    ) or 0.0
+
+
+def _duration_count(tool: str) -> float:
+    return REGISTRY.get_sample_value(
+        "tool_call_duration_seconds_count", {"tool": tool}
+    ) or 0.0
+
+
+class TestPrometheusToolMetrics:
+    @pytest.mark.asyncio
+    async def test_success_increments_counter_and_histogram(self, executor):
+        """成功执行打点 tool_calls_total{status=success} 与耗时直方图"""
+        before = _calls_total("success_tool", "patient_agent", "success")
+        before_dur = _duration_count("success_tool")
+        ctx = ToolContext(agent_name="patient_agent")
+        await executor.execute("success_tool", '{"query": "t"}', context=ctx)
+        assert _calls_total("success_tool", "patient_agent", "success") == before + 1
+        assert _duration_count("success_tool") == before_dur + 1
+
+    @pytest.mark.asyncio
+    async def test_no_context_agent_label_empty(self, executor):
+        """无 context 时 agent 标签为空串"""
+        before = _calls_total("success_tool", "", "success")
+        await executor.execute("success_tool", '{"query": "t"}')
+        assert _calls_total("success_tool", "", "success") == before + 1
+
+    @pytest.mark.asyncio
+    async def test_error_status_recorded(self, executor):
+        """执行异常打点 status=error"""
+        before = _calls_total("error_tool", "", "error")
+        await executor.execute("error_tool", '{"query": "t"}')
+        assert _calls_total("error_tool", "", "error") == before + 1
+
+    @pytest.mark.asyncio
+    async def test_robust_executor_also_records(self, registry):
+        """RobustToolExecutor 同样打点（独立类自有 _record_trace）"""
+        robust = RobustToolExecutor(registry, enable_retry=False)
+        before = _calls_total("success_tool", "knowledge_agent", "success")
+        ctx = ToolContext(agent_name="knowledge_agent")
+        await robust.execute("success_tool", '{"query": "t"}', context=ctx)
+        assert _calls_total("success_tool", "knowledge_agent", "success") == before + 1
+
+
+# ── ToolExecutorBridge ──────────────────────────────────────────────────────────
+
+
+class TestToolExecutorBridge:
+    @pytest.mark.asyncio
+    async def test_bridge_binds_context_and_budget(self, executor):
+        """桥接器绑定 context/budget：白名单与预算在两参调用下生效"""
+        ctx = ToolContext(agent_name="patient_agent", allowed_tools=frozenset({"success_tool"}))
+        budget = ToolBudget({"success_tool": 1})
+        bridge = ToolExecutorBridge(executor, ctx, budget)
+
+        r1 = await bridge.execute("success_tool", '{"query": "t"}')
+        assert r1["ok"] is True
+
+        # 预算绑定生效：第二次超预算
+        r2 = await bridge.execute("success_tool", '{"query": "t"}')
+        assert r2["ok"] is False
+        assert r2["error"]["code"] == "budget_exceeded"
+
+        # 白名单绑定生效：非白名单工具被拒
+        r3 = await bridge.execute("error_tool", '{"query": "t"}')
+        assert r3["ok"] is False
+        assert r3["error"]["code"] == "tool_forbidden"

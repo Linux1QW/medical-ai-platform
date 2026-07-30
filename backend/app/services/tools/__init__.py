@@ -2,7 +2,7 @@ from .base import BaseTool, ToolContext
 from .budget import ToolBudget
 from .citation import register_citation_tools
 from .consistency import register_consistency_tools
-from .executor import ToolExecutor
+from .executor import ToolExecutor, ToolExecutorBridge
 from .medical_retrieval import register_medical_retrieval_tools
 from .patient import PATIENT_TOOL_BUDGETS, register_patient_tools
 from .policy import AGENT_TOOL_WHITELIST, get_allowed_tools
@@ -58,6 +58,7 @@ __all__ = [
     "ToolContext",
     "ToolRegistry",
     "ToolExecutor",
+    "ToolExecutorBridge",
     "ToolBudget",
     # 健壮执行器
     "RobustToolExecutor",

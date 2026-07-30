@@ -230,7 +230,7 @@ async def _generate_patient_reply(
                 patient.symptoms or "",
             )
             memory = MemoryState(facts=facts)
-        agent = PatientAgent(patient, memory)
+        agent = PatientAgent(patient, memory, consultation_id=consultation.id)
         history = await _build_history(messages, patient.system_prompt or "")
         reply = await agent.respond(content, history)
         consultation.memory_state = memory.to_json()  # 调用方统一 commit

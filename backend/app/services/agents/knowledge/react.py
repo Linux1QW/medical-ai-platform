@@ -25,12 +25,12 @@ from app.services.agents.knowledge.tool_use import (
     _build_rag_trace,
     _extract_consultation_data,
     _format_tool_trace,
-    _ToolExecutorBridge,
 )
 from app.services.prompts import get_prompt
 from app.services.rag.types import EvidenceItem
 from app.services.tools import register_all_tools
 from app.services.tools.base import ToolContext
+from app.services.tools.executor import ToolExecutorBridge
 from app.services.tools.policy import get_allowed_tools
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.runtime import create_tool_budget, create_tool_executor
@@ -152,7 +152,7 @@ async def run_knowledge_check_react(  # noqa: C901
         register_all_tools(registry)
         executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
         budget = create_tool_budget(context.budgets, context.run_id or "")
-        bridge = _ToolExecutorBridge(executor, context, budget)
+        bridge = ToolExecutorBridge(executor, context, budget)
 
         # ── Step 4: 构建初始输入 ──
         user_parts = [

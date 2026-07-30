@@ -22,8 +22,7 @@ from app.services.qwen_client import call_qwen_with_tools
 from app.services.rag.types import EvidenceItem
 from app.services.tools import register_all_tools
 from app.services.tools.base import ToolContext
-from app.services.tools.budget import ToolBudget
-from app.services.tools.executor import ToolExecutor
+from app.services.tools.executor import ToolExecutorBridge
 from app.services.tools.policy import get_allowed_tools
 from app.services.tools.registry import ToolRegistry
 from app.services.tools.runtime import create_tool_budget, create_tool_executor
@@ -80,28 +79,6 @@ def _extract_consultation_data(consultation) -> tuple:
             patient_info,
             getattr(consultation, "doctor_diagnosis", ""),
             getattr(consultation, "treatment_plan", ""),
-        )
-
-
-# ── 辅助类：ToolExecutor 桥接器 ─────────────────────────────────────────────
-
-class _ToolExecutorBridge:
-    """桥接 call_qwen_with_tools 和 ToolExecutor 的适配器
-
-    call_qwen_with_tools 调用 tool_executor.execute(tool_name, arguments_json)，
-    而 ToolExecutor.execute 需要 context 和 budget 参数，此桥接器绑定这些参数。
-    """
-
-    def __init__(self, executor: ToolExecutor, context: ToolContext, budget: ToolBudget):
-        self.executor = executor
-        self.context = context
-        self.budget = budget
-
-    async def execute(self, tool_name: str, arguments_json: str) -> dict:
-        return await self.executor.execute(
-            tool_name, arguments_json,
-            context=self.context,
-            budget=self.budget,
         )
 
 
@@ -164,7 +141,7 @@ async def run_knowledge_check_with_tools(  # noqa: C901
         register_all_tools(registry)
         executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
         budget = create_tool_budget(context.budgets, context.run_id or "")
-        bridge = _ToolExecutorBridge(executor, context, budget)
+        bridge = ToolExecutorBridge(executor, context, budget)
         # LLM 侧同步收紧：只下发角色白名单内的工具 schema
         tool_schemas = registry.get_openai_schemas(
             sorted(context.allowed_tools) if context.allowed_tools else None

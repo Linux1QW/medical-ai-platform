@@ -4,6 +4,8 @@ import logging
 import time
 import uuid
 
+from app.services.observability.metrics import TOOL_CALL_DURATION, TOOL_CALLS_TOTAL
+
 from .base import ToolContext
 from .budget import ToolBudget
 from .registry import ToolRegistry
@@ -70,12 +72,13 @@ class ToolExecutor:
         """
         trace_id = f"tool-{uuid.uuid4().hex[:8]}"
         start_time = time.monotonic()
+        agent = context.agent_name if context else ""
 
         # 1. 白名单检查
         tool = self.registry.get(tool_name)
         if tool is None:
             elapsed = (time.monotonic() - start_time) * 1000
-            self._record_trace(trace_id, tool_name, {}, "error", elapsed, error=f"Unknown tool: {tool_name}")
+            self._record_trace(trace_id, tool_name, {}, "error", elapsed, error=f"Unknown tool: {tool_name}", agent=agent)
             return self._error_result(trace_id, "unknown_tool", f"Tool '{tool_name}' is not registered")
 
         # 1.5 角色白名单检查：agent 只能调用其角色允许的工具
@@ -83,21 +86,21 @@ class ToolExecutor:
                 and tool_name not in context.allowed_tools:
             elapsed = (time.monotonic() - start_time) * 1000
             self._record_trace(trace_id, tool_name, {}, "forbidden", elapsed,
-                               error=f"Tool forbidden for agent: {context.agent_name}")
+                               error=f"Tool forbidden for agent: {context.agent_name}", agent=agent)
             return self._error_result(trace_id, "tool_forbidden",
                                       f"Tool '{tool_name}' is not allowed for agent '{context.agent_name}'")
 
         # 2. 预算检查
         if budget and not budget.check(tool_name):
             elapsed = (time.monotonic() - start_time) * 1000
-            self._record_trace(trace_id, tool_name, {}, "budget_exceeded", elapsed, error="Budget exceeded")
+            self._record_trace(trace_id, tool_name, {}, "budget_exceeded", elapsed, error="Budget exceeded", agent=agent)
             return self._error_result(trace_id, "budget_exceeded", f"Tool '{tool_name}' budget exceeded")
 
         # 2.5 熔断器检查
         if self.enable_circuit_breaker and not self._circuit_allow_request(tool_name):
             elapsed = (time.monotonic() - start_time) * 1000
             self._record_trace(trace_id, tool_name, {}, "circuit_open", elapsed,
-                               error=f"Circuit breaker OPEN for {tool_name}")
+                               error=f"Circuit breaker OPEN for {tool_name}", agent=agent)
             return self._error_result(
                 trace_id, "circuit_open",
                 f"Tool '{tool_name}' circuit breaker is OPEN",
@@ -109,7 +112,7 @@ class ToolExecutor:
             args_dict = json.loads(arguments_json) if isinstance(arguments_json, str) else arguments_json
         except json.JSONDecodeError as e:
             elapsed = (time.monotonic() - start_time) * 1000
-            self._record_trace(trace_id, tool_name, {"raw": arguments_json[:200]}, "error", elapsed, error=f"JSON parse error: {e}")
+            self._record_trace(trace_id, tool_name, {"raw": arguments_json[:200]}, "error", elapsed, error=f"JSON parse error: {e}", agent=agent)
             return self._error_result(trace_id, "invalid_arguments", f"Invalid JSON arguments: {e}")
 
         if tool.args_schema:
@@ -117,7 +120,7 @@ class ToolExecutor:
                 validated_args = tool.args_schema(**args_dict)
             except Exception as e:
                 elapsed = (time.monotonic() - start_time) * 1000
-                self._record_trace(trace_id, tool_name, args_dict, "error", elapsed, error=f"Validation error: {e}")
+                self._record_trace(trace_id, tool_name, args_dict, "error", elapsed, error=f"Validation error: {e}", agent=agent)
                 return self._error_result(trace_id, "validation_error", f"Argument validation failed: {e}")
         else:
             validated_args = args_dict
@@ -161,7 +164,7 @@ class ToolExecutor:
                 # 8. 记录 trace
                 args_summary = {k: str(v)[:100] for k, v in (args_dict if isinstance(args_dict, dict) else {}).items()}
                 self._record_trace(trace_id, tool_name, args_summary, "success", elapsed,
-                                   retries=attempt)
+                                   retries=attempt, agent=agent)
 
                 return {
                     "ok": True,
@@ -184,7 +187,7 @@ class ToolExecutor:
                     elapsed = (time.monotonic() - start_time) * 1000
                     self._record_trace(
                         trace_id, tool_name, args_dict if isinstance(args_dict, dict) else {},
-                        "timeout", elapsed, error=last_error, retries=attempt,
+                        "timeout", elapsed, error=last_error, retries=attempt, agent=agent,
                     )
                     return self._error_result(
                         trace_id, "timeout",
@@ -202,7 +205,7 @@ class ToolExecutor:
                     elapsed = (time.monotonic() - start_time) * 1000
                     self._record_trace(
                         trace_id, tool_name, args_dict if isinstance(args_dict, dict) else {},
-                        "error", elapsed, error=last_error, retries=attempt,
+                        "error", elapsed, error=last_error, retries=attempt, agent=agent,
                     )
                     return self._error_result(
                         trace_id, "execution_error",
@@ -259,7 +262,7 @@ class ToolExecutor:
     def _record_trace(
         self, trace_id: str, tool_name: str, args: dict,
         status: str, elapsed_ms: float, error: str | None = None,
-        retries: int = 0,
+        retries: int = 0, agent: str = "",
     ):
         self.traces.append({
             "trace_id": trace_id,
@@ -270,9 +273,35 @@ class ToolExecutor:
             "error": error,
             "retries": retries,
         })
+        # Prometheus 打点：指标异常不影响主流程
+        try:
+            TOOL_CALLS_TOTAL.labels(tool=tool_name, agent=agent, status=status).inc()
+            TOOL_CALL_DURATION.labels(tool=tool_name).observe(elapsed_ms / 1000.0)
+        except Exception:
+            logger.debug("工具指标打点失败", exc_info=True)
 
     def get_traces(self) -> list[dict]:
         return list(self.traces)
 
     def clear_traces(self) -> None:
         self.traces.clear()
+
+
+class ToolExecutorBridge:
+    """桥接 call_qwen_with_tools 和 ToolExecutor 的适配器
+
+    call_qwen_with_tools 调用 tool_executor.execute(tool_name, arguments_json)，
+    而 ToolExecutor.execute 需要 context 和 budget 参数，此桥接器绑定这些参数。
+    """
+
+    def __init__(self, executor, context: ToolContext, budget: ToolBudget):
+        self.executor = executor
+        self.context = context
+        self.budget = budget
+
+    async def execute(self, tool_name: str, arguments_json: str) -> dict:
+        return await self.executor.execute(
+            tool_name, arguments_json,
+            context=self.context,
+            budget=self.budget,
+        )

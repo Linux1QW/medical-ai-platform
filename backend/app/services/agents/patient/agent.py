@@ -5,18 +5,33 @@
 respond 内部失败会向上抛出，由 consultation_service 回退旧无记忆路径。
 """
 import logging
+import uuid
 
-from app.services.qwen_client import call_qwen_chat
+from app.core.config import settings
+from app.services.qwen_client import call_qwen_chat, call_qwen_with_tools
+from app.services.tools import (
+    PATIENT_TOOL_BUDGETS,
+    ToolContext,
+    ToolExecutorBridge,
+    ToolRegistry,
+    create_tool_budget,
+    create_tool_executor,
+    get_allowed_tools,
+    register_patient_tools,
+)
 from app.services.tools.patient.emotion import classify_doctor_behavior, update_emotion
 
 from .dynamics import apply_turn_dynamics, initial_trust, locked_facts
 from .guard import check_contradiction, update_ledger
 from .memory import MemoryState
 from .planner import classify_stage
-from .prompts import PATIENT_ROLE_WRAPPER
+from .prompts import PATIENT_ROLE_WRAPPER, PATIENT_TOOL_GUIDE
 from .strategy import get_strategy
 
 logger = logging.getLogger(__name__)
+
+# 主回复只下发两个工具 schema：emotion_engine 由 respond 内纯函数驱动，不下发避免情绪双写
+_PATIENT_TOOL_SCHEMAS = ["physiology_calculator", "query_plausible_symptom"]
 
 _REGEN_INSTRUCTION = (
     "注意：你上一版回复与你此前已否认的信息矛盾。"
@@ -27,9 +42,10 @@ _REGEN_INSTRUCTION = (
 class PatientAgent:
     """基于披露账本的患者回复生成器"""
 
-    def __init__(self, patient, memory: MemoryState):
+    def __init__(self, patient, memory: MemoryState, consultation_id: int | None = None):
         self.patient = patient
         self.memory = memory
+        self.consultation_id = consultation_id
         # 首轮按人格初始化信任度（后续轮次沿用持久化值）
         if memory.turn == 0:
             memory.trust = initial_trust(patient.personality_type or "")
@@ -63,6 +79,51 @@ class PatientAgent:
         )
         return "\n\n".join(sections)
 
+    async def _respond_with_tools(self, messages: list[dict]) -> str | None:
+        """LLM 自主 function-calling 主回复；任何降级返回 None，由调用方回退纯文本路径"""
+        try:
+            context = ToolContext(
+                run_id=str(uuid.uuid4()),
+                agent_name="patient_agent",
+                budgets=dict(PATIENT_TOOL_BUDGETS),
+                allowed_tools=get_allowed_tools("patient_agent"),
+                extras={
+                    "consultation_id": self.consultation_id or 0,
+                    "diagnosis": getattr(self.patient, "expected_diagnosis", "") or "",
+                },
+            )
+            registry = ToolRegistry()
+            register_patient_tools(registry)
+            executor = create_tool_executor(registry, max_result_chars=settings.TOOL_USE_MAX_RESULT_CHARS)
+            budget = create_tool_budget(context.budgets, context.run_id or "")
+            bridge = ToolExecutorBridge(executor, context, budget)
+            tool_schemas = registry.get_openai_schemas(_PATIENT_TOOL_SCHEMAS)
+
+            # system prompt 追加工具使用指引（不污染原 messages，回退路径不带指引）
+            tool_messages = [dict(messages[0]), *messages[1:]]
+            tool_messages[0]["content"] += "\n\n" + PATIENT_TOOL_GUIDE
+
+            result = await call_qwen_with_tools(
+                tool_messages,
+                tools=tool_schemas,
+                tool_executor=bridge,
+                temperature=0.3,
+                max_tool_rounds=settings.PATIENT_TOOL_MAX_ROUNDS,
+                max_tool_calls=settings.PATIENT_TOOL_MAX_CALLS,
+            )
+            if result.tool_calls:
+                summary = "; ".join(
+                    f"{t.tool_name}:{t.status}:{round(t.elapsed_ms)}ms" for t in result.tool_calls
+                )
+                logger.info(f"[PatientToolUse] 工具调用: {summary}")
+            if result.degraded or not (result.content or "").strip():
+                logger.warning(f"[PatientToolUse] 工具路径降级，回退纯文本路径: {result.error}")
+                return None
+            return result.content
+        except Exception as e:
+            logger.warning(f"[PatientToolUse] 工具路径异常，回退纯文本路径: {e}", exc_info=True)
+            return None
+
     async def respond(self, doctor_message: str, chat_history: list[dict]) -> str:
         """生成一条患者回复并更新记忆状态"""
         stage = classify_stage(doctor_message, self.memory.stage)
@@ -71,7 +132,11 @@ class PatientAgent:
         messages.extend(chat_history)
         messages.append({"role": "user", "content": doctor_message})
 
-        reply = await call_qwen_chat(messages, temperature=0.3)
+        reply = None
+        if settings.ENABLE_PATIENT_TOOL_USE:
+            reply = await self._respond_with_tools(messages)
+        if reply is None:
+            reply = await call_qwen_chat(messages, temperature=0.3)
 
         # 首次 LLM 调用成功后才落记忆状态，异常向上抛时不留幽灵轮次
         self.memory.turn += 1

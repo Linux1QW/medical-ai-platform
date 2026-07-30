@@ -48,6 +48,20 @@ RAG_RETRIEVAL_DURATION = Histogram(
     "RAG retrieval duration",
 )
 
+# ── 工具调用指标 ──────────────────────────────────────────────────────────────
+
+TOOL_CALLS_TOTAL = Counter(
+    "tool_calls_total",
+    "Total tool calls",
+    ["tool", "agent", "status"],
+)
+
+TOOL_CALL_DURATION = Histogram(
+    "tool_call_duration_seconds",
+    "Tool call duration",
+    ["tool"],
+)
+
 # ── 评估指标 ─────────────────────────────────────────────────────────────────
 
 EVALUATION_RUNS_TOTAL = Counter(

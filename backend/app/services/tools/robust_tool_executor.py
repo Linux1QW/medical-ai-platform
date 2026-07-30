@@ -18,6 +18,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from app.services.observability.metrics import TOOL_CALL_DURATION, TOOL_CALLS_TOTAL
+
 from .base import BaseTool, ToolContext
 from .budget import ToolBudget
 from .registry import ToolRegistry
@@ -292,6 +294,7 @@ class RobustToolExecutor:
         trace_id = f"tool-{uuid.uuid4().hex[:8]}"
         start_time = time.monotonic()
         context = context or ToolContext()
+        agent = context.agent_name
         retries_done = 0
 
         # ── 1. 白名单检查 ──
@@ -299,7 +302,7 @@ class RobustToolExecutor:
         if tool is None:
             elapsed = self._elapsed(start_time)
             self._record_trace(trace_id, tool_name, {}, "error", elapsed,
-                               error=f"Unknown tool: {tool_name}")
+                               error=f"Unknown tool: {tool_name}", agent=agent)
             return self._error_result(trace_id, "unknown_tool",
                                       f"Tool '{tool_name}' is not registered")
 
@@ -307,7 +310,7 @@ class RobustToolExecutor:
         if context.allowed_tools is not None and tool_name not in context.allowed_tools:
             elapsed = self._elapsed(start_time)
             self._record_trace(trace_id, tool_name, {}, "forbidden", elapsed,
-                               error=f"Tool forbidden for agent: {context.agent_name}")
+                               error=f"Tool forbidden for agent: {context.agent_name}", agent=agent)
             return self._error_result(
                 trace_id, "tool_forbidden",
                 f"Tool '{tool_name}' is not allowed for agent '{context.agent_name}'")
@@ -316,7 +319,7 @@ class RobustToolExecutor:
         if budget and not budget.check(tool_name):
             elapsed = self._elapsed(start_time)
             self._record_trace(trace_id, tool_name, {}, "budget_exceeded", elapsed,
-                               error="Budget exceeded")
+                               error="Budget exceeded", agent=agent)
             return self._error_result(trace_id, "budget_exceeded",
                                       f"Tool '{tool_name}' budget exceeded")
 
@@ -325,7 +328,7 @@ class RobustToolExecutor:
             elapsed = self._elapsed(start_time)
             status_value = self.health_checker.get_status(tool_name).value
             self._record_trace(trace_id, tool_name, {}, "unhealthy_skipped", elapsed,
-                               error=f"Tool unhealthy: {status_value}")
+                               error=f"Tool unhealthy: {status_value}", agent=agent)
             return {
                 "ok": False,
                 "data": self.health_checker.get_degraded_result(tool_name),
@@ -344,7 +347,7 @@ class RobustToolExecutor:
         if self.enable_circuit_breaker and not cb.allow_request():
             elapsed = self._elapsed(start_time)
             self._record_trace(trace_id, tool_name, {}, "circuit_open", elapsed,
-                               error=f"Circuit breaker OPEN for {tool_name}")
+                               error=f"Circuit breaker OPEN for {tool_name}", agent=agent)
             stats = self._get_stats(tool_name)
             stats.record(elapsed, "failed")
             return self._error_result(
@@ -360,7 +363,7 @@ class RobustToolExecutor:
         except json.JSONDecodeError as e:
             elapsed = self._elapsed(start_time)
             self._record_trace(trace_id, tool_name, {"raw": str(arguments_json)[:200]},
-                               "error", elapsed, error=f"JSON parse error: {e}")
+                               "error", elapsed, error=f"JSON parse error: {e}", agent=agent)
             return self._error_result(trace_id, "invalid_arguments",
                                       f"Invalid JSON arguments: {e}")
 
@@ -370,7 +373,7 @@ class RobustToolExecutor:
             except Exception as e:
                 elapsed = self._elapsed(start_time)
                 self._record_trace(trace_id, tool_name, args_dict, "error", elapsed,
-                                   error=f"Validation error: {e}")
+                                   error=f"Validation error: {e}", agent=agent)
                 return self._error_result(trace_id, "validation_error",
                                           f"Argument validation failed: {e}")
         else:
@@ -434,7 +437,7 @@ class RobustToolExecutor:
                 }
                 self._record_trace(
                     trace_id, tool_name, args_summary, "success", elapsed,
-                    retries=retries_done,
+                    retries=retries_done, agent=agent,
                 )
 
                 return {
@@ -462,7 +465,7 @@ class RobustToolExecutor:
                         args_dict if isinstance(args_dict, dict) else {},
                         "timeout", elapsed,
                         error=f"Timeout after {tool.timeout_seconds}s",
-                        retries=retries_done,
+                        retries=retries_done, agent=agent,
                     )
                     return self._error_result(
                         trace_id, "timeout",
@@ -492,7 +495,7 @@ class RobustToolExecutor:
                     trace_id, tool_name,
                     args_dict if isinstance(args_dict, dict) else {},
                     "error", elapsed, error=str(e),
-                    retries=retries_done,
+                    retries=retries_done, agent=agent,
                 )
                 return self._error_result(
                     trace_id, "execution_error",
@@ -567,7 +570,7 @@ class RobustToolExecutor:
     def _record_trace(
         self, trace_id: str, tool_name: str, args: dict,
         status: str, elapsed_ms: float, error: str | None = None,
-        retries: int = 0,
+        retries: int = 0, agent: str = "",
     ):
         self.traces.append({
             "trace_id": trace_id,
@@ -578,3 +581,9 @@ class RobustToolExecutor:
             "error": error,
             "retries": retries,
         })
+        # Prometheus 打点：指标异常不影响主流程
+        try:
+            TOOL_CALLS_TOTAL.labels(tool=tool_name, agent=agent, status=status).inc()
+            TOOL_CALL_DURATION.labels(tool=tool_name).observe(elapsed_ms / 1000.0)
+        except Exception:
+            logger.debug("工具指标打点失败", exc_info=True)

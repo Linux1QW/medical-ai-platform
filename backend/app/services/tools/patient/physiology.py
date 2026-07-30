@@ -27,7 +27,7 @@ _ABNORMAL = {
 
 class PhysiologyCalculatorArgs(BaseModel):
     vital: str = Field(description="指标名: body_temperature/heart_rate/respiratory_rate/blood_pressure")
-    consultation_id: int = Field(description="会话 ID（确定性种子）")
+    consultation_id: int = Field(default=0, description="会话 ID（确定性种子，缺省时从上下文注入）")
     abnormal: bool = Field(default=False, description="是否按异常（病情相关）范围生成")
 
 
@@ -42,7 +42,9 @@ class PhysiologyCalculator(BaseTool):
         table = _ABNORMAL if args.abnormal else _BASELINES
         if args.vital not in table:
             return {"error": f"未知指标: {args.vital}", "vital": args.vital}
-        rng = random.Random(f"{args.consultation_id}:{args.vital}:{args.abnormal}")
+        # LLM 不可靠填 ID：缺省时由调用方通过 ToolContext.extras 注入确定性种子
+        seed = args.consultation_id or context.extras.get("consultation_id", 0)
+        rng = random.Random(f"{seed}:{args.vital}:{args.abnormal}")
         spec = table[args.vital]
         if args.vital == "blood_pressure":
             (sys_lo, sys_hi), (dia_lo, dia_hi), _, unit = spec

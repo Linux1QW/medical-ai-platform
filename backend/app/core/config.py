@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     KNOWLEDGE_TOOL_MAX_HYDE_CALLS: int = 1
     TOOL_USE_FALLBACK_TO_LEGACY: bool = True
 
+    # 患者智能体 Function Calling（主回复 LLM 自主调用患者工具，降级回退纯文本路径）
+    ENABLE_PATIENT_TOOL_USE: bool = True
+    PATIENT_TOOL_MAX_ROUNDS: int = 2        # 每轮延迟预算紧，严格限额
+    PATIENT_TOOL_MAX_CALLS: int = 2
+
     # 工具执行加固（Harness 接线）
     TOOL_EXECUTOR_HARDENED: bool = True           # 使用 RobustToolExecutor（重试/熔断/结果校验）
     TOOL_EXECUTOR_MAX_RETRIES: int = 2            # 工具调用最大重试次数（仅超时/网络类异常）

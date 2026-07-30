@@ -43,7 +43,6 @@ from app.services.agents.knowledge.tool_use import (
     _build_rag_trace,
     _extract_consultation_data,
     _format_tool_trace,
-    _ToolExecutorBridge,
     run_knowledge_check_with_tools,
 )
 
@@ -68,7 +67,6 @@ __all__ = [
     # tool_use
     "TOOL_USE_SYSTEM_PROMPT",
     "_extract_consultation_data",
-    "_ToolExecutorBridge",
     "run_knowledge_check_with_tools",
     "_build_rag_trace",
     "_format_tool_trace",

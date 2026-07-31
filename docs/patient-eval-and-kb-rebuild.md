@@ -179,7 +179,7 @@ medical_plausibility > disclosure_timing > naturalness` 仲裁；无单维破线
 | `--baseline` | 对比基线报告 JSON（可选，用于差值对比） |
 | `--thresholds` | 阈值文件，默认 `patient_ab_thresholds.json` |
 
-输出 PASS/FAIL 表；**破线以非零退出码**返回，便于将来手动或 CI 挂钩（本项目当前不接 CI nightly，以避免在 CI 中消耗 LLM 额度）。
+输出 PASS/FAIL 表；**破线以非零退出码**返回，已由 §1.8 的本地 pre-push 钩子挂钩（本项目不接 CI nightly，以避免在 CI 中消耗 LLM 额度）。
 
 ### 1.7 完整操作流程
 
@@ -201,7 +201,31 @@ $env:PYTHONIOENCODING="utf-8"; $env:PYTHONUTF8="1"
 
 # 4) 回填阈值后跑回归自检
 .\venv\Scripts\python.exe scripts\eval_regression.py
+
+# 5) （一次性）安装 pre-push 回归护栏
+.\venv\Scripts\python.exe scripts\install_git_hooks.py
 ```
+
+### 1.8 pre-push 回归护栏
+
+本项目不接 CI nightly（避免在 CI 消耗 LLM 额度），改用**本地 pre-push 钩子**做轻量护栏：
+push 前自动跑一次离线 `eval_regression.py`（无 LLM 调用），校验最新回放报告不破线。
+
+钩子源 `scripts/hooks/pre-push` 随仓库版本化，由 `scripts/install_git_hooks.py` 拷贝到
+`.git/hooks/pre-push`（`.git` 不入库，故需每个克隆手动装一次）：
+
+```powershell
+.\venv\Scripts\python.exe scripts\install_git_hooks.py            # 安装
+.\venv\Scripts\python.exe scripts\install_git_hooks.py --check    # 查看状态
+.\venv\Scripts\python.exe scripts\install_git_hooks.py --uninstall # 卸载
+```
+
+拦截语义（保守优先，不误伤正常提交）：
+
+- 仅当**确有报告且破线（FAIL，退出码 1）**时拦截 push；
+- 无报告（退出码 2）/ 缺解释器等基础设施缺失一律放行；
+- 临时跳过：`SKIP_EVAL_REGRESSION=1 git push`；
+- 安装器用标记行（`QODER-MANAGED-HOOK`）辨认托管钩子，绝不覆盖/删除用户自定义钩子（除非 `--force`）。
 
 ---
 

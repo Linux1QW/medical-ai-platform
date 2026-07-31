@@ -1,0 +1,44 @@
+#!/bin/sh
+# 患者评测回归护栏（pre-push）：push 前离线校验最新回放报告是否破线。
+# 由 backend/scripts/install_git_hooks.py 安装到 .git/hooks/pre-push。
+# QODER-MANAGED-HOOK: patient-eval-regression
+#
+# 语义：仅当「确有报告且破线(FAIL)」时拦截 push；无报告 / 缺解释器等基础设施缺失
+# 一律放行，避免误伤正常提交。临时跳过：SKIP_EVAL_REGRESSION=1 git push
+set -u
+
+if [ "${SKIP_EVAL_REGRESSION:-0}" = "1" ]; then
+    echo "[pre-push] 已跳过患者评测回归护栏 (SKIP_EVAL_REGRESSION=1)"
+    exit 0
+fi
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+BACKEND="$ROOT/backend"
+SCRIPT="$BACKEND/scripts/eval_regression.py"
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "[pre-push] 未找到 eval_regression.py，跳过回归护栏"
+    exit 0
+fi
+
+# 优先 venv 解释器（Windows / *nix 两种布局），否则退回系统 python
+if [ -x "$BACKEND/venv/Scripts/python.exe" ]; then
+    PY="$BACKEND/venv/Scripts/python.exe"
+elif [ -x "$BACKEND/venv/bin/python" ]; then
+    PY="$BACKEND/venv/bin/python"
+else
+    PY="python"
+fi
+
+echo "[pre-push] 运行患者评测回归护栏（离线，无 LLM 调用）..."
+( cd "$BACKEND" && "$PY" scripts/eval_regression.py )
+CODE=$?
+
+if [ "$CODE" -eq 1 ]; then
+    echo "[pre-push] 回归护栏 FAIL：最新回放报告存在破线指标，已拦截 push。"
+    echo "           请修复后重跑，或 SKIP_EVAL_REGRESSION=1 git push 临时跳过。"
+    exit 1
+fi
+
+# 0=PASS/SKIP，2=无报告，其它=基础设施异常 —— 均放行
+exit 0

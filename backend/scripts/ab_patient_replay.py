@@ -313,9 +313,36 @@ def _summarize_judge(turns: list[dict], summary: dict) -> None:
         summary[f"judge_{dim}_avg"] = round(statistics.mean(vals), 3) if vals else None
 
 
+def _build_manifest(results: list[dict], args, ts: str) -> dict:
+    """根据回放参数构建 ReportManifest 字典。"""
+    from evaluation.report_schema import ReportKind
+
+    n_cases = len(results)
+    # 冒烟判定：关闭 judge 或病例数 < 18
+    if not args.judge or n_cases < 18:
+        kind = ReportKind.SMOKE
+    else:
+        kind = ReportKind.REGRESSION
+
+    return {
+        "report_kind": kind.value,
+        "report_id": f"ab_{ts}",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "case_count": n_cases,
+        "dataset_version": "patient_sim_v1",
+        "model_version": settings.llm_model,
+        "prompt_version": "v1",
+        "judge_version": "judge_v1" if args.judge else "disabled",
+        "kb_version": getattr(settings, "ACTIVE_INDEX_VERSION", "unknown"),
+        "scoring_policy_version": "scoring_v1",
+        "seed": None,
+    }
+
+
 def _write_report(out_path: Path, results: list[dict], failed: list[dict], args, ts: str) -> None:
     """原子写回放报告（tmp + replace），进程中途被杀也不会写坏 JSON。"""
     report = {
+        "manifest": _build_manifest(results, args, ts),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "model": settings.llm_model,
         "turns_cap": args.turns_cap,

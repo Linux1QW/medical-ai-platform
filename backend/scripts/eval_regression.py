@@ -46,6 +46,15 @@ def main() -> int:
     report = load_report(report_path)
     thresholds = json.loads(Path(args.thresholds).read_text(encoding="utf-8"))
 
+    # ── 小样本门控：冒烟报告不作为 pre-push 门禁 ──
+    gate = thresholds.get("_gate", {})
+    min_cases = gate.get("min_cases", 18)
+    n_cases = len(report.get("cases", []))
+    if n_cases < min_cases:
+        print(f"报告 {report_path.name} 仅 {n_cases} 例（门禁要求 ≥ {min_cases}），"
+              f"视为冒烟/管道验证，SKIP。")
+        return 2
+
     print(f"待检报告: {report_path.name}")
     results, ok = check_thresholds(report, thresholds)
     print("\n" + "=" * 78)

@@ -1,5 +1,9 @@
 {
   "_comment": "患者模拟回放红线阈值。键格式 <metric>_min / <metric>_max，metric 对应各臂 summary 字段（回归引擎按病例取均值后比对）。缺失指标标 SKIP 不算破线。水位回填自 judge 基线报告 ab_20260731_171321.json（qwen3.7-plus，18例分层抽样，--judge，0 失败）：judge_overall_avg 均值 legacy 4.965 / agent_ledger 4.949 / agent_tool 4.871；disclosure_rate 均值 agent_ledger 0.501 / agent_tool 0.529；两臂 tool_degrade_rate 均值 0.0。disclosure_rate_min 沿用 0.45/0.40（跨 no-judge 与 judge 两批均在其上，保守留档）；judge_overall_avg_min 取基线均值下浮约 0.4-0.45 容 LLM 评分的批间抖动；tool_degrade_rate_max 取 0.30 上限护栏。legacy 为对照臂不设门禁。",
+  "_gate": {
+    "min_cases": 18,
+    "_note": "报告病例数 < min_cases 时 eval_regression 返回 SKIP(2)，不作为 pre-push 门禁；冒烟(3例)仅验证管道可用性"
+  },
   "_baseline": {
     "report": "ab_20260731_171321.json",
     "model": "qwen3.7-plus",

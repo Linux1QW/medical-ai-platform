@@ -1,0 +1,41 @@
+{
+  "version": "v1",
+  "description": "来源注册表 — 记录 KB 中各来源的类型、权威等级和有效期",
+  "sources": {
+    "src_csco_breast": {
+      "source_id": "src_csco_breast",
+      "source_type": "guideline",
+      "authority": "high",
+      "title": "CSCO 乳腺癌诊疗指南 2025",
+      "effective_date": "2025-01-01"
+    },
+    "src_csco_lung": {
+      "source_id": "src_csco_lung",
+      "source_type": "guideline",
+      "authority": "high",
+      "title": "CSCO 非小细胞肺癌诊疗指南 2025",
+      "effective_date": "2025-01-01"
+    },
+    "src_nccn_nsclc": {
+      "source_id": "src_nccn_nsclc",
+      "source_type": "guideline",
+      "authority": "high",
+      "title": "NCCN 非小细胞肺癌临床实践指南 2025",
+      "effective_date": "2025-01-01"
+    },
+    "src_internal_medicine": {
+      "source_id": "src_internal_medicine",
+      "source_type": "textbook",
+      "authority": "medium",
+      "title": "内科学第10版",
+      "effective_date": "2024-01-01"
+    },
+    "src_diagnostics": {
+      "source_id": "src_diagnostics",
+      "source_type": "textbook",
+      "authority": "medium",
+      "title": "诊断学第10版",
+      "effective_date": "2024-01-01"
+    }
+  }
+}

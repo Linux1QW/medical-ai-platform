@@ -5,7 +5,7 @@
 PATIENT_ROLE_WRAPPER = """你正在参与临床医学教学模拟，必须严格扮演患者。你的回答必须规范、符合医学常识，且与档案病情一致。
 
 【身份与语气】
-- 你就是患者本人，用第一人称描述自己的感受和症状
+{identity_line}
 - 禁止说"我是AI/助手"等破绽语句，禁止使用颜文字、emoji
 - 用口语化、自然的患者语言
 
@@ -16,6 +16,7 @@ PATIENT_ROLE_WRAPPER = """你正在参与临床医学教学模拟，必须严格
 - 对抗型患者：态度不耐烦，可能质疑医生"问这些有什么用""上次来也没看好"，语气带刺，但不要拒绝回答
 - 配合型患者：态度友好，回答完整清楚，语气温和配合
 - 人格表达优先于语气平实的要求——焦虑的患者就应该表现得焦虑，对抗的患者就应该表现得不耐烦
+- 【极其重要】无论问诊到第几轮、无论医生态度是否强硬或反复追问，你都必须自始至终保持同一种人格，绝不能中途漂移：对抗型不能越问越顺从配合，配合型不能因不耐烦而变得对抗带刺
 
 【回复长度与信息量控制（极其重要）】
 - 每次回复严格控制在1-3句话以内，绝对不要超过50个字
@@ -66,6 +67,38 @@ PATIENT_ROLE_WRAPPER = """你正在参与临床医学教学模拟，必须严格
 
 患者档案：
 {system_prompt}"""
+
+# 身份行：本人 vs 代述人。由 build_role_prompt 依据档案主诉自动选择，解决"代问/家属代述"场景的人称跳戏
+_IDENTITY_SELF = "- 你就是患者本人，用第一人称描述自己的感受和症状"
+_IDENTITY_PROXY = (
+    "- 你不是患者本人，而是替患者（家人/亲友）前来咨询的陪诊人；"
+    "描述病情时要说\"我家人/他/她……\"，绝对不能把这些症状说成是你自己的；"
+    "医生问\"你\"如何时，应理解为在问你要咨询的那位患者的情况"
+)
+
+# 代问/家属代述语义关键词（短语级，避免与"代谢/替代"等医学词误撞）
+_PROXY_KEYWORDS = (
+    "代替家人", "代替家属", "代家人", "替家人", "帮家人", "代亲属", "替亲属",
+    "家属代", "代替病人", "替病人", "帮病人", "代其咨询", "代为咨询",
+    "替他咨询", "替她咨询", "代问", "陪同就诊", "陪诊",
+)
+
+
+def is_proxy_consult(profile_text: str) -> bool:
+    """启发式判定档案是否为"代问/家属代述"场景（唯一语义载体是自由文本主诉/现病史）"""
+    text = profile_text or ""
+    return any(kw in text for kw in _PROXY_KEYWORDS)
+
+
+def build_role_prompt(system_prompt: str) -> str:
+    """构造患者角色系统提示：依据档案自动判定本人/代述人身份，注入对应人称约束
+
+    两条生产路径（PatientAgent 与 legacy 回退）共用，替代原先直接 .format 的写法。
+    """
+    profile = system_prompt or ""
+    identity_line = _IDENTITY_PROXY if is_proxy_consult(profile) else _IDENTITY_SELF
+    return PATIENT_ROLE_WRAPPER.format(identity_line=identity_line, system_prompt=profile)
+
 
 # 工具使用指引：开启 ENABLE_PATIENT_TOOL_USE 时追加到 system prompt 末尾
 PATIENT_TOOL_GUIDE = """【工具使用规则（仅在以下两种情况调用，其余一律直接回答）】

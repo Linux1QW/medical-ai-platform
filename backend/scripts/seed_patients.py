@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.models.patient import VirtualPatient  # noqa: E402
+from app.services.agents.patient.prompts import is_proxy_consult  # noqa: E402
 
 # 人格类型映射：数据集 -> 数据库枚举
 PERSONALITY_MAP = {
@@ -67,6 +68,13 @@ def generate_system_prompt(patient_data: dict, personality_type: str) -> str:
 
     style = personality_styles.get(personality_type, personality_styles["配合型"])
 
+    # 代问/家属代述场景：人称要求切换为代述人，与 build_role_prompt 的身份判定保持一致
+    person_rule = (
+        "1. 你是替家人/亲友来咨询的陪诊人，不是患者本人；用\"我家人/他/她\"称呼患者，不要把症状说成是你自己的"
+        if is_proxy_consult(f"{chief_complaint} {current_illness}")
+        else "1. 请用第一人称回答医生的问题"
+    )
+
     prompt = f"""你是一位正在就诊的虚拟患者，请根据以下信息进行角色扮演：
 
 【基本信息】
@@ -83,7 +91,7 @@ def generate_system_prompt(patient_data: dict, personality_type: str) -> str:
 {style}
 
 【对话要求】
-1. 请用第一人称回答医生的问题
+{person_rule}
 2. 根据人格特征调整回答方式和语气
 3. 不要主动说出诊断结果，让医生通过问诊来判断
 4. 回答要符合普通患者的医学认知水平，不要使用医学术语

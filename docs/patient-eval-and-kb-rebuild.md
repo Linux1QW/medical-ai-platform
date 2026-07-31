@@ -227,6 +227,19 @@ push 前自动跑一次离线 `eval_regression.py`（无 LLM 调用），校验�
 - 临时跳过：`SKIP_EVAL_REGRESSION=1 git push`；
 - 安装器用标记行（`QODER-MANAGED-HOOK`）辨认托管钩子，绝不覆盖/删除用户自定义钩子（除非 `--force`）。
 
+### 1.9 角色一致性强化（针对首要失败模式）
+
+基于 §1.5 归因结论（role_consistency 是首要失败模式，16 条 badcase 中占 7 条），将其拆为两个子问题分别处置：
+
+1. **身份/人称跳戏（代问场景）**：旧版硬编码“你就是患者本人、用第一人称”，与“代替家人咨询”类档案直接冲突。
+   `prompts.py` 新增纯函数 `is_proxy_consult()` 从档案主诉/现病史启发式识别代问语义（短语级关键词，避开“代谢/替代”等医学词误撞），`build_role_prompt()` 据此在**本人/代述人**身份行间切换；两条生产路径（`PatientAgent._build_system_prompt` 与 legacy 回退 `_legacy_generate_patient_reply`）改为共用 `build_role_prompt`。`seed_patients.generate_system_prompt` 同步条件化第一人称要求，保持与身份判定一致。
+2. **人格漂移**（对抗型越问越顺从、配合型变不耐烦）：`PATIENT_ROLE_WRAPPER` 人格块新增反漂移约束（两路径均受益）；`_build_system_prompt` 末尾【本轮风格】段锚定具体人格名（利用近因效应强化长对话一致性）。
+
+> 冒烟复测（`ab_20260731_214040.json`，3 例×三臂带 judge）：代问病例 patient120_25 的 role_consistency
+> 从基线 rc=2（身份跳戏“是我自己”/“我是化疗”）提升到 legacy/agent_ledger 逐轮全 5、agent_tool min 3，
+> 回复改为第三人称代家人作答（“他没做过放疗、只做了化疗”）；两例人格漂移（122_25 / 129_26.5）Judge overall
+> 均回升至 4.88~5.00。这 3 例的 badcase 从基线多条降到仅 1 条（naturalness 生硬，非角色一致性）。
+
 ---
 
 ## 2. 向量库两阶段重建

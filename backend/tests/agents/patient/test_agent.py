@@ -52,6 +52,10 @@ class TestBuildSystemPrompt:
         assert "你已经告诉过医生的信息" not in prompt
         assert "绝对不能再承认" not in prompt
 
+    def test_personality_anchor_injected(self):
+        # 本轮风格段应锚定具体人格，强化长对话人格一致性
+        assert "你始终是配合型患者" in _agent()._build_system_prompt()
+
 
 class TestRespond:
     @pytest.mark.asyncio

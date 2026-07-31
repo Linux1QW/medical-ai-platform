@@ -12,7 +12,7 @@ from app.models.patient import VirtualPatient
 from app.models.user import User
 from app.services.qwen_client import call_qwen_chat
 from app.services.agents.patient import MemoryState, PatientAgent, extract_facts
-from app.services.agents.patient.prompts import PATIENT_ROLE_WRAPPER
+from app.services.agents.patient.prompts import PATIENT_ROLE_WRAPPER, build_role_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ async def _legacy_generate_patient_reply(
     patient: VirtualPatient, messages: List[ConsultationMessage], content: str
 ) -> str:
     """无记忆旧路径（回退兼容）：角色包装 + 滑窗历史直接调 LLM"""
-    wrapped_prompt = PATIENT_ROLE_WRAPPER.format(system_prompt=patient.system_prompt or "")
+    wrapped_prompt = build_role_prompt(patient.system_prompt or "")
     chat_history = [{"role": "system", "content": wrapped_prompt}]
     chat_history.extend(await _build_history(messages, patient.system_prompt or ""))
     chat_history.append({"role": "user", "content": content})

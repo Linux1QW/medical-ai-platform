@@ -45,3 +45,21 @@ class TestBuildRolePrompt:
         prompt = build_role_prompt("")
         assert "{identity_line}" not in prompt
         assert "{system_prompt}" not in prompt
+
+
+class TestBackchannelGuidance:
+    """披露时机专项：医生 backchannel（嗯/继续）不应触发要求重复的困惑回应"""
+
+    def test_backchannel_words_covered(self):
+        # wrapper 应显式列出语气词，指引顺着话题承接而非要求重复
+        prompt = build_role_prompt("45岁男性，上腹痛两周")
+        for word in ["嗯", "继续", "接着说"]:
+            assert word in prompt
+        assert "不要要求医生重复" in prompt
+
+    def test_confusion_response_restricted_to_garbled(self):
+        # "能再说一遍吗" 的困惑回应被收窄到乱码/无法理解，不再涵盖泛化"无意义内容"
+        prompt = build_role_prompt("45岁男性，上腹痛两周")
+        assert "能再说一遍吗" in prompt
+        assert "完全无法理解的内容" in prompt
+

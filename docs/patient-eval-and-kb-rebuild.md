@@ -121,11 +121,31 @@ cases = load_eval_set("evaluation/patient_cases/patient_sim_v1.jsonl")  # 校验
 
 > Judge 走 `evaluation.patient_judge` 命名空间，不被各臂的延迟/调用计数器统计，避免污染硬指标归因。
 
-### 1.5 Badcase 归档
+### 1.5 Badcase 归档与失败模式归因
 
 任一 Judge 维度 ≤2 或 `overall<3` 的轮次，连同上下文快照追加写入
 `evaluation/reports/patient_ab/badcase_<ts>.jsonl`，字段含
-`case_id / turn / arm / doctor / reply / scores / reason / 归因标签占位`（归因标签留空，由人工回填）。
+`case_id / turn / arm / doctor / reply / scores / reason / attribution 归因占位`。
+
+**归因标注**：`scripts/label_badcases.py`（纯离线、无 LLM 成本）按评委已给出的四维分
+做**规则式归因**，为每条 badcase 回填 `attribution`（主失败模式）/ `attribution_label`
+（中文）/ `attribution_modes`（全部破线维），并另出一份**去标识失败模式清单**
+`badcase_summary_<ts>.json`（不含对话文本，可外发/入档）。判定阈值与归档口径一致
+（维度分 ≤2 即破线）；主因取分最低维，并列按优先级 `role_consistency >
+medical_plausibility > disclosure_timing > naturalness` 仲裁；无单维破线则归 `low_overall`。
+
+```powershell
+# 缺省取最新 badcase_*.jsonl，原地回填 attribution 并产出去标识清单
+.\venv\Scripts\python.exe scripts\label_badcases.py
+.\venv\Scripts\python.exe scripts\label_badcases.py --badcase <path> --no-inplace
+```
+
+四类失败模式 → 归因维度：角色一致性破坏 `role_consistency`、医学/上下文合理性不足
+`medical_plausibility`、生硬失真(AI腔) `naturalness`、披露时机失当 `disclosure_timing`。
+
+> 基线快照（`badcase_20260731_171321.jsonl`，18 例三臂，16 条 badcase）主因分布：
+> 角色一致性破坏 7 / 披露时机失当 5 / 医学·上下文合理性 3 / 生硬失真 1；
+> 按臂 agent_tool 8 条、agent_ledger 6 条、legacy 2 条。**角色一致性**是首要待改进方向。
 
 ### 1.6 回归红线门禁
 

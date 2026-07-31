@@ -125,3 +125,76 @@ export interface StatsSummary {
   score_distribution: { range: string; count: number }[];
   user_stats?: UserStatItem[];
 }
+
+// ── Task 12: 评估报告前端升级 ─ 新增类型 ──────────────────────────────────
+
+/** Rubric 判定结果 */
+export type RubricVerdict = 'pass' | 'partial' | 'fail' | 'not_applicable' | 'unassessed';
+
+/** 原子 Rubric 项 */
+export interface RubricItem {
+  item_id: string;
+  dimension: string;
+  verdict: RubricVerdict;
+  score: number | null;
+  severity: 'high' | 'medium' | 'low';
+  description: string;
+  evidence_spans: string[];
+  citation_ids: string[];
+}
+
+/** 证据链接类型 */
+export type EvidenceLinkType = 'supports' | 'contradicts' | 'insufficient';
+
+/** 临床主张状态 */
+export type ClaimStatus = 'supported' | 'partially_supported' | 'unsupported' | 'conflicting';
+
+/** 临床主张 */
+export interface ClinicalClaim {
+  claim_id: string;
+  claim_type: 'diagnosis' | 'treatment' | 'risk' | 'education';
+  content: string;
+  status: ClaimStatus;
+  evidence_links: EvidenceLink[];
+  needs_review: boolean;
+}
+
+/** 证据链接 */
+export interface EvidenceLink {
+  citation_id: string;
+  link_type: EvidenceLinkType;
+  entailment_score: number;
+  evidence_span: string;
+}
+
+/** 风险类型 */
+export type RiskType = 'emergency' | 'medication' | 'population' | 'privacy' | 'evidence_conflict';
+
+/** 风险发现 */
+export interface RiskFinding {
+  finding_id: string;
+  risk_type: RiskType;
+  severity: 'high' | 'medium' | 'low';
+  description: string;
+  evidence_span: string;
+  policy_action: string;
+  needs_review: boolean;
+}
+
+/** 报告类型 */
+export type ReportKind = 'smoke' | 'regression' | 'benchmark' | 'legacy_unknown';
+
+/** 报告清单 */
+export interface ReportManifest {
+  report_kind: ReportKind;
+  report_id: string;
+  created_at: string;
+  case_count: number;
+  dataset_version: string;
+  model_version: string;
+  prompt_version: string;
+  judge_version: string;
+  kb_version: string;
+  scoring_policy_version: string;
+  seed: number;
+}

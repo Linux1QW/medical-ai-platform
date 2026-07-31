@@ -129,19 +129,19 @@ cases = load_eval_set("evaluation/patient_cases/patient_sim_v1.jsonl")  # 校验
 
 ### 1.6 回归红线门禁
 
-红线定义在 `patient_ab_thresholds.json`，键格式 `<metric>_min` / `<metric>_max`，对应各臂 summary 字段；**缺失的指标标 SKIP，不算破线**。当前基线（`ab_20260731_000627.json`，qwen3.7-plus，18 例，`--no-judge`）回填的水位：
+红线定义在 `patient_ab_thresholds.json`，键格式 `<metric>_min` / `<metric>_max`，对应各臂 summary 字段（**回归引擎按病例取均值后比对**）；**缺失的指标标 SKIP，不算破线**。当前基线（`ab_20260731_171321.json`，qwen3.7-plus，18 例，`--judge`，0 失败）回填的水位：
 
 ```jsonc
 {
-  "agent_ledger": { "disclosure_rate_min": 0.45, "judge_overall_avg_min": 3.5 },
-  "agent_tool":   { "disclosure_rate_min": 0.40, "judge_overall_avg_min": 3.5,
+  "agent_ledger": { "disclosure_rate_min": 0.45, "judge_overall_avg_min": 4.5 },
+  "agent_tool":   { "disclosure_rate_min": 0.40, "judge_overall_avg_min": 4.4,
                     "tool_degrade_rate_max": 0.30 }
 }
 ```
 
-- `disclosure_rate_min` 取基线均值（ledger 0.547 / tool 0.492）下浮约 0.10 留噪声容差。
+- `disclosure_rate_min` 取基线均值（judge 批 ledger 0.501 / tool 0.529）下浮留噪声容差，跨 `--no-judge` 与 `--judge` 两批均在其上，保守留档为 0.45 / 0.40。
 - `tool_degrade_rate_max` 取 0.30 上限护栏（基线均值 0.0）。
-- `judge_overall_avg_min` 为前瞻护栏，本批 `--no-judge` 故 SKIP，待 Judge 基线跑通后校准。
+- `judge_overall_avg_min` 由 Judge 基线均值（ledger 4.949 / tool 4.871）**下浮约 0.4~0.45** 校准而得（→ 4.5 / 4.4），比 disclosure 留更宽容差以吸收 LLM 评分的批间抖动；legacy 为对照臂不设门禁。
 
 检测脚本：
 

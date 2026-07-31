@@ -1,0 +1,43 @@
+{
+  "version": "v1",
+  "description": "五维原子 Rubric v1 — 每维 5~8 个可核查行为项",
+  "dimensions": {
+    "inquiry": [
+      {"item_id": "inq_01", "dimension": "inquiry", "description": "主诉完整：包含主要症状、持续时间", "severity": "normal"},
+      {"item_id": "inq_02", "dimension": "inquiry", "description": "现病史追问：起病诱因、加重/缓解因素、伴随症状", "severity": "normal"},
+      {"item_id": "inq_03", "dimension": "inquiry", "description": "既往史采集：慢性病、手术史、住院史", "severity": "normal"},
+      {"item_id": "inq_04", "dimension": "inquiry", "description": "用药史与过敏史：当前用药、药物过敏", "severity": "high"},
+      {"item_id": "inq_05", "dimension": "inquiry", "description": "关键阴性症状：主动排查高危鉴别诊断的阴性表现", "severity": "high"},
+      {"item_id": "inq_06", "dimension": "inquiry", "description": "个人/家族史：吸烟饮酒、家族遗传病", "severity": "normal"}
+    ],
+    "knowledge": [
+      {"item_id": "knw_01", "dimension": "knowledge", "description": "医学事实准确：核心病理生理描述无错误", "severity": "high"},
+      {"item_id": "knw_02", "dimension": "knowledge", "description": "指南一致性：建议与当前临床指南吻合", "severity": "high"},
+      {"item_id": "knw_03", "dimension": "knowledge", "description": "禁忌识别：正确识别药物/操作禁忌", "severity": "high"},
+      {"item_id": "knw_04", "dimension": "knowledge", "description": "证据充分性：结论有文献或指南支撑", "severity": "normal"},
+      {"item_id": "knw_05", "dimension": "knowledge", "description": "引用有效性：引用的文献/指南真实存在且相关", "severity": "normal"}
+    ],
+    "humanistic": [
+      {"item_id": "hum_01", "dimension": "humanistic", "description": "共情表达：对患者情绪/困扰有回应", "severity": "normal"},
+      {"item_id": "hum_02", "dimension": "humanistic", "description": "解释清晰：用患者能理解的语言解释病情", "severity": "normal"},
+      {"item_id": "hum_03", "dimension": "humanistic", "description": "尊重患者：不评判、不敷衍、保护隐私", "severity": "normal"},
+      {"item_id": "hum_04", "dimension": "humanistic", "description": "风险沟通：告知可能的风险和注意事项", "severity": "high"},
+      {"item_id": "hum_05", "dimension": "humanistic", "description": "共同决策：提供选项并尊重患者意愿", "severity": "normal"}
+    ],
+    "diagnosis": [
+      {"item_id": "dx_01", "dimension": "diagnosis", "description": "诊断合理性：主诊断与症状/检查吻合", "severity": "high"},
+      {"item_id": "dx_02", "dimension": "diagnosis", "description": "鉴别诊断：列出需要排除的鉴别诊断", "severity": "normal"},
+      {"item_id": "dx_03", "dimension": "diagnosis", "description": "证据匹配：诊断有对应的检查/病史支持", "severity": "high"},
+      {"item_id": "dx_04", "dimension": "diagnosis", "description": "不确定性表达：信息不足时明确表达不确定", "severity": "normal"},
+      {"item_id": "dx_05", "dimension": "diagnosis", "description": "诊断优先级：按可能性或紧急程度排序", "severity": "normal"}
+    ],
+    "treatment": [
+      {"item_id": "tx_01", "dimension": "treatment", "description": "治疗适应证：治疗方案符合诊断", "severity": "high"},
+      {"item_id": "tx_02", "dimension": "treatment", "description": "禁忌证排查：未使用患者禁忌的药物/操作", "severity": "high"},
+      {"item_id": "tx_03", "dimension": "treatment", "description": "剂量/疗程完整性：药物剂量、频次、疗程交代清楚", "severity": "normal"},
+      {"item_id": "tx_04", "dimension": "treatment", "description": "随访建议：给出复诊时间和需要复查的项目", "severity": "normal"},
+      {"item_id": "tx_05", "dimension": "treatment", "description": "转诊/急救建议：必要时建议转诊或告知急救指征", "severity": "high"},
+      {"item_id": "tx_06", "dimension": "treatment", "description": "生活方式建议：饮食、运动、戒烟等指导", "severity": "normal"}
+    ]
+  }
+}

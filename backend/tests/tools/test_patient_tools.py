@@ -50,7 +50,7 @@ class TestQueryPlausibleSymptom:
         assert result == {"verdict": "uncertain", "reason": "知识库裁决失败，保守处理", "degraded": True}
 
 
-from app.services.tools.patient.physiology import (
+from app.services.tools.patient.physiology import (  # noqa: E402
     PhysiologyCalculator,
     PhysiologyCalculatorArgs,
 )
@@ -121,7 +121,7 @@ class TestPhysiologyCalculator:
         assert r_explicit == r_baseline
 
 
-from app.services.tools.patient.emotion import (
+from app.services.tools.patient.emotion import (  # noqa: E402
     EmotionEngine,
     EmotionEngineArgs,
     classify_doctor_behavior,
@@ -167,9 +167,9 @@ class TestEmotionEngineTool:
         assert result == {"behavior": "comfort", "emotion": "缓和"}
 
 
-from app.services.tools.patient import PATIENT_TOOL_BUDGETS, register_patient_tools
-from app.services.tools.policy import AGENT_TOOL_WHITELIST
-from app.services.tools.registry import ToolRegistry
+from app.services.tools.patient import PATIENT_TOOL_BUDGETS, register_patient_tools  # noqa: E402
+from app.services.tools.policy import AGENT_TOOL_WHITELIST  # noqa: E402
+from app.services.tools.registry import ToolRegistry  # noqa: E402
 
 
 class TestPatientToolRegistration:

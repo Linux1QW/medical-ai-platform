@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from evaluation.badcase_attribution import (  # noqa: E402
+    DIMENSION_MODE,
     label_badcases,
     summarize_badcases,
-    DIMENSION_MODE,
 )
 
 BAD_DIR = Path(__file__).parent.parent / "evaluation" / "reports" / "patient_ab"

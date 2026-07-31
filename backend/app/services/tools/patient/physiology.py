@@ -5,19 +5,20 @@
 避免 LLM 自由发挥导致"上次 38.5 这次 36.2"的不一致。纯本地计算，零 LLM 成本。
 """
 import random
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.services.tools.base import BaseTool, ToolContext
 
-# 正常/异常取值范围：(下限, 上限, 小数位数, 单位)
-_BASELINES = {
+# 正常/异常取值范围：(下限, 上限, 小数位数, 单位)；血压项为嵌套元组，故元素类型异构
+_BASELINES: dict[str, tuple[Any, ...]] = {
     "body_temperature": (36.2, 37.0, 1, "℃"),
     "heart_rate": (62, 95, 0, "次/分"),
     "respiratory_rate": (14, 19, 0, "次/分"),
     "blood_pressure": ((105, 130), (65, 85), 0, "mmHg"),  # (收缩压范围, 舒张压范围)
 }
-_ABNORMAL = {
+_ABNORMAL: dict[str, tuple[Any, ...]] = {
     "body_temperature": (37.8, 39.5, 1, "℃"),
     "heart_rate": (102, 130, 0, "次/分"),
     "respiratory_rate": (22, 30, 0, "次/分"),

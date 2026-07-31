@@ -56,9 +56,9 @@ class TestMemoryState:
         assert fact.disclosed_at_turn is None
 
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch  # noqa: E402
 
-from app.services.agents.patient.memory import _rule_based_facts, extract_facts
+from app.services.agents.patient.memory import _rule_based_facts, extract_facts  # noqa: E402
 
 
 class TestExtractFacts:

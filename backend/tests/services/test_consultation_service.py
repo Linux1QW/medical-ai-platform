@@ -532,8 +532,8 @@ class TestSummarizeEarlyMessages:
 
 # ── 测试 _generate_patient_reply（账本路径 + 异常回退） ────────────────────────────
 
-from app.services import consultation_service
-from app.services.agents.patient.memory import Fact, MemoryState
+from app.services import consultation_service  # noqa: E402
+from app.services.agents.patient.memory import Fact, MemoryState  # noqa: E402
 
 
 class TestGeneratePatientReplyWithAgent:

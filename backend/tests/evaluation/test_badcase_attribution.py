@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """badcase_attribution 归因规则单元测试（纯逻辑、无网络）。"""
 from evaluation.badcase_attribution import (
+    LOW_OVERALL,
     classify_badcase,
     label_badcases,
     summarize_badcases,
-    LOW_OVERALL,
 )
 
 

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """回归阈值 check_thresholds 破线检测与退出码测试"""
-import json
 
 from evaluation.patient_regression import check_thresholds, extract_arm_metrics
 

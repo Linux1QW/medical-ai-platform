@@ -10,9 +10,12 @@ from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
 from app.models.user import User
-from app.services.qwen_client import call_qwen_chat
 from app.services.agents.patient import MemoryState, PatientAgent, extract_facts
-from app.services.agents.patient.prompts import PATIENT_ROLE_WRAPPER, build_role_prompt
+from app.services.agents.patient.prompts import (  # noqa: F401  # PATIENT_ROLE_WRAPPER 为向后兼容再导出
+    PATIENT_ROLE_WRAPPER,
+    build_role_prompt,
+)
+from app.services.qwen_client import call_qwen_chat
 
 logger = logging.getLogger(__name__)
 

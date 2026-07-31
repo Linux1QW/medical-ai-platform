@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from seed_patients import PERSONALITY_MAP, generate_system_prompt  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
 from app.services import consultation_service  # noqa: E402
 from app.services import token_tracker as token_tracker_mod  # noqa: E402
 from app.services.agents.patient import agent as patient_agent_mod  # noqa: E402
@@ -48,7 +49,6 @@ from app.services.agents.patient import guard as guard_mod  # noqa: E402
 from app.services.agents.patient import memory as memory_mod  # noqa: E402
 from app.services.agents.patient.coverage import build_coverage_report  # noqa: E402
 from app.services.agents.patient.memory import MemoryState  # noqa: E402
-from app.core.config import settings  # noqa: E402
 from evaluation.patient_eval_set import load_eval_set  # noqa: E402
 from evaluation.patient_judge import DIMENSIONS, judge_turn  # noqa: E402
 
@@ -406,7 +406,7 @@ async def run_case(case_id: str, turns_cap: int, counter: LLMCounter,
     }
 
 
-async def main():
+async def main():  # noqa: C901  # CLI 编排入口，参数解析与分支较多，复杂度超标可接受
     parser = argparse.ArgumentParser(description="患者智能体三臂回放验证")
     parser.add_argument("--cases", default="", help="逗号分隔的病例目录名；传 @eval_set 读固化评测集；为空时按 --limit 取")
     parser.add_argument("--limit", type=int, default=2, help="未指定 --cases 时按目录名排序取前 N 例；配 @eval_set 时显式传入则裁前 N 例")

@@ -1,0 +1,19 @@
+{"_meta": {"version": "v1", "seed": 42, "n": 18, "generated_at": "2026-07-30T21:08:55", "source": "dataset"}}
+{"case_id": "patient140_32", "personality": "对抗型", "diagnosis": "腹痛", "turns_available": 32}
+{"case_id": "patient56_14", "personality": "沉默型", "diagnosis": "一般性医学检查", "turns_available": 14}
+{"case_id": "patient94_20", "personality": "焦虑型", "diagnosis": "一般性医学检查", "turns_available": 20}
+{"case_id": "patient128_26", "personality": "配合型", "diagnosis": "一般性医学检查", "turns_available": 26}
+{"case_id": "patient120_25", "personality": "对抗型", "diagnosis": "便秘", "turns_available": 25}
+{"case_id": "patient150_62", "personality": "沉默型", "diagnosis": "腹痛", "turns_available": 63}
+{"case_id": "patient147_40", "personality": "焦虑型", "diagnosis": "反流性食管炎", "turns_available": 41}
+{"case_id": "patient123_25", "personality": "配合型", "diagnosis": "腹痛", "turns_available": 25}
+{"case_id": "patient122_25", "personality": "对抗型", "diagnosis": "慢性胃炎", "turns_available": 25}
+{"case_id": "patient107_22", "personality": "焦虑型", "diagnosis": "腹胀", "turns_available": 21}
+{"case_id": "patient22_11", "personality": "配合型", "diagnosis": "慢性胃炎", "turns_available": 11}
+{"case_id": "patient95_20", "personality": "对抗型", "diagnosis": "幽门螺杆菌感染", "turns_available": 20}
+{"case_id": "patient138_29", "personality": "焦虑型", "diagnosis": "慢性胃炎", "turns_available": 29}
+{"case_id": "patient43_13", "personality": "配合型", "diagnosis": "腹泻", "turns_available": 13}
+{"case_id": "patient109_22", "personality": "对抗型", "diagnosis": "一般性医学检查", "turns_available": 22}
+{"case_id": "patient61_15", "personality": "焦虑型", "diagnosis": "腹痛", "turns_available": 15}
+{"case_id": "patient129_26.5", "personality": "配合型", "diagnosis": "黑便", "turns_available": 27}
+{"case_id": "patient10_9", "personality": "焦虑型", "diagnosis": "胃痛", "turns_available": 9}

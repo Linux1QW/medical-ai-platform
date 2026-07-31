@@ -34,6 +34,10 @@ backend/.env
 # RAG index (generated, can be rebuilt via build_index.py)
 backend/data/rag_index/
 
+# 向量库与 embedding 缓存（体积大、可由 rebuild_kb_from_cache.py 重建，禁止提交）
+backend/data/embed_cache/
+backend/data/medical_kb/
+
 # RAG 评估报告（生成产物，可通过 evaluation.rag_eval 重新生成）
 backend/backend/
 backend/evaluation/reports/*
@@ -55,6 +59,10 @@ review_*.txt
 
 # 调试日志
 debug.log
+
+# 临时下划线前缀的会话调试脚本/日志（不纳入版本）
+backend/_*.log
+backend/_*.py
 
 # E2E 测试截图（临时产物）
 e2e_*.png

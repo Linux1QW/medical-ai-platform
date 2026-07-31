@@ -1,0 +1,21 @@
+{
+  "_comment": "患者模拟回放红线阈值。键格式 <metric>_min / <metric>_max，metric 对应各臂 summary 字段。缺失指标标 SKIP 不算破线。水位回填自基线报告 ab_20260731_000627.json（qwen3.7-plus，18例分层抽样，--no-judge）：agent_ledger disclosure_rate 均值 0.547 / agent_tool 0.492，两臂 tool_degrade_rate 均值 0.0。min 阈值取基线均值下浮约 0.10 留噪声容差；tool_degrade_rate_max 取 0.30 上限护栏。judge_overall_avg_min 为前瞻护栏（本批 --no-judge 故 SKIP），待 judge 基线跑通后校准。",
+  "_baseline": {
+    "report": "ab_20260731_000627.json",
+    "model": "qwen3.7-plus",
+    "cases": 18,
+    "judge_enabled": false,
+    "agent_ledger_disclosure_rate_mean": 0.5472,
+    "agent_tool_disclosure_rate_mean": 0.4917,
+    "tool_degrade_rate_mean": 0.0
+  },
+  "agent_ledger": {
+    "disclosure_rate_min": 0.45,
+    "judge_overall_avg_min": 3.5
+  },
+  "agent_tool": {
+    "disclosure_rate_min": 0.40,
+    "judge_overall_avg_min": 3.5,
+    "tool_degrade_rate_max": 0.30
+  }
+}

@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # 阿里云百炼平台 Qwen API — 优先从系统环境变量 DASHSCOPE_API_KEY 读取
     QWEN_API_KEY: str = os.environ.get("DASHSCOPE_API_KEY", "")
     QWEN_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL: str = "qwen3.7-max"
+    QWEN_MODEL: str = "qwen3.7-plus"
 
     # Rerank 模型
     RERANK_MODEL: str = "gte-rerank"

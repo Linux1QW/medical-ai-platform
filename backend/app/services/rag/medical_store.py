@@ -22,6 +22,21 @@ PERSIST_DIR = (
 
 COLLECTION_NAME = "medical_guidelines"  # 保留用于向后兼容
 
+# ChromaDB 1.5.7 已知缺陷：一旦集合规模越过 hnsw:sync_threshold（默认 1000），
+# HNSW 索引会被落盘为独立段，而该版本自身的段读取器无法再把它加载回来，
+# 跨进程冷读报 "Error loading hnsw index"。将阈值设为极大值可让索引始终留在
+# WAL（向量真值持久化于 chroma.sqlite3），进程首次查询时从 WAL 内存重建，
+# 规避坏段读取路径。数据零丢失，仅首查有一次性重建开销。
+# 注意：该 metadata 仅在集合【创建时】生效；get_or_create 对已存在集合会忽略
+# metadata。存量旧集合仍是默认阈值，需经 rebuild_kb_from_cache.py --fresh
+# 删除重建才真正继承此配置。
+_HNSW_SYNC_THRESHOLD = 1_000_000
+COLLECTION_METADATA = {
+    "hnsw:space": "cosine",
+    "hnsw:sync_threshold": _HNSW_SYNC_THRESHOLD,
+    "embedding_dim": EMBEDDING_DIM,
+}
+
 # 懒加载缓存：避免每次调用都查询 ChromaDB
 _resolved_collection_name: Optional[str] = None
 
@@ -114,7 +129,7 @@ class MedicalKnowledgeStore:
         collection_name = _get_collection_name()
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
-            metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
+            metadata=dict(COLLECTION_METADATA),
         )
         logger.info(f"ChromaDB 医学知识库已初始化: {PERSIST_DIR} (collection={collection_name})")
 
@@ -141,7 +156,7 @@ class MedicalKnowledgeStore:
         try:
             self.collection = self.client.get_or_create_collection(
                 name=collection_name,
-                metadata={"hnsw:space": "cosine", "embedding_dim": EMBEDDING_DIM},
+                metadata=dict(COLLECTION_METADATA),
             )
             logger.info(f"Collection 引用已刷新: {collection_name}")
         except Exception as e:

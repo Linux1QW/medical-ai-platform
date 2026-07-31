@@ -3,8 +3,12 @@
 # 由 backend/scripts/install_git_hooks.py 安装到 .git/hooks/pre-push。
 # QODER-MANAGED-HOOK: patient-eval-regression
 #
-# 语义：仅当「确有报告且破线(FAIL)」时拦截 push；无报告 / 缺解释器等基础设施缺失
-# 一律放行，避免误伤正常提交。临时跳过：SKIP_EVAL_REGRESSION=1 git push
+# 语义：
+#   0 = PASS：regression 阈值全过，放行。
+#   1 = FAIL：regression 破线，拦截 push。
+#   2 = SKIP：smoke / 无报告，放行。
+#   3 = INVALID：legacy_unknown 或 manifest 不合法，拦截 push。
+# 临时跳过：SKIP_EVAL_REGRESSION=1 git push
 set -u
 
 if [ "${SKIP_EVAL_REGRESSION:-0}" = "1" ]; then
@@ -40,5 +44,11 @@ if [ "$CODE" -eq 1 ]; then
     exit 1
 fi
 
-# 0=PASS/SKIP，2=无报告，其它=基础设施异常 —— 均放行
+if [ "$CODE" -eq 3 ]; then
+    echo "[pre-push] 回归护栏 INVALID：报告 manifest 不合法或为 legacy_unknown，已拦截 push。"
+    echo "           请重跑 ab_patient_replay.py 生成带 manifest 的 regression 报告。"
+    exit 1
+fi
+
+# 0=PASS，2=SKIP —— 均放行
 exit 0

@@ -16,7 +16,7 @@ setup(
         "passlib[bcrypt]==1.7.4",
         "bcrypt==4.0.1",
         "python-multipart==0.0.20",
-        "openai==1.58.1",
+        "openai==2.48.0",
         "email-validator==2.2.0",
         "chromadb==1.5.7",
         "pymupdf==1.27.2.2",

@@ -34,6 +34,27 @@ def test_medical_negations_are_preserved():
     assert {"无", "不", "未", "否认"} <= set(tokens)
 
 
+def test_disease_type_does_not_consume_trailing_cjk_context():
+    sentence = "2型糖尿病患者无发热"
+    tokens = tokenize_medical_text(sentence, mode="query")
+
+    assert "2型糖尿病" in tokens
+    assert "无" in tokens
+    assert sentence not in tokens
+
+
+def test_icd_u_code_is_preserved_as_one_token():
+    tokens = tokenize_medical_text("确诊 U07.1", mode="query")
+
+    assert "U07.1" in tokens
+
+
+def test_renal_unit_without_whitespace_is_preserved():
+    tokens = tokenize_medical_text("eGFR 35mL/min/1.73m2", mode="query")
+
+    assert {"renal:eGFR", "35", "mL/min/1.73m2"} <= set(tokens)
+
+
 def test_protected_tokens_are_stably_deduplicated():
     tokens = tokenize_medical_text("EGFR EGFR 100mg 100mg", mode="query")
 

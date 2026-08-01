@@ -27,14 +27,14 @@ MEDICAL_STOPWORDS = frozenset(
 
 _CJK_SPAN_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _PROTECTED_PATTERN = re.compile(
-    r"(?P<disease_type>(?<!\d)\d+(?:\.\d+)?[型期级][\u4e00-\u9fff]{2,})"
+    r"(?P<disease_type>(?<!\d)\d+(?:\.\d+)?[型期级][\u4e00-\u9fff]{2,}?(?:综合征|病|癌|症|炎))"
     r"|(?P<exon>\d+(?:-\d+)?外显子(?:缺失|突变|插入|重复)?)"
     r"|(?P<case_term>(?<![A-Za-z0-9])(?:EGFR|eGFR)(?![A-Za-z0-9]))"
     r"|(?P<pdl1>(?<![A-Za-z0-9])PD-?L1(?![A-Za-z0-9]))"
     r"|(?P<variant>(?<![A-Za-z0-9])(?:p\.)?[A-Z]\d{1,5}[A-Z*](?![A-Za-z0-9]))"
-    r"|(?P<icd>(?<![A-Za-z0-9])[A-TV-Z]\d{2}(?:\.\d{1,4})?(?![A-Za-z0-9]))"
+    r"|(?P<icd>(?<![A-Za-z0-9])[A-Z]\d{2}(?:\.\d{1,4})?(?![A-Za-z0-9]))"
     r"|(?P<threshold>(?:>=|≥|>)\s*\d+(?:\.\d+)?%)"
-    r"|(?P<renal_measurement>\d+(?:\.\d+)?\s+(?:m[lL]|μL|uL)/(?:min|h|d)/(?:\d+(?:\.\d+)?m2)(?![A-Za-z0-9]))"
+    r"|(?P<renal_measurement>\d+(?:\.\d+)?\s*(?:m[lL]|μL|uL)/(?:min|h|d)/(?:\d+(?:\.\d+)?m2)(?![A-Za-z0-9]))"
     r"|(?P<compound_unit>(?<![A-Za-z0-9])(?:m[lL]|μL|uL)/(?:min|h|d)/(?:\d+(?:\.\d+)?m2)(?![A-Za-z0-9]))"
     r"|(?P<dose>\d+(?:\.\d+)?\s?(?:mg|g|μg|ug|mcg|mL|ml|IU|U|mmol|mol)(?:/(?:kg|d|day|h))?)"
     r"|(?P<number>\d+(?:\.\d+)?)"
@@ -73,8 +73,9 @@ def _normalize_protected_term(match: re.Match[str]) -> list[str]:
         threshold = value.removeprefix(">=").removeprefix("≥").removeprefix(">")
         return [f">={threshold.strip()}"]
     if kind == "renal_measurement":
-        number, unit = value.split(maxsplit=1)
-        return [number, unit]
+        number_match = re.match(r"\d+(?:\.\d+)?", value)
+        assert number_match is not None
+        return [number_match.group(), value[number_match.end():].lstrip()]
     if kind == "dose":
         return [re.sub(r"\s+", "", value)]
     return [value]

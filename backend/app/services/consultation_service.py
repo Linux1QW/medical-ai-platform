@@ -32,14 +32,21 @@ async def create_consultation(db: AsyncSession, doctor_id: int, patient_id: int)
     return consultation
 
 
-async def get_consultation(db: AsyncSession, consultation_id: int) -> Optional[Consultation]:
-    result = await db.execute(select(Consultation).where(Consultation.id == consultation_id))
+async def get_consultation(
+    db: AsyncSession, consultation_id: int, for_update: bool = False
+) -> Optional[Consultation]:
+    stmt = select(Consultation).where(Consultation.id == consultation_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def _get_consultation_or_raise(db: AsyncSession, consultation_id: int) -> Consultation:
+async def _get_consultation_or_raise(
+    db: AsyncSession, consultation_id: int, for_update: bool = False
+) -> Consultation:
     """获取问诊记录，不存在时抛出 ValueError（用于必须存在的场景）"""
-    consultation = await get_consultation(db, consultation_id)
+    consultation = await get_consultation(db, consultation_id, for_update=for_update)
     if consultation is None:
         raise ValueError(f"问诊记录不存在: {consultation_id}")
     return consultation
@@ -251,6 +258,7 @@ async def send_doctor_message(
     当对话轮数超过 MEMORY_COMPRESS_THRESHOLD 时，将早期对话压缩为结构化摘要，
     仅保留最近 MEMORY_RECENT_TURNS 轮完整对话，有效控制 LLM context 占用。
     """
+    consultation = await _get_consultation_or_raise(db, consultation_id, for_update=True)
     messages = await get_messages(db, consultation_id)
     next_seq = len(messages) + 1
 
@@ -262,7 +270,6 @@ async def send_doctor_message(
     )
     db.add(doctor_msg)
 
-    consultation = await _get_consultation_or_raise(db, consultation_id)
     patient_result = await db.execute(
         select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
     )
@@ -304,6 +311,7 @@ async def send_doctor_message_stream(
             "message": "正在加载对话历史...",
             "progress": 10,
         })
+        consultation = await _get_consultation_or_raise(db, consultation_id, for_update=True)
         messages = await get_messages(db, consultation_id)
         next_seq = len(messages) + 1
 
@@ -327,7 +335,6 @@ async def send_doctor_message_stream(
             "message": "正在加载患者信息...",
             "progress": 30,
         })
-        consultation = await _get_consultation_or_raise(db, consultation_id)
         patient_result = await db.execute(
             select(VirtualPatient).where(VirtualPatient.id == consultation.patient_id)
         )

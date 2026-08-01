@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.consultation import Consultation
 from app.models.evaluation import Evaluation
+from app.models.patient import VirtualPatient
 from app.services.difficulty_model import DifficultyResult, calculate_actual_difficulty
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,8 @@ async def recommend_cases(
 
     if not available_cases:
         return []
+
+    await _attach_patient_db_ids(db, available_cases)
 
     # 确定目标难度
     if target_difficulty is None:
@@ -109,6 +112,29 @@ async def recommend_cases(
     # 按匹配度排序
     scored_cases.sort(key=lambda x: x._score, reverse=True)
     return scored_cases[:count]
+
+
+async def _attach_patient_db_ids(db: AsyncSession, cases: list[dict]) -> None:
+    """将数据集病例 ID 关联到数据库中的虚拟患者记录。
+
+    数据集病例和数据库患者是两个独立来源，必须使用明确的 case_id 关联，
+    不能用可变且可能重复的患者姓名关联。
+    """
+    for case in cases:
+        case["patient_db_id"] = None
+
+    case_ids = [case["case_id"] for case in cases if case.get("case_id")]
+    if not case_ids:
+        return
+
+    result = await db.execute(
+        select(VirtualPatient.id, VirtualPatient.case_id).where(
+            VirtualPatient.case_id.in_(case_ids)
+        )
+    )
+    patient_ids = {case_id: patient_id for patient_id, case_id in result.all()}
+    for case in cases:
+        case["patient_db_id"] = patient_ids.get(case["case_id"])
 
 
 async def _estimate_target_difficulty(db: AsyncSession, doctor_id: int) -> float:

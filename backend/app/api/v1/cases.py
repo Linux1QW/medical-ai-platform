@@ -80,7 +80,7 @@ async def get_case_difficulty(
 
     from app.models.patient import VirtualPatient
 
-    stmt = select(VirtualPatient).where(VirtualPatient.name == case_id)
+    stmt = select(VirtualPatient).where(VirtualPatient.case_id == case_id)
     result = await db.execute(stmt)
     patient = result.scalar_one_or_none()
 

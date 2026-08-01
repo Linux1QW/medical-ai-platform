@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, Enum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -10,6 +11,9 @@ class VirtualPatient(Base):
     __tablename__ = "virtual_patients"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, unique=True, index=True, comment="数据集病例稳定标识"
+    )
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     age: Mapped[int] = mapped_column(Integer, nullable=False)
     gender: Mapped[str] = mapped_column(Enum("male", "female", name="gender_type"), nullable=False)

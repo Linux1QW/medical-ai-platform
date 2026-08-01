@@ -195,6 +195,7 @@ class TestSendDoctorMessage:
         assert patient_msg.role == "patient"
         assert patient_msg.content == "我头痛，还有点发烧。"
         mock_db.commit.assert_called_once()
+        mock_get_consult.assert_awaited_once_with(mock_db, 1, for_update=True)
 
     @pytest.mark.asyncio
     @patch("app.services.consultation_service.extract_facts", new_callable=AsyncMock)

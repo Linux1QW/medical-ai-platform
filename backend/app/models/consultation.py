@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -50,6 +50,11 @@ class ConsultationMessage(Base):
     """问诊对话消息"""
 
     __tablename__ = "consultation_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "consultation_id", "sequence", name="uq_consultation_message_sequence"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     consultation_id: Mapped[int] = mapped_column(

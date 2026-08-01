@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PatientCreate(BaseModel):
+    case_id: str | None = Field(default=None, max_length=100)
     name: str = Field(..., max_length=50)
     age: int = Field(..., ge=0, le=200)
     gender: str = Field(..., max_length=10)
@@ -17,6 +18,7 @@ class PatientCreate(BaseModel):
 
 
 class PatientUpdate(BaseModel):
+    case_id: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, max_length=50)
     age: int | None = Field(default=None, ge=0, le=200)
     gender: str | None = Field(default=None, max_length=10)
@@ -33,6 +35,7 @@ class DoctorPatientOut(BaseModel):
     """医生可见的患者信息（不含标准答案与系统提示词）"""
 
     id: int
+    case_id: str | None = None
     name: str
     age: int
     gender: str

@@ -44,6 +44,16 @@ async def get_patients(
     return [_serialize_patient(p, current_user) for p in patients]
 
 
+@router.get("/export", response_model=List[PatientOut])
+async def export_patients(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = require_permission("patient:export"),
+):
+    """导出所有患者数据（需要 patient:export 权限）"""
+    patients = await list_patients(db, None, None)
+    return [PatientOut.model_validate(p) for p in patients]
+
+
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(
     patient_id: int,
@@ -113,13 +123,3 @@ async def remove_patient(
     )
     await db.commit()
     return {"detail": "删除成功"}
-
-
-@router.get("/export", response_model=List[PatientOut])
-async def export_patients(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = require_permission("patient:export"),
-):
-    """导出所有患者数据（需要 patient:export 权限）"""
-    patients = await list_patients(db, None, None)
-    return [PatientOut.model_validate(p) for p in patients]

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- 虚拟患者表
 CREATE TABLE IF NOT EXISTS virtual_patients (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    case_id VARCHAR(100) NULL UNIQUE COMMENT '数据集病例稳定标识',
     name VARCHAR(50) NOT NULL,
     age INT NOT NULL,
     gender ENUM('male', 'female') NOT NULL,
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS consultation_messages (
     sequence INT NOT NULL COMMENT '消息序号',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_consultation_id (consultation_id),
+    UNIQUE KEY uq_consultation_message_sequence (consultation_id, sequence),
     FOREIGN KEY (consultation_id) REFERENCES consultations(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

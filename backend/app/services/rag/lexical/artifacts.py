@@ -1,6 +1,7 @@
 """Versioned, validated persistence for native bm25s artifacts."""
 
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -17,14 +18,15 @@ from app.core.config import settings
 from app.services.rag.lexical.tokenizer import TOKENIZER_VERSION
 
 _GENERATION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _NATIVE_FILES = (
+    "corpus.jsonl",
+    "corpus.mmindex.json",
     "data.csc.index.npy",
     "indices.csc.index.npy",
     "indptr.csc.index.npy",
-    "vocab.index.json",
     "params.index.json",
-    "corpus.jsonl",
-    "corpus.mmindex.json",
+    "vocab.index.json",
 )
 
 
@@ -59,6 +61,7 @@ class BM25ArtifactManifest:
     k1: float
     b: float
     created_at: str
+    file_sha256: Dict[str, str]
     token_count: int = 0
 
     @classmethod
@@ -73,6 +76,7 @@ class BM25ArtifactManifest:
             "k1",
             "b",
             "created_at",
+            "file_sha256",
         }
         missing = sorted(required - payload.keys())
         if missing:
@@ -90,6 +94,7 @@ class BM25ArtifactManifest:
                 k1=payload["k1"],
                 b=payload["b"],
                 created_at=payload["created_at"],
+                file_sha256=payload["file_sha256"],
                 token_count=payload.get("token_count", 0),
             )
         except (TypeError, ValueError) as exc:
@@ -120,6 +125,13 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _native_file_sha256(artifact_dir: Path) -> Dict[str, str]:
+    return {
+        filename: _sha256_file(artifact_dir / filename)
+        for filename in _NATIVE_FILES
+    }
 
 
 def _read_manifest(path: Path) -> BM25ArtifactManifest:
@@ -157,6 +169,10 @@ def _validate_manifest(
         mismatches.append(
             f"method={manifest.method!r}, expected {settings.BM25_METHOD!r}"
         )
+    if not isinstance(manifest.corpus_sha256, str) or not _SHA256_PATTERN.fullmatch(
+        manifest.corpus_sha256
+    ):
+        mismatches.append("corpus_sha256 must be a lowercase SHA-256 digest")
     try:
         if not math.isclose(float(manifest.k1), settings.BM25_K1):
             mismatches.append(f"k1={manifest.k1!r}, expected {settings.BM25_K1!r}")
@@ -189,23 +205,75 @@ def _validate_files(artifact_dir: Path) -> None:
         )
 
 
-def _validate_corpus(
+def _validate_native_file_sha256(
+    artifact_dir: Path,
+    manifest: BM25ArtifactManifest,
+) -> None:
+    if not isinstance(manifest.file_sha256, dict):
+        raise BM25ArtifactMismatch("file SHA-256 inventory must be an object")
+
+    expected_files = set(_NATIVE_FILES)
+    recorded_files = set(manifest.file_sha256)
+    if recorded_files != expected_files:
+        missing = sorted(str(name) for name in expected_files - recorded_files)
+        unexpected = sorted(str(name) for name in recorded_files - expected_files)
+        details = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if unexpected:
+            details.append("unexpected=" + ",".join(unexpected))
+        raise BM25ArtifactMismatch(
+            "file SHA-256 inventory mismatch: " + "; ".join(details)
+        )
+
+    recorded_corpus_sha256 = manifest.file_sha256["corpus.jsonl"]
+    if not isinstance(recorded_corpus_sha256, str) or not hmac.compare_digest(
+        recorded_corpus_sha256, manifest.corpus_sha256
+    ):
+        raise BM25ArtifactMismatch(
+            "corpus SHA-256 does not match the native file inventory"
+        )
+
+    for filename in _NATIVE_FILES:
+        expected_sha256 = manifest.file_sha256[filename]
+        if not isinstance(expected_sha256, str) or not _SHA256_PATTERN.fullmatch(
+            expected_sha256
+        ):
+            raise BM25ArtifactMismatch(
+                f"{filename} has an invalid SHA-256 digest in manifest"
+            )
+        actual_sha256 = _sha256_file(artifact_dir / filename)
+        if not hmac.compare_digest(actual_sha256, expected_sha256):
+            raise BM25ArtifactMismatch(
+                f"{filename} SHA-256 mismatch: {actual_sha256}, "
+                f"expected {expected_sha256}"
+            )
+
+
+def _validate_corpus_document_count(
     artifact_dir: Path,
     manifest: BM25ArtifactManifest,
 ) -> None:
     corpus_path = artifact_dir / "corpus.jsonl"
-    actual_sha256 = _sha256_file(corpus_path)
-    if actual_sha256 != manifest.corpus_sha256:
-        raise BM25ArtifactMismatch(
-            "corpus SHA-256 mismatch: "
-            f"{actual_sha256}, expected {manifest.corpus_sha256}"
-        )
     with corpus_path.open("rb") as corpus_file:
         document_count = sum(1 for line in corpus_file if line.strip())
     if document_count != manifest.document_count:
         raise BM25ArtifactMismatch(
             "corpus document count mismatch: "
             f"{document_count}, expected {manifest.document_count}"
+        )
+
+
+def _validate_ready(artifact_dir: Path, manifest: BM25ArtifactManifest) -> None:
+    try:
+        ready_content = (artifact_dir / "READY").read_text(
+            encoding="ascii"
+        ).strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BM25ArtifactMismatch("READY marker cannot be read") from exc
+    if not hmac.compare_digest(ready_content, manifest.corpus_sha256):
+        raise BM25ArtifactMismatch(
+            "READY marker does not match manifest corpus SHA-256"
         )
 
 
@@ -261,7 +329,10 @@ def _load_from_dir(
     _validate_files(artifact_dir)
     manifest = _read_manifest(artifact_dir / "manifest.json")
     _validate_manifest(manifest, generation)
-    _validate_corpus(artifact_dir, manifest)
+    if require_ready:
+        _validate_ready(artifact_dir, manifest)
+    _validate_native_file_sha256(artifact_dir, manifest)
+    _validate_corpus_document_count(artifact_dir, manifest)
 
     try:
         engine = bm25s.BM25.load(
@@ -316,7 +387,8 @@ def build_bm25_artifact(
             corpus=documents_snapshot,
             show_progress=False,
         )
-        corpus_sha256 = _sha256_file(staging_dir / "corpus.jsonl")
+        file_sha256 = _native_file_sha256(staging_dir)
+        corpus_sha256 = file_sha256["corpus.jsonl"]
         manifest = BM25ArtifactManifest(
             index_generation=selected_generation,
             corpus_sha256=corpus_sha256,
@@ -329,6 +401,7 @@ def build_bm25_artifact(
             created_at=datetime.now(timezone.utc).isoformat().replace(
                 "+00:00", "Z"
             ),
+            file_sha256=file_sha256,
             token_count=candidate.token_count,
         )
         (staging_dir / "manifest.json").write_text(

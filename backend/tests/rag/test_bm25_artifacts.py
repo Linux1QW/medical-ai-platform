@@ -1,5 +1,6 @@
 """Tests for versioned persistent BM25 artifacts."""
 
+import hashlib
 import json
 from dataclasses import asdict
 
@@ -14,6 +15,16 @@ from app.services.rag.lexical.artifacts import (
     BM25ArtifactNotReady,
     build_bm25_artifact,
     load_bm25_artifact,
+)
+
+NATIVE_ARTIFACT_FILES = (
+    "corpus.jsonl",
+    "corpus.mmindex.json",
+    "data.csc.index.npy",
+    "indices.csc.index.npy",
+    "indptr.csc.index.npy",
+    "params.index.json",
+    "vocab.index.json",
 )
 
 
@@ -48,6 +59,14 @@ def _rewrite_manifest(root, **changes):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _native_file_hashes(root):
+    artifact_dir = _artifact_dir(root)
+    return {
+        filename: hashlib.sha256((artifact_dir / filename).read_bytes()).hexdigest()
+        for filename in NATIVE_ARTIFACT_FILES
+    }
+
+
 def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
     tmp_path, documents
 ):
@@ -56,6 +75,9 @@ def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
 
     assert manifest.document_count == 2
     assert manifest.token_count > 0
+    assert list(manifest.file_sha256) == list(NATIVE_ARTIFACT_FILES)
+    assert manifest.file_sha256 == _native_file_hashes(tmp_path)
+    assert manifest.file_sha256["corpus.jsonl"] == manifest.corpus_sha256
     assert set(asdict(manifest)) >= {
         "index_generation",
         "corpus_sha256",
@@ -66,6 +88,7 @@ def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
         "k1",
         "b",
         "created_at",
+        "file_sha256",
     }
     assert isinstance(loaded._bm25.scores["data"], np.memmap)
     assert loaded.token_count == manifest.token_count
@@ -111,11 +134,63 @@ def test_load_rejects_corpus_integrity_mismatch(tmp_path, documents):
         load_bm25_artifact("g-test", tmp_path)
 
 
+def test_load_rejects_native_index_byte_tampering(
+    tmp_path, documents, monkeypatch
+):
+    build_bm25_artifact("g-test", documents, tmp_path)
+    native_path = _artifact_dir(tmp_path) / "data.csc.index.npy"
+    payload = bytearray(native_path.read_bytes())
+    payload[-1] ^= 0x01
+    native_path.write_bytes(payload)
+    native_load_called = False
+
+    def unexpected_native_load(*args, **kwargs):
+        nonlocal native_load_called
+        native_load_called = True
+        raise AssertionError("bm25s.load must not run before hash validation")
+
+    monkeypatch.setattr("bm25s.BM25.load", unexpected_native_load)
+
+    with pytest.raises(
+        BM25ArtifactMismatch,
+        match=r"data\.csc\.index\.npy SHA-256 mismatch",
+    ):
+        load_bm25_artifact("g-test", tmp_path)
+    assert not native_load_called
+
+
+@pytest.mark.parametrize("inventory_change", ["missing", "extra"])
+def test_load_rejects_native_hash_inventory_mismatch(
+    tmp_path, documents, inventory_change
+):
+    build_bm25_artifact("g-test", documents, tmp_path)
+    file_sha256 = _native_file_hashes(tmp_path)
+    if inventory_change == "missing":
+        file_sha256.pop("data.csc.index.npy")
+    else:
+        file_sha256["unused.bin"] = "0" * 64
+    _rewrite_manifest(tmp_path, file_sha256=file_sha256)
+
+    with pytest.raises(BM25ArtifactMismatch, match="file SHA-256 inventory"):
+        load_bm25_artifact("g-test", tmp_path)
+
+
 def test_load_rejects_missing_ready_marker(tmp_path, documents):
     build_bm25_artifact("g-test", documents, tmp_path)
     (_artifact_dir(tmp_path) / "READY").unlink()
 
     with pytest.raises(BM25ArtifactNotReady):
+        load_bm25_artifact("g-test", tmp_path)
+
+
+def test_load_rejects_modified_ready_content(tmp_path, documents):
+    build_bm25_artifact("g-test", documents, tmp_path)
+    (_artifact_dir(tmp_path) / "READY").write_text(
+        "tampered\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(BM25ArtifactMismatch, match="READY"):
         load_bm25_artifact("g-test", tmp_path)
 
 

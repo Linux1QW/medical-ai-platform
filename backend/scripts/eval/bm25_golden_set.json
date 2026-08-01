@@ -1,0 +1,53 @@
+{
+  "description": "BM25 V1 baseline set for medical lexical retrieval. Source substrings target the repository's indexed clinical books and guidelines.",
+  "k_values": [1, 3, 5, 10],
+  "cases": [
+    {"id": "gene_egfr_exon19", "category": "gene_variant", "query": "EGFR 19外显子缺失 NSCLC 一线治疗", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["EGFR", "19外显子缺失", "NSCLC"]},
+    {"id": "gene_egfr_l858r", "category": "gene_variant", "query": "EGFR L858R 突变肺腺癌靶向治疗", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["EGFR", "L858R"]},
+    {"id": "gene_egfr_c2573tg", "category": "gene_variant", "query": "EGFR c.2573T>G 变异解读", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["EGFR", "c.2573T>G"]},
+    {"id": "gene_pdl1_tps", "category": "gene_variant", "query": "PD-L1 TPS≥50% 非小细胞肺癌免疫治疗", "relevant_source_contains": ["非小细胞肺癌", "免疫检查点抑制剂"], "must_preserve_tokens": ["PD-L1", "TPS", "≥50%"]},
+    {"id": "gene_pdl1_compact", "category": "gene_variant", "query": "PDL1 高表达晚期肺癌治疗", "relevant_source_contains": ["非小细胞肺癌", "免疫检查点抑制剂"], "must_preserve_tokens": ["PDL1"]},
+    {"id": "gene_alk_fusion", "category": "gene_variant", "query": "ALK 融合阳性 NSCLC 一线用药", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["ALK", "NSCLC"]},
+    {"id": "gene_her2_positive", "category": "gene_variant", "query": "HER2 阳性乳腺癌辅助治疗", "relevant_source_contains": ["乳腺癌"], "must_preserve_tokens": ["HER2"]},
+
+    {"id": "disease_type2_diabetes", "category": "disease_alias", "query": "2型糖尿病初始降糖治疗", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["2型糖尿病"]},
+    {"id": "disease_t2dm", "category": "disease_alias", "query": "T2DM 合并高血压管理", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["T2DM"]},
+    {"id": "disease_ami", "category": "disease_alias", "query": "AMI 急诊再灌注治疗", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["AMI"]},
+    {"id": "disease_copd", "category": "disease_alias", "query": "COPD 急性加重抗感染治疗", "relevant_source_contains": ["呼吸", "内科学"], "must_preserve_tokens": ["COPD"]},
+    {"id": "disease_ckd", "category": "disease_alias", "query": "CKD 3期肾性贫血治疗", "relevant_source_contains": ["内科学"], "must_preserve_tokens": ["CKD", "3期"]},
+    {"id": "disease_hfref", "category": "disease_alias", "query": "HFrEF 慢性心力衰竭规范用药", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["HFrEF"]},
+    {"id": "disease_nsclc", "category": "disease_alias", "query": "NSCLC 局部晚期同步放化疗", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["NSCLC"]},
+
+    {"id": "dose_aspirin_100mg", "category": "drug_dose", "query": "阿司匹林100mg 二级预防剂量", "relevant_source_contains": ["内科医嘱", "心血管"], "must_preserve_tokens": ["阿司匹林", "100mg"]},
+    {"id": "dose_enoxaparin_mgkg", "category": "drug_dose", "query": "依诺肝素 1mg/kg 皮下注射", "relevant_source_contains": ["内科医嘱", "临床医嘱"], "must_preserve_tokens": ["依诺肝素", "1mg/kg"]},
+    {"id": "dose_meropenem_g", "category": "drug_dose", "query": "美罗培南 1g q8h 重症感染", "relevant_source_contains": ["重症医学", "内科医嘱"], "must_preserve_tokens": ["美罗培南", "1g", "q8h"]},
+    {"id": "dose_insulin_units", "category": "drug_dose", "query": "胰岛素 0.4U/kg/d 起始剂量", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["胰岛素", "0.4U/kg/d"]},
+    {"id": "dose_paracetamol_mg", "category": "drug_dose", "query": "对乙酰氨基酚 500mg 发热对症治疗", "relevant_source_contains": ["临床医嘱", "内科医嘱"], "must_preserve_tokens": ["对乙酰氨基酚", "500mg"]},
+    {"id": "dose_dexamethasone", "category": "drug_dose", "query": "地塞米松 5mg qd 化疗止吐", "relevant_source_contains": ["抗肿瘤治疗相关恶心呕吐", "临床医嘱"], "must_preserve_tokens": ["地塞米松", "5mg", "qd"]},
+    {"id": "dose_amoxicillin", "category": "drug_dose", "query": "阿莫西林 50mg/kg/d 儿童用药", "relevant_source_contains": ["儿科医嘱", "儿科学"], "must_preserve_tokens": ["阿莫西林", "50mg/kg/d"]},
+
+    {"id": "lab_egfr", "category": "lab_unit", "query": "eGFR 35 ml/min/1.73m2 造影剂使用", "relevant_source_contains": ["内科学"], "must_preserve_tokens": ["eGFR", "35", "ml/min/1.73m2"]},
+    {"id": "lab_creatinine", "category": "lab_unit", "query": "血肌酐 180μmol/L 肾功能评估", "relevant_source_contains": ["内科学"], "must_preserve_tokens": ["180μmol/L"]},
+    {"id": "lab_hba1c", "category": "lab_unit", "query": "HbA1c 7.5% 糖尿病控制目标", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["HbA1c", "7.5%"]},
+    {"id": "lab_tsh", "category": "lab_unit", "query": "TSH 12 mIU/L 甲状腺功能减退", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["TSH", "12", "mIU/L"]},
+    {"id": "lab_pao2", "category": "lab_unit", "query": "PaO2 55mmHg 低氧血症氧疗", "relevant_source_contains": ["呼吸", "内科学"], "must_preserve_tokens": ["PaO2", "55mmHg"]},
+    {"id": "lab_inr", "category": "lab_unit", "query": "INR 3.5 华法林剂量调整", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["INR", "3.5"]},
+    {"id": "lab_crcl", "category": "lab_unit", "query": "CrCl 28ml/min 抗菌药肾功能减量", "relevant_source_contains": ["内科学", "内科医嘱"], "must_preserve_tokens": ["CrCl", "28ml/min"]},
+
+    {"id": "negation_no_fever", "category": "negation", "query": "肺炎患者无发热是否需要抗菌治疗", "relevant_source_contains": ["呼吸", "内科学"], "must_preserve_tokens": ["无", "发热"]},
+    {"id": "negation_no_allergy", "category": "negation", "query": "无青霉素过敏史可否使用阿莫西林", "relevant_source_contains": ["内科医嘱", "临床医嘱"], "must_preserve_tokens": ["无", "青霉素过敏"]},
+    {"id": "negation_deny_chest_pain", "category": "negation", "query": "否认胸痛但肌钙蛋白升高诊断", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["否认", "胸痛"]},
+    {"id": "negation_no_bleeding", "category": "negation", "query": "抗凝治疗期间无活动性出血", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["无", "活动性出血"]},
+    {"id": "negation_not_pregnant", "category": "negation", "query": "未妊娠育龄女性甲亢用药", "relevant_source_contains": ["妇产科学", "内科学"], "must_preserve_tokens": ["未", "妊娠"]},
+    {"id": "negation_exclude_pe", "category": "negation", "query": "排除肺栓塞的诊断流程", "relevant_source_contains": ["急诊医学", "内科学"], "must_preserve_tokens": ["排除", "肺栓塞"]},
+    {"id": "negation_no_dyspnea", "category": "negation", "query": "无呼吸困难的上呼吸道感染处理", "relevant_source_contains": ["呼吸", "内科学"], "must_preserve_tokens": ["无", "呼吸困难"]},
+
+    {"id": "icd_i10", "category": "icd_code", "query": "I10 原发性高血压药物治疗", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["I10"]},
+    {"id": "icd_e11", "category": "icd_code", "query": "E11 2型糖尿病并发症筛查", "relevant_source_contains": ["内分泌", "内科学"], "must_preserve_tokens": ["E11"]},
+    {"id": "icd_j18", "category": "icd_code", "query": "J18 社区获得性肺炎经验性抗菌治疗", "relevant_source_contains": ["呼吸", "内科学"], "must_preserve_tokens": ["J18"]},
+    {"id": "icd_i21", "category": "icd_code", "query": "I21 急性心肌梗死溶栓禁忌证", "relevant_source_contains": ["心血管", "内科学"], "must_preserve_tokens": ["I21"]},
+    {"id": "icd_c34", "category": "icd_code", "query": "C34 肺恶性肿瘤分期治疗", "relevant_source_contains": ["非小细胞肺癌"], "must_preserve_tokens": ["C34"]},
+    {"id": "icd_n18", "category": "icd_code", "query": "N18 慢性肾脏病分期管理", "relevant_source_contains": ["内科学"], "must_preserve_tokens": ["N18"]},
+    {"id": "icd_k35", "category": "icd_code", "query": "K35 急性阑尾炎围术期抗菌药", "relevant_source_contains": ["外科学", "普通外科"], "must_preserve_tokens": ["K35"]}
+  ]
+}

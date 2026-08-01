@@ -11,7 +11,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-TOKENIZER_VERSION = "medical-lexical-v2"
+TOKENIZER_VERSION = "medical-lexical-v3"
 NEGATIONS = frozenset({"无", "不", "未", "否认", "排除"})
 CASE_SENSITIVE_TERMS = {"EGFR": "gene:EGFR", "eGFR": "renal:eGFR"}
 _NEGATION_TERMS = tuple(sorted(NEGATIONS, key=len, reverse=True))
@@ -31,12 +31,19 @@ _PROTECTED_PATTERN = re.compile(
     r"|(?P<exon>\d+(?:-\d+)?外显子(?:缺失|突变|插入|重复)?)"
     r"|(?P<case_term>(?<![A-Za-z0-9])(?:EGFR|eGFR)(?![A-Za-z0-9]))"
     r"|(?P<pdl1>(?<![A-Za-z0-9])PD-?L1(?![A-Za-z0-9]))"
+    r"|(?P<cdna_variant>(?<![A-Za-z0-9])c\.\d+(?:[+-]\d+)?(?:_\d+(?:[+-]\d+)?)?"
+    r"(?:[ACGT]+>[ACGT]+|delins[ACGT]+|del[ACGT]*|dup[ACGT]*|ins[ACGT]+)(?![A-Za-z0-9]))"
     r"|(?P<variant>(?<![A-Za-z0-9])(?:p\.)?[A-Z]\d{1,5}[A-Z*](?![A-Za-z0-9]))"
     r"|(?P<icd>(?<![A-Za-z0-9])[A-Z]\d{2}(?:\.\d{1,4})?(?![A-Za-z0-9]))"
     r"|(?P<threshold>(?:>=|≥|>)\s*\d+(?:\.\d+)?%)"
+    r"|(?P<percentage>(?<![A-Za-z0-9])\d+(?:\.\d+)?%(?![A-Za-z0-9]))"
     r"|(?P<renal_measurement>\d+(?:\.\d+)?\s*(?:m[lL]|μL|uL)/(?:min|h|d)/(?:\d+(?:\.\d+)?m2)(?![A-Za-z0-9]))"
     r"|(?P<compound_unit>(?<![A-Za-z0-9])(?:m[lL]|μL|uL)/(?:min|h|d)/(?:\d+(?:\.\d+)?m2)(?![A-Za-z0-9]))"
-    r"|(?P<dose>\d+(?:\.\d+)?\s?(?:mg|g|μg|ug|mcg|mL|ml|IU|U|mmol|mol)(?:/(?:kg|d|day|h))?)"
+    r"|(?P<clinical_measurement>(?<![A-Za-z0-9])\d+(?:\.\d+)?\s?"
+    r"(?:mmHg|kPa|(?:mg|g|mmol|μmol|umol|mEq)/(?:dL|L)|(?:mL|ml)/(?:min|h))"
+    r"(?![A-Za-z0-9]))"
+    r"|(?P<dose>\d+(?:\.\d+)?\s?(?:mg|g|μg|ug|mcg|mL|ml|IU|U|mmol|mol)"
+    r"(?:/(?:kg|d|day|h)){0,2}(?![A-Za-z0-9/]))"
     r"|(?P<number>\d+(?:\.\d+)?)"
     r"|(?P<alphanumeric>(?<![A-Za-z0-9])[A-Za-z]+(?:[-_/][A-Za-z0-9]+)*\d*[A-Za-z0-9]*(?![A-Za-z0-9]))",
 )
@@ -76,7 +83,7 @@ def _normalize_protected_term(match: re.Match[str]) -> list[str]:
         number_match = re.match(r"\d+(?:\.\d+)?", value)
         assert number_match is not None
         return [number_match.group(), value[number_match.end():].lstrip()]
-    if kind == "dose":
+    if kind in {"clinical_measurement", "dose"}:
         return [re.sub(r"\s+", "", value)]
     return [value]
 

@@ -61,6 +61,44 @@ def test_active_version_uses_resolved_collection_before_settings_fallback():
     assert version == "rag-20260801"
 
 
+def test_required_token_diagnostics_compare_canonical_values():
+    missing = evaluate_bm25._missing_required_tokens(
+        "EGFR eGFR L858R TPS≥50%",
+        ["EGFR", "eGFR", "L858R", "≥50%"],
+        tokenize_medical_text,
+    )
+
+    assert missing == []
+
+
+def test_required_token_diagnostics_report_real_omission():
+    missing = evaluate_bm25._missing_required_tokens(
+        "EGFR L858R TPS≥50%",
+        ["EGFR", "eGFR", "L858R", "≥50%"],
+        tokenize_medical_text,
+    )
+
+    assert missing == ["eGFR"]
+
+
+def test_token_preservation_gate_is_opt_in_for_historical_baselines():
+    case_reports = [
+        {"id": "canonical-pass", "missing_required_tokens": []},
+        {"id": "real-loss", "missing_required_tokens": ["eGFR"]},
+    ]
+    preservation = evaluate_bm25._token_preservation_result(case_reports)
+    report = {"token_preservation": preservation}
+
+    assert preservation == {
+        "passed": False,
+        "failed_case_count": 1,
+        "missing_required_token_count": 1,
+        "failed_case_ids": ["real-loss"],
+    }
+    assert evaluate_bm25._preservation_exit_code(report, fail_on_token_loss=False) == 0
+    assert evaluate_bm25._preservation_exit_code(report, fail_on_token_loss=True) == 1
+
+
 def test_rebuild_validation_failure_does_not_replace_active_index(
     tmp_path, monkeypatch
 ):

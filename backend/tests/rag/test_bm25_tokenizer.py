@@ -1,9 +1,9 @@
-"""Contract tests for the medical lexical tokenizer V2."""
+"""Contract tests for the medical lexical tokenizer V3."""
 
 import pytest
 
-from app.services.rag.lexical.tokenizer import tokenize_medical_text
 from app.services.rag.lexical.query_expansion import expand_lexical_query
+from app.services.rag.lexical.tokenizer import tokenize_medical_text
 
 
 @pytest.mark.parametrize(
@@ -20,6 +20,22 @@ from app.services.rag.lexical.query_expansion import expand_lexical_query
 )
 def test_medical_tokens(text, expected):
     assert expected <= set(tokenize_medical_text(text, mode="query"))
+
+
+@pytest.mark.parametrize(
+    "protected_form",
+    [
+        "c.2573T>G",
+        "0.4U/kg/d",
+        "50mg/kg/d",
+        "180μmol/L",
+        "7.5%",
+        "55mmHg",
+        "28ml/min",
+    ],
+)
+def test_extended_clinical_forms_are_complete_canonical_tokens(protected_form):
+    assert tokenize_medical_text(protected_form, mode="query") == [protected_form]
 
 
 def test_bigrams_do_not_cross_punctuation_boundaries():

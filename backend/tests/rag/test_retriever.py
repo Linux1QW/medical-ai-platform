@@ -5,9 +5,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.services.rag.retriever import fusion
-
-from app.services.rag.types import EvidenceItem
+from app.services.rag.retriever import fusion, tiered
+from app.services.rag.types import EvidenceItem, RetrievalConfidence, RetrievalQuery
 
 
 class TestEvidenceConversion:
@@ -54,3 +53,36 @@ async def test_dense_and_bm25_receive_exact_raw_query(monkeypatch):
 
     dense.assert_awaited_once_with("心梗治疗", top_k=15)
     bm25_index.search.assert_called_once_with("心梗治疗", top_k=15)
+
+
+@pytest.mark.asyncio
+async def test_tiered_retrieve_passes_original_query_text_to_hybrid_recall(monkeypatch):
+    original_text = "  EGFR c.2573T>G ≥50%  "
+    hybrid_recall = AsyncMock(
+        return_value=(
+            [
+                {
+                    "doc_id": "d1",
+                    "text": "evidence",
+                    "source": "guide.pdf",
+                    "rrf_score": 0.02,
+                }
+            ],
+            {"channels": ["bm25"]},
+        )
+    )
+    monkeypatch.setattr(tiered, "get_cached_bundle", AsyncMock(return_value=None))
+    monkeypatch.setattr(tiered, "set_cached_bundle", AsyncMock())
+    monkeypatch.setattr(tiered, "hybrid_recall", hybrid_recall)
+    monkeypatch.setattr(
+        tiered,
+        "_assess_confidence",
+        lambda **kwargs: RetrievalConfidence.HIGH,
+    )
+
+    await tiered.tiered_retrieve(
+        [RetrievalQuery(query_type="case", text=original_text)],
+        top_k_per_query=5,
+    )
+
+    hybrid_recall.assert_awaited_once_with(original_text, top_k=5)

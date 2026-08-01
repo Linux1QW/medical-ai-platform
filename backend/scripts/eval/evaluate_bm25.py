@@ -15,7 +15,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -108,6 +108,37 @@ def _active_index_version(index: Any) -> str:
     return _version_from_active_collection(_get_collection_name(), settings.ACTIVE_INDEX_VERSION)
 
 
+def _missing_required_tokens(
+    query: str,
+    required_tokens: Sequence[str],
+    tokenizer: Callable[[str], Sequence[str]],
+) -> List[str]:
+    """Return golden labels whose canonical token sets are absent from a query."""
+    query_tokens = set(tokenizer(query))
+    missing: List[str] = []
+    for required_token in required_tokens:
+        canonical_tokens = set(tokenizer(required_token))
+        if not canonical_tokens or not canonical_tokens <= query_tokens:
+            missing.append(required_token)
+    return missing
+
+
+def _token_preservation_result(case_reports: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    failed_cases = [case for case in case_reports if case["missing_required_tokens"]]
+    missing_count = sum(len(case["missing_required_tokens"]) for case in failed_cases)
+    return {
+        "passed": not failed_cases,
+        "failed_case_count": len(failed_cases),
+        "missing_required_token_count": missing_count,
+        "failed_case_ids": [case["id"] for case in failed_cases],
+    }
+
+
+def _preservation_exit_code(report: Dict[str, Any], *, fail_on_token_loss: bool) -> int:
+    preservation_passed = bool(report["token_preservation"]["passed"])
+    return 1 if fail_on_token_loss and not preservation_passed else 0
+
+
 def _load_golden(path: Path) -> Tuple[List[Dict[str, Any]], Tuple[int, ...]]:
     with path.open(encoding="utf-8") as golden_file:
         golden = json.load(golden_file)
@@ -146,14 +177,17 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
         ranked_ids, relevant_ids = _ranked_and_relevant(results, case["relevant_source_contains"])
         case_metrics = _case_metrics(ranked_ids, relevant_ids, k_values)
         metrics_by_category[case["category"]].append(case_metrics)
-        tokens = tokenize_medical_text(case["query"])
         case_reports.append(
             {
                 "id": case["id"],
                 "category": case["category"],
                 "latency_ms": round(elapsed_ms, 4),
                 "metrics": {key: round(value, 6) for key, value in case_metrics.items()},
-                "missing_required_tokens": [token for token in case["must_preserve_tokens"] if token not in tokens],
+                "missing_required_tokens": _missing_required_tokens(
+                    case["query"],
+                    case["must_preserve_tokens"],
+                    tokenize_medical_text,
+                ),
                 "top_sources": [str(result.get("source", "")) for result in results[:5]],
             }
         )
@@ -175,6 +209,7 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
         "metrics": aggregated,
         "case_count": len(cases),
         "k_values": list(k_values),
+        "token_preservation": _token_preservation_result(case_reports),
         "cases": case_reports,
     }
 
@@ -184,6 +219,11 @@ def main() -> int:
     parser.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN, help="Path to bm25_golden_set.json")
     parser.add_argument("--output", type=Path, required=True, help="Destination JSON report path")
     parser.add_argument("--top-k", type=int, default=10, help="Minimum number of BM25 candidates to retrieve")
+    parser.add_argument(
+        "--fail-on-token-loss",
+        action="store_true",
+        help="Exit non-zero after writing the report if a required token is missing",
+    )
     args = parser.parse_args()
     if args.top_k <= 0:
         parser.error("--top-k must be positive")
@@ -196,7 +236,19 @@ def main() -> int:
         json.dump(report, output_file, ensure_ascii=False, indent=2)
         output_file.write("\n")
     print(f"BM25 baseline written to {args.output} ({report['case_count']} cases)")
-    return 0
+    exit_code = _preservation_exit_code(
+        report,
+        fail_on_token_loss=args.fail_on_token_loss,
+    )
+    if exit_code:
+        preservation = report["token_preservation"]
+        print(
+            "BM25 required-token preservation failed: "
+            f"{preservation['missing_required_token_count']} missing token(s) "
+            f"across {preservation['failed_case_count']} case(s)",
+            file=sys.stderr,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

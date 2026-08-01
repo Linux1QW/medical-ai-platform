@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     BM25_B: float = 0.8
     BM25_METHOD: str = "lucene"
     BM25_ENABLE_CJK_BIGRAM: bool = False
-    BM25_TOKENIZER_VERSION: str = "medical-lexical-v2"
+    BM25_TOKENIZER_VERSION: str = "medical-lexical-v3"
     BM25_HEADING_BOOST: int = Field(default=2, ge=1, le=3)
     BM25_ENTITY_BOOST: int = Field(default=3, ge=1, le=3)
     BM25_ARTIFACT_ROOT: str = str(

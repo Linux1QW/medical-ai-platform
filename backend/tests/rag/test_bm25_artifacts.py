@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.services.rag.bm25_search import BM25Index, build_document_tokens
 from app.services.rag.lexical.artifacts import (
     BM25ArtifactMismatch,
@@ -78,6 +78,9 @@ def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
     assert list(manifest.file_sha256) == list(NATIVE_ARTIFACT_FILES)
     assert manifest.file_sha256 == _native_file_hashes(tmp_path)
     assert manifest.file_sha256["corpus.jsonl"] == manifest.corpus_sha256
+    assert manifest.enable_cjk_bigram is settings.BM25_ENABLE_CJK_BIGRAM
+    assert manifest.heading_boost == settings.BM25_HEADING_BOOST
+    assert manifest.entity_boost == settings.BM25_ENTITY_BOOST
     assert set(asdict(manifest)) >= {
         "index_generation",
         "corpus_sha256",
@@ -87,6 +90,9 @@ def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
         "method",
         "k1",
         "b",
+        "enable_cjk_bigram",
+        "heading_boost",
+        "entity_boost",
         "created_at",
         "file_sha256",
     }
@@ -110,6 +116,9 @@ def test_artifact_round_trip_uses_native_mmap_and_preserves_result_shape(
         ("method", "robertson"),
         ("k1", 9.0),
         ("b", 0.1),
+        ("enable_cjk_bigram", True),
+        ("heading_boost", 1),
+        ("entity_boost", 1),
     ],
 )
 def test_load_rejects_manifest_identity_and_config_mismatch(

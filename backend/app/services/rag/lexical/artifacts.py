@@ -60,6 +60,9 @@ class BM25ArtifactManifest:
     method: str
     k1: float
     b: float
+    enable_cjk_bigram: bool
+    heading_boost: int
+    entity_boost: int
     created_at: str
     file_sha256: Dict[str, str]
     token_count: int = 0
@@ -75,6 +78,9 @@ class BM25ArtifactManifest:
             "method",
             "k1",
             "b",
+            "enable_cjk_bigram",
+            "heading_boost",
+            "entity_boost",
             "created_at",
             "file_sha256",
         }
@@ -93,6 +99,9 @@ class BM25ArtifactManifest:
                 method=payload["method"],
                 k1=payload["k1"],
                 b=payload["b"],
+                enable_cjk_bigram=payload["enable_cjk_bigram"],
+                heading_boost=payload["heading_boost"],
+                entity_boost=payload["entity_boost"],
                 created_at=payload["created_at"],
                 file_sha256=payload["file_sha256"],
                 token_count=payload.get("token_count", 0),
@@ -144,6 +153,35 @@ def _read_manifest(path: Path) -> BM25ArtifactManifest:
     return BM25ArtifactManifest.from_dict(payload)
 
 
+def _index_setting_mismatches(manifest: BM25ArtifactManifest) -> list[str]:
+    mismatches = []
+    if (
+        not isinstance(manifest.enable_cjk_bigram, bool)
+        or manifest.enable_cjk_bigram != settings.BM25_ENABLE_CJK_BIGRAM
+    ):
+        mismatches.append(
+            f"enable_cjk_bigram={manifest.enable_cjk_bigram!r}, expected "
+            f"{settings.BM25_ENABLE_CJK_BIGRAM!r}"
+        )
+    if (
+        type(manifest.heading_boost) is not int
+        or manifest.heading_boost != settings.BM25_HEADING_BOOST
+    ):
+        mismatches.append(
+            f"heading_boost={manifest.heading_boost!r}, expected "
+            f"{settings.BM25_HEADING_BOOST!r}"
+        )
+    if (
+        type(manifest.entity_boost) is not int
+        or manifest.entity_boost != settings.BM25_ENTITY_BOOST
+    ):
+        mismatches.append(
+            f"entity_boost={manifest.entity_boost!r}, expected "
+            f"{settings.BM25_ENTITY_BOOST!r}"
+        )
+    return mismatches
+
+
 def _validate_manifest(
     manifest: BM25ArtifactManifest,
     requested_generation: str,
@@ -183,6 +221,7 @@ def _validate_manifest(
             mismatches.append(f"b={manifest.b!r}, expected {settings.BM25_B!r}")
     except (TypeError, ValueError):
         mismatches.append("b must be numeric")
+    mismatches.extend(_index_setting_mismatches(manifest))
     if not isinstance(manifest.document_count, int) or manifest.document_count <= 0:
         mismatches.append("document_count must be a positive integer")
     if not isinstance(manifest.token_count, int) or manifest.token_count < 0:
@@ -398,6 +437,9 @@ def build_bm25_artifact(
             method=settings.BM25_METHOD,
             k1=settings.BM25_K1,
             b=settings.BM25_B,
+            enable_cjk_bigram=settings.BM25_ENABLE_CJK_BIGRAM,
+            heading_boost=settings.BM25_HEADING_BOOST,
+            entity_boost=settings.BM25_ENTITY_BOOST,
             created_at=datetime.now(timezone.utc).isoformat().replace(
                 "+00:00", "Z"
             ),

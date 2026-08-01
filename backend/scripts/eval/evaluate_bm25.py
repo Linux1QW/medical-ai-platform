@@ -31,9 +31,16 @@ def _match_group(source: str, groups: Iterable[str]) -> str:
 
 def _ranked_and_relevant(results: Sequence[Dict[str, Any]], groups: Sequence[str]) -> Tuple[List[str], set[str]]:
     ranked_ids: List[str] = []
+    seen_groups: set[str] = set()
     for position, result in enumerate(results):
         group = _match_group(str(result.get("source", "")), groups)
-        ranked_ids.append(group or f"__irrelevant__:{result.get('doc_id', position)}:{position}")
+        if group and group not in seen_groups:
+            ranked_ids.append(group)
+            seen_groups.add(group)
+        elif group:
+            ranked_ids.append(f"__duplicate_relevant__:{group}:{position}")
+        else:
+            ranked_ids.append(f"__irrelevant__:{result.get('doc_id', position)}:{position}")
     return ranked_ids, {group for group in groups if group}
 
 
@@ -74,6 +81,33 @@ def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def _case_metrics(ranked_ids: Sequence[str], relevant_ids: set[str], k_values: Sequence[int]) -> Dict[str, float]:
+    metrics = {f"recall@{k}": _recall_at_k(ranked_ids, relevant_ids, k) for k in k_values}
+    metrics["mrr"] = _mrr(ranked_ids, relevant_ids)
+    metrics.update({f"ndcg@{k}": _ndcg_at_k(ranked_ids, relevant_ids, k) for k in k_values})
+    return metrics
+
+
+def _version_from_active_collection(collection_name: str, configured_version: str) -> str:
+    """Use the resolved collection version when present, else its configured active version."""
+    prefix = "medical_guidelines_"
+    if collection_name.startswith(prefix):
+        return collection_name[len(prefix) :]
+    return configured_version
+
+
+def _active_index_version(index: Any) -> str:
+    """Read the version from the index, or from the active collection and settings."""
+    index_version = getattr(index, "index_version", None)
+    if index_version:
+        return str(index_version)
+
+    from app.core.config import settings
+    from app.services.rag.medical_store import _get_collection_name
+
+    return _version_from_active_collection(_get_collection_name(), settings.ACTIVE_INDEX_VERSION)
+
+
 def _load_golden(path: Path) -> Tuple[List[Dict[str, Any]], Tuple[int, ...]]:
     with path.open(encoding="utf-8") as golden_file:
         golden = json.load(golden_file)
@@ -110,9 +144,7 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
         elapsed_ms = (time.perf_counter() - query_started) * 1000
         latency_ms.append(elapsed_ms)
         ranked_ids, relevant_ids = _ranked_and_relevant(results, case["relevant_source_contains"])
-        case_metrics = {f"recall@{k}": _recall_at_k(ranked_ids, relevant_ids, k) for k in k_values}
-        case_metrics["mrr"] = _mrr(ranked_ids, relevant_ids)
-        case_metrics[f"ndcg@{max(k_values)}"] = _ndcg_at_k(ranked_ids, relevant_ids, max(k_values))
+        case_metrics = _case_metrics(ranked_ids, relevant_ids, k_values)
         metrics_by_category[case["category"]].append(case_metrics)
         tokens = tokenize_medical_text(case["query"])
         case_reports.append(
@@ -135,7 +167,7 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
     }
     token_count = getattr(index, "token_count", sum(len(tokens) for tokens in getattr(index, "doc_tokens", [])))
     return {
-        "index_version": getattr(index, "index_version", "legacy-v1"),
+        "index_version": _active_index_version(index),
         "document_count": index.doc_count,
         "token_count": token_count,
         "cold_load_seconds": round(cold_load_seconds, 6),

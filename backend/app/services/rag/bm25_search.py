@@ -8,95 +8,14 @@ BM25 擅长精确术语匹配（药物名称、疾病编码、检查项目名称
 """
 
 import logging
-import os
-import re
 from typing import Dict, List, Optional
 
 import bm25s
-import jieba
+
+from app.core.config import settings
+from app.services.rag.lexical.tokenizer import tokenize_medical_text
 
 logger = logging.getLogger(__name__)
-
-# ── BM25 超参数（医学文档调优）──
-K1 = 1.2   # 词频饱和参数（医学文档较长，降低至 1.2）
-B = 0.8    # 长度惩罚参数（提高至 0.8 惩罚长文档）
-
-
-# ── 加载医学自定义词典（模块级别，只执行一次）──
-_medical_dict_path = os.path.join(
-    os.path.dirname(__file__), '..', '..', '..', 'data', 'medical_dict.txt'
-)
-if os.path.exists(_medical_dict_path):
-    jieba.load_userdict(_medical_dict_path)
-    logger.info(f"jieba 医学词典已加载: {_medical_dict_path}")
-else:
-    logger.warning(f"医学词典文件不存在: {_medical_dict_path}，将使用 jieba 默认分词")
-
-
-# ── 医学文本停用词表（精简版）──
-MEDICAL_STOPWORDS = {
-    "的", "了", "是", "在", "有", "和", "与", "及", "或", "等",
-    "为", "被", "把", "将", "从", "到", "对", "以", "可", "也",
-    "就", "都", "而", "且", "但", "则", "要", "能", "会", "应",
-    "该", "其", "这", "那", "之", "于", "中", "上", "下", "不",
-    "无", "未", "已", "所", "如", "若", "因", "由", "时", "后",
-    "前", "间", "内", "外", "者", "用", "需", "可以", "应该",
-    "a", "an", "the", "is", "are", "was", "were", "be", "been",
-    "and", "or", "of", "in", "on", "at", "to", "for", "with",
-}
-
-
-def tokenize_medical_text(text: str) -> List[str]:
-    """医学文本分词 — jieba 分词 + 英文术语保护 + bigram 兜底
-
-    策略：
-    1. 保留完整的英文术语和数字（如 NSCLC、EGFR、PD-L1、20mg）
-    2. 中文使用 jieba 分词（加载医学自定义词典提升复合术语召回）
-    3. 保留 bigram 作为 fallback（对 jieba 可能切错的长词兜底）
-    4. 去除停用词和标点符号
-
-    Args:
-        text: 输入文本
-
-    Returns:
-        token 列表
-    """
-    if not text:
-        return []
-
-    text = text.lower().strip()
-    tokens = []
-
-    # 1. 提取英文术语和数字（保留连字符，如 PD-L1）
-    english_pattern = re.compile(r'[a-z][a-z0-9\-]*[a-z0-9]|[a-z]|\d+\.?\d*')
-    english_tokens = english_pattern.findall(text)
-    tokens.extend(english_tokens)
-
-    # 2. jieba 中文分词（先移除英文/数字部分，避免干扰）
-    chinese_text = re.sub(r'[a-zA-Z0-9\.\-\_]+', ' ', text)
-    words = jieba.cut(chinese_text)
-
-    for word in words:
-        word = word.strip()
-        if not word:
-            continue
-        # 过滤停用词
-        if word in MEDICAL_STOPWORDS:
-            continue
-        # 过滤单字（除非是数字）
-        if len(word) == 1 and not word.isdigit():
-            continue
-        tokens.append(word)
-
-    # 3. 保留 bigram 作为补充（对 jieba 可能切错的长词提供 fallback）
-    chinese_chars = re.findall(r'[\u4e00-\u9fff]', text)
-    for i in range(len(chinese_chars) - 1):
-        bigram = chinese_chars[i] + chinese_chars[i + 1]
-        if bigram not in MEDICAL_STOPWORDS:
-            tokens.append(bigram)
-
-    return tokens
-
 
 class BM25Index:
     """基于 bm25s 引擎的文本检索索引（向后兼容接口）
@@ -129,12 +48,16 @@ class BM25Index:
 
         # 分词
         self.doc_tokens = [
-            tokenize_medical_text(doc.get(text_field, ""))
+            tokenize_medical_text(doc.get(text_field, ""), mode="document")
             for doc in documents
         ]
 
         # 使用 bm25s 构建索引
-        self._bm25 = bm25s.BM25(method="lucene", k1=K1, b=B)
+        self._bm25 = bm25s.BM25(
+            method=settings.BM25_METHOD,
+            k1=settings.BM25_K1,
+            b=settings.BM25_B,
+        )
         self._bm25.index(self.doc_tokens, show_progress=False)
 
         self.initialized = True
@@ -156,7 +79,7 @@ class BM25Index:
         if not self.initialized or not self._bm25 or not query or not query.strip():
             return []
 
-        query_tokens = tokenize_medical_text(query)
+        query_tokens = tokenize_medical_text(query, mode="query")
         if not query_tokens:
             return []
 

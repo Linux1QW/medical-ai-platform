@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # RAG 索引版本
     ACTIVE_INDEX_VERSION: str = "rag-v1"    # 当前活跃版本
 
+    # BM25 词法检索
+    BM25_K1: float = 1.2
+    BM25_B: float = 0.8
+    BM25_METHOD: str = "lucene"
+    BM25_ENABLE_CJK_BIGRAM: bool = False
+    BM25_TOKENIZER_VERSION: str = "medical-lexical-v2"
+    BM25_HEADING_BOOST: int = 2
+    BM25_ENTITY_BOOST: int = 3
+
     # ── Metadata 预过滤（按疾病/关键词缩小候选集，降噪提精度）──
     # disease_tags 等以 JSON 字符串存储，ChromaDB where 无法子串匹配，
     # 故改用 where_document={"$contains": ...} 对文档内容做子串过滤；

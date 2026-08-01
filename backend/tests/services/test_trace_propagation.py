@@ -10,19 +10,16 @@
 - 上下文绑定和恢复
 """
 
-import uuid
-import pytest
 
 from app.services.observability.trace_context import (
     TraceContext,
     bind_trace_context,
     get_current_trace_context,
+    new_trace_id,
     restore_trace_context,
     sanitize_for_observability,
     serialize_trace_context,
-    new_trace_id,
 )
-
 
 # ── TraceContext 基础 ─────────────────────────────────────────────────────
 
@@ -177,7 +174,7 @@ class TestSanitization:
 class TestContextBinding:
     def test_bind_and_get(self):
         ctx = TraceContext(trace_id="bind-test", run_id="run-bind")
-        token = bind_trace_context(ctx)
+        bind_trace_context(ctx)
         current = get_current_trace_context()
         assert current is not None
         assert current.trace_id == "bind-test"

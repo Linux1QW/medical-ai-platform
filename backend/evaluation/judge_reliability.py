@@ -19,7 +19,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-
 # ── JudgeRun 数据模型 ────────────────────────────────────────────────────────
 
 
@@ -104,7 +103,7 @@ def evaluate_judge_reliability(
     # 人工标签一致率
     human_agreement: Optional[float] = None
     if human_labels is not None and len(human_labels) == len(runs):
-        diffs = [abs(r.score - h) for r, h in zip(runs, human_labels)]
+        diffs = [abs(r.score - h) for r, h in zip(runs, human_labels, strict=True)]
         avg_diff = statistics.mean(diffs)
         # 差异 0 → 1.0；差异 50+ → 0.0
         human_agreement = max(0.0, 1.0 - avg_diff / max_possible_std)

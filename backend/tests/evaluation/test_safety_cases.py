@@ -14,11 +14,9 @@ from pydantic import ValidationError
 from evaluation.safety_cases import (
     RiskFinding,
     RiskType,
-    SafetyDecision,
     calculate_safety_metrics,
     evaluate_safety_case,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

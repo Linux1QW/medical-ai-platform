@@ -10,8 +10,6 @@
 6. rubric v1 JSON 加载合法
 7. AgentResultEnvelope 兼容 rubric_items 字段
 """
-import json
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -24,7 +22,6 @@ from evaluation.rubric import (
     load_rubric_v1,
     validate_rubric_items,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

@@ -4,9 +4,9 @@
 验证前 16 个 Task 组合后，平台能完成真实的评估、复核、回归和报告展示闭环。
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
 
 # ── 场景 1: ReportManifest 完整性 ─────────────────────────────────────────
 
@@ -14,7 +14,7 @@ from datetime import datetime
 class TestE2E_Manifest:
     def test_manifest_round_trip(self):
         """新报告 100% 带 manifest"""
-        from evaluation.report_schema import ReportManifest, ReportKind
+        from evaluation.report_schema import ReportKind, ReportManifest
         manifest = ReportManifest(
             report_kind=ReportKind.REGRESSION,
             report_id="e2e-rpt-001",
@@ -38,7 +38,7 @@ class TestE2E_Manifest:
 class TestE2E_Gate:
     def test_smoke_returns_skip(self):
         """3 例 smoke 带完整 manifest 返回 SKIP"""
-        from evaluation.gate import evaluate_report_gate, GateDecision
+        from evaluation.gate import GateDecision, evaluate_report_gate
         report = {
             "manifest": {
                 "report_kind": "smoke",
@@ -60,14 +60,14 @@ class TestE2E_Gate:
 
     def test_legacy_returns_invalid(self):
         """无 manifest 旧报告返回 INVALID"""
-        from evaluation.gate import evaluate_report_gate, GateDecision
+        from evaluation.gate import GateDecision, evaluate_report_gate
         report = {"cases": list(range(18))}
         decision, _ = evaluate_report_gate(report, {})
         assert decision == GateDecision.INVALID
 
     def test_exit_code_mapping(self):
         """退出码 0/1/2/3 完整映射"""
-        from evaluation.gate import decision_to_exit_code, GateDecision
+        from evaluation.gate import GateDecision, decision_to_exit_code
         assert decision_to_exit_code(GateDecision.PASS) == 0
         assert decision_to_exit_code(GateDecision.FAIL) == 1
         assert decision_to_exit_code(GateDecision.SKIP) == 2
@@ -163,7 +163,7 @@ class TestE2E_Citation:
 class TestE2E_Claims:
     def test_unsupported_treatment_needs_review(self):
         """无证据治疗 claim 必须复核"""
-        from evaluation.rag_claims import validate_claim_evidence, ClinicalClaim, ClaimStatus
+        from evaluation.rag_claims import ClaimStatus, ClinicalClaim, validate_claim_evidence
         claim = ClinicalClaim(
             claim_id="c1", claim_type="treatment", text="使用阿莫西林",
             status=ClaimStatus.UNSUPPORTED, evidence=[], needs_review=False,
@@ -179,7 +179,7 @@ class TestE2E_Claims:
 class TestE2E_DAG:
     def test_cycle_detected(self):
         """循环依赖被拒绝"""
-        from evaluation.plan_dag import validate_plan_dag, PlanStep, StepStatus
+        from evaluation.plan_dag import PlanStep, StepStatus, validate_plan_dag
         steps = [
             PlanStep(step_id="a", depends_on=["b"], status=StepStatus.PENDING),
             PlanStep(step_id="b", depends_on=["a"], status=StepStatus.PENDING),
@@ -189,7 +189,7 @@ class TestE2E_DAG:
 
     def test_ready_steps(self):
         """依赖完成后变为 ready"""
-        from evaluation.plan_dag import ready_steps, PlanStep, StepStatus
+        from evaluation.plan_dag import PlanStep, StepStatus, ready_steps
         steps = [
             PlanStep(step_id="knowledge", depends_on=[], status=StepStatus.SUCCEEDED),
             PlanStep(step_id="diagnosis", depends_on=["knowledge"], status=StepStatus.PENDING),
@@ -204,7 +204,7 @@ class TestE2E_DAG:
 class TestE2E_Budget:
     def test_concurrent_limit_enforced(self):
         """并发超过上限时拒绝"""
-        from app.services.run_budget import RunBudget, RunBudgetManager, BudgetDecision
+        from app.services.run_budget import BudgetDecision, RunBudget, RunBudgetManager
         mgr = RunBudgetManager(RunBudget(max_parallel_agents=2))
         mgr.acquire_agent_slot("run-1", "inquiry")
         mgr.acquire_agent_slot("run-1", "knowledge")
@@ -213,7 +213,7 @@ class TestE2E_Budget:
 
     def test_safety_exempt(self):
         """安全路径豁免并发上限"""
-        from app.services.run_budget import RunBudget, RunBudgetManager, BudgetDecision
+        from app.services.run_budget import BudgetDecision, RunBudget, RunBudgetManager
         mgr = RunBudgetManager(RunBudget(max_parallel_agents=1))
         mgr.acquire_agent_slot("run-1", "inquiry")
         d = mgr.acquire_agent_slot("run-1", "safety")
@@ -227,7 +227,9 @@ class TestE2E_Trace:
     def test_trace_round_trip(self):
         """Celery payload 传播 trace context"""
         from app.services.observability.trace_context import (
-            TraceContext, serialize_trace_context, restore_trace_context,
+            TraceContext,
+            restore_trace_context,
+            serialize_trace_context,
         )
         ctx = TraceContext(trace_id="e2e-trace", run_id="run-e2e", attempt=1)
         payload = serialize_trace_context(ctx)
@@ -238,7 +240,9 @@ class TestE2E_Trace:
     def test_retry_preserves_trace_id(self):
         """重试后 trace_id 不变、attempt 增加"""
         from app.services.observability.trace_context import (
-            TraceContext, serialize_trace_context, restore_trace_context,
+            TraceContext,
+            restore_trace_context,
+            serialize_trace_context,
         )
         ctx = TraceContext(trace_id="same-trace", run_id="run-1", attempt=1)
         payload = serialize_trace_context(ctx)
@@ -260,14 +264,14 @@ class TestE2E_Trace:
 class TestE2E_DataGovernance:
     def test_redact_pii(self):
         """姓名、电话、身份证被脱敏"""
-        from app.evaluation.data_governance import redact_trace, DataClassification
+        from app.evaluation.data_governance import DataClassification, redact_trace
         payload = {"text": "患者张三丰，电话13800001111"}
         result = redact_trace(payload, DataClassification.P1_MASKED)
         assert "13800001111" not in str(result)
 
     def test_doctor_cannot_export_p0(self):
         """普通用户不能导出 P0 数据"""
-        from app.evaluation.data_governance import validate_export_scope, DataClassification
+        from app.evaluation.data_governance import DataClassification, validate_export_scope
         with pytest.raises(PermissionError):
             validate_export_scope({"role": "doctor"}, DataClassification.P0_RAW)
 
@@ -279,7 +283,9 @@ class TestE2E_Benchmark:
     def test_duplicate_case_rejected(self):
         """重复 case_id 被拒绝"""
         from app.evaluation.benchmark import (
-            BenchmarkCase, BenchmarkManifest, validate_benchmark_manifest,
+            BenchmarkCase,
+            BenchmarkManifest,
+            validate_benchmark_manifest,
         )
         manifest = BenchmarkManifest(
             version="v1", rubric_version="v1",
@@ -294,7 +300,9 @@ class TestE2E_Benchmark:
     def test_safety_without_red_flags_rejected(self):
         """safety case 缺红旗被拒绝"""
         from app.evaluation.benchmark import (
-            BenchmarkCase, BenchmarkManifest, validate_benchmark_manifest,
+            BenchmarkCase,
+            BenchmarkManifest,
+            validate_benchmark_manifest,
         )
         manifest = BenchmarkManifest(
             version="v1", rubric_version="v1",

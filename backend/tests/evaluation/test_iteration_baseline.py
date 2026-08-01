@@ -13,7 +13,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -97,7 +96,6 @@ class TestDimensionScoreSemantics:
         """needs_review 状态下 total_score 必须为 None，不得为 0"""
         # 从 graph.py finalize_needs_review 节点逻辑验证
         # finalize_needs_review 显式设置 total_score=None
-        import ast
         graph_path = BACKEND_DIR / "app" / "orchestration" / "graph.py"
         source = graph_path.read_text(encoding="utf-8")
         assert '"total_score": None' in source

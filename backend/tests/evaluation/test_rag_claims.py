@@ -12,13 +12,12 @@ import pytest
 from pydantic import ValidationError
 
 from evaluation.rag_claims import (
-    ClinicalClaim,
     ClaimStatus,
+    ClinicalClaim,
     EvidenceLink,
     calculate_claim_metrics,
     validate_claim_evidence,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

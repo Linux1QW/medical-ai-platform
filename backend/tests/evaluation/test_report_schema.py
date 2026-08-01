@@ -7,8 +7,6 @@
 3. 版本字段缺失不得静默通过
 4. case_count 必须与 cases 数量一致
 """
-import json
-from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -19,7 +17,6 @@ from evaluation.report_schema import (
     load_report_manifest,
     validate_report_manifest,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

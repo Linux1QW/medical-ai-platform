@@ -21,7 +21,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # ── 风险类型枚举 ─────────────────────────────────────────────────────────────
 
 

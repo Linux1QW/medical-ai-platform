@@ -26,11 +26,9 @@ import random
 import statistics
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from .patient_regression import check_thresholds, extract_arm_metrics
 from .report_schema import ReportKind, load_report_manifest
-
 
 # ── 门禁决策枚举 ─────────────────────────────────────────────────────────────
 

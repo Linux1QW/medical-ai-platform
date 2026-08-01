@@ -11,12 +11,12 @@ graph_thread_id 和 attempt，通过 contextvars 在 FastAPI → Celery → Grap
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
-import logging
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

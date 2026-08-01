@@ -20,7 +20,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-
 # ── Step 状态枚举 ────────────────────────────────────────────────────────────
 
 
@@ -153,7 +152,7 @@ def mark_step_status(
 
     # 如果失败，将依赖者标记为 blocked
     if status == StepStatus.FAILED:
-        for sid, s in steps.items():
+        for _sid, s in steps.items():
             if step_id in s.depends_on and s.status == StepStatus.PENDING:
                 s.status = StepStatus.BLOCKED
 

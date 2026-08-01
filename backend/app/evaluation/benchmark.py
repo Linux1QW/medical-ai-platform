@@ -14,7 +14,6 @@ BenchmarkManifest 管理版本和分割，validate_benchmark_manifest 执行完�
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import random
 from dataclasses import dataclass, field

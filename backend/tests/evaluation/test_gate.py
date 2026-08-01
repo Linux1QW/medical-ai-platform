@@ -11,11 +11,7 @@
 7. pre-push 退出码 3 INVALID 阻断
 """
 import json
-import math
 import statistics
-from pathlib import Path
-
-import pytest
 
 from evaluation.gate import (
     GateDecision,
@@ -23,8 +19,6 @@ from evaluation.gate import (
     evaluate_report_gate,
     select_gate_report,
 )
-from evaluation.report_schema import ReportKind, ReportManifest
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

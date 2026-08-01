@@ -9,14 +9,11 @@
 5. needs_review 触发条件
 """
 import pytest
-from pydantic import ValidationError
 
 from evaluation.judge_reliability import (
-    JudgeReliability,
     JudgeRun,
     evaluate_judge_reliability,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

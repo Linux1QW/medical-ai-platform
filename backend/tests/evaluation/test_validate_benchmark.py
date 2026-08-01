@@ -10,16 +10,14 @@
 - gold citation 不存在时报错
 """
 
-import pytest
 
 from app.evaluation.benchmark import (
+    VALID_SPLITS,
     BenchmarkCase,
     BenchmarkManifest,
-    validate_benchmark_manifest,
     split_cases,
-    VALID_SPLITS,
+    validate_benchmark_manifest,
 )
-
 
 # ── BenchmarkCase 基础 ────────────────────────────────────────────────────
 

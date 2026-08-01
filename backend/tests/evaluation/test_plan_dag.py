@@ -8,16 +8,14 @@
 4. 依赖失败传播为 blocked
 5. reducer 汇聚结果顺序稳定
 """
-import pytest
 
 from evaluation.plan_dag import (
     PlanStep,
     StepStatus,
+    mark_step_status,
     ready_steps,
     validate_plan_dag,
-    mark_step_status,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

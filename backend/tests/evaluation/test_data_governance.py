@@ -10,20 +10,17 @@
 - 审计日志不包含密码/token
 """
 
+from datetime import datetime
+
 import pytest
-from datetime import datetime, timedelta
 
 from app.evaluation.data_governance import (
-    DataClassification,
-    TraceRedactor,
-    ExportValidator,
-    RetentionPolicy,
-    redact_trace,
-    purge_expired_trace,
-    validate_export_scope,
     CLASSIFICATION_CONFIG,
+    DataClassification,
+    purge_expired_trace,
+    redact_trace,
+    validate_export_scope,
 )
-
 
 # ── DataClassification ─────────────────────────────────────────────────────
 

@@ -11,13 +11,12 @@
 import pytest
 
 from evaluation.citation_registry import (
-    SourceMetadata,
     SourceAuthority,
-    stable_citation_id,
-    resolve_source_metadata,
+    SourceMetadata,
     load_source_registry,
+    resolve_source_metadata,
+    stable_citation_id,
 )
-
 
 # ── 1. stable_citation_id ───────────────────────────────────────────────────
 
@@ -70,7 +69,7 @@ class TestSourceMetadata:
         assert m.authority == SourceAuthority.HIGH
 
     def test_invalid_authority_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             SourceMetadata(
                 source_id="src_001",
                 source_type="guideline",

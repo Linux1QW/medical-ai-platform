@@ -12,18 +12,15 @@
 - 预算超限转 degraded 状态
 """
 
-import asyncio
-import time
 import pytest
 
 from app.services.run_budget import (
     BudgetDecision,
+    CacheKeyBuilder,
     RunBudget,
     RunBudgetManager,
-    CacheKeyBuilder,
     UsageRecord,
 )
-
 
 # ── RunBudget 配置 ─────────────────────────────────────────────────────────
 

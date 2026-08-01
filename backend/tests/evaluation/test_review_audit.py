@@ -9,7 +9,6 @@
 5. 复核调整可还原
 """
 import pytest
-from pydantic import ValidationError
 
 from evaluation.review_audit import (
     ReviewDecision,
@@ -18,7 +17,6 @@ from evaluation.review_audit import (
     create_review_snapshot,
     validate_review_transition,
 )
-
 
 # ── 辅助 ────────────────────────────────────────────────────────────────────
 

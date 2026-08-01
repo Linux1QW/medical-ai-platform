@@ -13,6 +13,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - 单测：`test_prompt_manager.py`（18）、`test_llm_adapter.py`（17）
 - 文档：`docs/prompt-and-provider-adapter.md`
 
+### Added - 临床评估可靠性迭代（Task 0 ~ Task 16）
+
+- **统一报告协议 (ReportManifest)**：Pydantic 模型统一报告元数据，区分 smoke/regression/benchmark 报告类型
+- **回归门禁与退出码协议**：PASS=0 / FAIL=1 / SKIP=2 / INVALID=3 四级退出码
+- **五维原子 Rubric 评估体系**：每维度独立评分（pass/partial/fail/unassessed/not_applicable），unassessed ≠ 0 分
+- **Judge 稳定性校准**：AB 对比验证评分一致性，Bootstrap 置信区间
+- **安全红旗回归集**：高危症状 fail-closed 机制，LLM 失败 + 无规则匹配 → 自动转人工复核
+- **人工复核状态机**：pending → in_review → approved/rejected/returned 合法迁移验证
+- **稳定 Citation ID**：基于 (kb_version + doc_id + chunk_id + content_hash) 的 SHA-256 确定性 ID
+- **Claim-Evidence Graph**：治疗/诊断 claim 必须附带证据链接，unsupported claim 自动标记需复核
+- **PlanStep DAG 通用校验**：依赖图环检测 + ready 步骤计算
+- **并发/Token/成本预算控制**：RunBudget 限制并发 Agent 数 / Token 总量 / 成本上限，安全路径豁免
+- **全链路 Trace 与可观测性**：TraceContext 贯穿 Celery 重试，PII 自动脱敏
+- **前端证据化报告组件**：RubricItemList + EvidenceTrace + RiskBanner
+- **人工复核工作台**：复核队列排序/筛选/详情弹窗/决策表单
+- **可版本化临床能力基准集**：BenchmarkManifest 管理 dev/test/regression/safety/benchmark 分组
+- **数据分级与生命周期管控**：P0-P3 四级分类，按级别设定保留期限，过期 trace 自动清理
+- **端到端发布验收测试**：25 个 E2E 场景覆盖全部迭代任务
+
+### Changed
+- 后端测试从 579 用例增至 1093 用例（+100%）
+- 前端测试覆盖 64 用例（9 个测试文件）
+- 新增 `tests/e2e/` 端到端验收测试目录
+
 ### Fixed
 - 修复 failover「半接线」缺陷：熔断切换 Provider 时真实重建底层 LLM 客户端（此前仅更新索引/计数，请求仍打向原端点）
 

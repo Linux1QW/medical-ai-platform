@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 import bm25s
 
 from app.core.config import settings
+from app.services.rag.lexical.query_expansion import expand_lexical_query
 from app.services.rag.lexical.tokenizer import tokenize_medical_text
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ class BM25Index:
             return []
 
         query_tokens = tokenize_medical_text(query, mode="query")
+        query_tokens = expand_lexical_query(query, query_tokens)
         if not query_tokens:
             return []
 

@@ -8,7 +8,6 @@ from typing import Any, Literal
 from app.core.config import settings
 from app.services.observability.langfuse_client import get_tracer
 from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
-from app.services.rag.entity_resolver import normalize_query as _entity_normalize_query
 from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
 from app.services.rag.retriever.fusion import RRF_K, hybrid_recall
 from app.services.rag.retriever.hyde import hyde_retrieve
@@ -283,9 +282,7 @@ async def tiered_retrieve(  # noqa: C901
     trace["levels_attempted"].append("base")
     fusion_info = None  # 记录融合元信息
     for query in queries:
-        # 实体归一化：将别名映射为规范名，增强 BM25 匹配
-        normalized_text = _entity_normalize_query(query.text)
-        fused, fusion_meta = await hybrid_recall(normalized_text, top_k=top_k_per_query)
+        fused, fusion_meta = await hybrid_recall(query.text, top_k=top_k_per_query)
         fusion_info = fusion_meta
 
         if not fused:

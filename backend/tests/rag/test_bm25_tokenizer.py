@@ -3,6 +3,7 @@
 import pytest
 
 from app.services.rag.lexical.tokenizer import tokenize_medical_text
+from app.services.rag.lexical.query_expansion import expand_lexical_query
 
 
 @pytest.mark.parametrize(
@@ -60,3 +61,20 @@ def test_protected_tokens_are_stably_deduplicated():
 
     assert tokens.count("gene:EGFR") == 1
     assert tokens.count("100mg") == 1
+
+
+def test_entity_expansion_preserves_tokens_and_adds_normalized_name_and_codes(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.rag.lexical.query_expansion.extract_entities",
+        lambda text: [
+            {
+                "normalized": "急性心肌梗死",
+                "icd10": "I21.9",
+                "icd9cm3": "36.06",
+            }
+        ],
+    )
+
+    tokens = expand_lexical_query("心梗治疗", ["心梗", "治疗", "心梗"])
+
+    assert tokens == ["心梗", "治疗", "急性心肌梗死", "icd10:I21.9", "icd9cm3:36.06"]

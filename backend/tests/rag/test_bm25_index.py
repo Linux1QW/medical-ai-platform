@@ -1,7 +1,21 @@
-"""Regression tests for the BM25 medical tokenizer."""
+"""Regression tests for the BM25 medical tokenizer and registry."""
 
-from app.services.rag.bm25_search import tokenize_medical_text
+import pytest
+
+from app.services.rag import bm25_search
+from app.services.rag.bm25_search import BM25Index, tokenize_medical_text
+from app.services.rag.lexical.artifacts import (
+    BM25ArtifactMismatch,
+    BM25ArtifactNotFound,
+)
 from scripts.eval import evaluate_bm25
+
+
+@pytest.fixture(autouse=True)
+def reset_bm25_registry(monkeypatch):
+    monkeypatch.setattr(bm25_search, "_bm25_index", None)
+    monkeypatch.setattr(bm25_search, "_bm25_index_generation", None)
+    monkeypatch.setattr(bm25_search, "_bm25_indexes", {})
 
 
 def test_egfr_and_egfr_renal_are_distinct():
@@ -45,3 +59,115 @@ def test_active_version_uses_resolved_collection_before_settings_fallback():
     )
 
     assert version == "rag-20260801"
+
+
+def test_rebuild_validation_failure_does_not_replace_active_index(
+    tmp_path, monkeypatch
+):
+    active = BM25Index()
+    active.build([{"id": "old", "text": "EGFR肺癌"}])
+    bm25_search._bm25_index = active
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes["g-old"] = active
+
+    monkeypatch.setattr(
+        "app.services.rag.lexical.artifacts.load_bm25_artifact",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BM25ArtifactMismatch("bad manifest")
+        ),
+    )
+    legacy_called = False
+
+    def legacy_build():
+        nonlocal legacy_called
+        legacy_called = True
+        return BM25Index()
+
+    monkeypatch.setattr(bm25_search, "_build_legacy_bm25_index", legacy_build)
+
+    bm25_search.rebuild_bm25_index("g-bad", tmp_path)
+
+    assert bm25_search._bm25_index is active
+    assert "g-bad" not in bm25_search._bm25_indexes
+    assert not legacy_called
+
+
+def test_get_validation_failure_keeps_serving_active_index(tmp_path, monkeypatch):
+    active = BM25Index()
+    active.build([{"id": "old", "text": "EGFR肺癌"}])
+    bm25_search._bm25_index = active
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes["g-old"] = active
+    monkeypatch.setattr(bm25_search.settings, "ACTIVE_INDEX_VERSION", "g-bad")
+    monkeypatch.setattr(
+        "app.services.rag.lexical.artifacts.load_bm25_artifact",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BM25ArtifactMismatch("bad manifest")
+        ),
+    )
+
+    returned = bm25_search.get_bm25_index(artifact_root=tmp_path)
+
+    assert returned is active
+    assert "g-bad" not in bm25_search._bm25_indexes
+
+
+def test_get_failed_legacy_build_keeps_serving_active_index(tmp_path, monkeypatch):
+    active = BM25Index()
+    active.build([{"id": "old", "text": "EGFR肺癌"}])
+    bm25_search._bm25_index = active
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes["g-old"] = active
+    monkeypatch.setattr(bm25_search.settings, "ACTIVE_INDEX_VERSION", "g-new")
+    monkeypatch.setattr(
+        "app.services.rag.lexical.artifacts.load_bm25_artifact",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BM25ArtifactNotFound("missing")
+        ),
+    )
+    monkeypatch.setattr(bm25_search, "_build_legacy_bm25_index", BM25Index)
+
+    returned = bm25_search.get_bm25_index(artifact_root=tmp_path)
+
+    assert returned is active
+    assert "g-new" not in bm25_search._bm25_indexes
+
+
+def test_rebuild_atomically_swaps_in_valid_generation(tmp_path, monkeypatch):
+    from app.services.rag.lexical.artifacts import build_bm25_artifact
+
+    active = BM25Index()
+    active.build([{"id": "old", "text": "高血压"}])
+    bm25_search._bm25_index = active
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes["g-old"] = active
+    build_bm25_artifact(
+        "g-new",
+        [{"id": "new", "text": "EGFR肺癌", "source": "new.pdf"}],
+        tmp_path,
+    )
+    monkeypatch.setattr(bm25_search.settings, "ACTIVE_INDEX_VERSION", "g-new")
+
+    bm25_search.rebuild_bm25_index("g-new", tmp_path)
+
+    installed = bm25_search._bm25_indexes["g-new"]
+    assert installed is bm25_search._bm25_index
+    assert installed is not active
+    assert installed.search("EGFR", 1)[0]["id"] == "new"
+
+
+def test_default_get_promotes_preloaded_generation_to_active_alias(monkeypatch):
+    old = BM25Index()
+    old.build([{"id": "old", "text": "高血压"}])
+    preloaded = BM25Index()
+    preloaded.build([{"id": "new", "text": "EGFR肺癌"}])
+    bm25_search._bm25_index = old
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes.update({"g-old": old, "g-new": preloaded})
+    monkeypatch.setattr(bm25_search.settings, "ACTIVE_INDEX_VERSION", "g-new")
+
+    returned = bm25_search.get_bm25_index()
+
+    assert returned is preloaded
+    assert bm25_search._bm25_index is preloaded
+    assert bm25_search._bm25_index_generation == "g-new"

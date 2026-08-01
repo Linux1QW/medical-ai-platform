@@ -1,8 +1,10 @@
 import json
 import logging
 import os
+from pathlib import Path
 from typing import List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -72,8 +74,11 @@ class Settings(BaseSettings):
     BM25_METHOD: str = "lucene"
     BM25_ENABLE_CJK_BIGRAM: bool = False
     BM25_TOKENIZER_VERSION: str = "medical-lexical-v2"
-    BM25_HEADING_BOOST: int = 2
-    BM25_ENTITY_BOOST: int = 3
+    BM25_HEADING_BOOST: int = Field(default=2, ge=1, le=3)
+    BM25_ENTITY_BOOST: int = Field(default=3, ge=1, le=3)
+    BM25_ARTIFACT_ROOT: str = str(
+        Path(__file__).resolve().parents[2] / "data" / "rag_indexes"
+    )
 
     # ── Metadata 预过滤（按疾病/关键词缩小候选集，降噪提精度）──
     # disease_tags 等以 JSON 字符串存储，ChromaDB where 无法子串匹配，

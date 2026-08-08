@@ -154,6 +154,12 @@ _bm25_index_generation: Optional[str] = None
 
 
 def _active_generation() -> str:
+    configured_generation = getattr(settings, "ACTIVE_INDEX_VERSION", None)
+    if configured_generation:
+        return str(configured_generation)
+    with _registry_lock:
+        if _bm25_index_generation:
+            return _bm25_index_generation
     return str(getattr(settings, "ACTIVE_INDEX_VERSION", "rag-v1"))
 
 
@@ -345,6 +351,24 @@ def _try_load_documents() -> None:
         _bm25_index_generation = generation
 
 
+def install_bm25_index(generation: str, index: BM25Index) -> BM25Index:
+    """Atomically install a validated generation for this Worker.
+
+    Loading and validation happen before this function is called.  Keeping the
+    final registry update in one lock-protected operation means readers either
+    retain the old index or observe the complete new generation.
+    """
+    global _bm25_index, _bm25_index_generation
+
+    if not index.initialized:
+        raise ValueError(f"cannot install an uninitialized BM25 generation: {generation}")
+    with _registry_lock:
+        _bm25_indexes[generation] = index
+        _bm25_index = index
+        _bm25_index_generation = generation
+    return index
+
+
 def rebuild_bm25_index(
     generation: Optional[str] = None,
     artifact_root: Optional[Path] = None,
@@ -370,8 +394,8 @@ def rebuild_bm25_index(
         )
         return
 
-    with _registry_lock:
-        _bm25_indexes[selected_generation] = candidate
-        if generation is None or selected_generation == _active_generation():
-            _bm25_index = candidate
-            _bm25_index_generation = selected_generation
+    if generation is None or selected_generation == _active_generation():
+        install_bm25_index(selected_generation, candidate)
+    else:
+        with _registry_lock:
+            _bm25_indexes[selected_generation] = candidate

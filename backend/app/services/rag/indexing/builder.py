@@ -83,6 +83,8 @@ def build_candidate_snapshot(
 
 async def _extract_candidate_records(
     document_paths: List[Path],
+    *,
+    source_names: Optional[Dict[Path, str]] = None,
 ) -> List[dict[str, Any]]:
     chunks: List[dict[str, Any]] = []
     source_seq_counter: Dict[str, int] = {}
@@ -92,7 +94,7 @@ async def _extract_candidate_records(
         for page_info in pages:
             for position, item in enumerate(_extract_chunks_from_page(page_info)):
                 text = item["text"]
-                source = page_info["source"]
+                source = (source_names or {}).get(document_path, page_info["source"])
                 chunk_seq = source_seq_counter.get(source, 0)
                 source_seq_counter[source] = chunk_seq + 1
                 chunks.append(
@@ -241,6 +243,7 @@ def _publish_candidate_generation(
 async def build_full_index_candidate(
     document_paths: Optional[List[Path]] = None,
     *,
+    source_names: Optional[Dict[Path, str]] = None,
     artifact_root: Optional[Path] = None,
     created_at: Optional[datetime] = None,
 ) -> RAGIndexManifest:
@@ -254,7 +257,7 @@ async def build_full_index_candidate(
         )
     if not paths:
         raise ValueError("no supported source documents found")
-    records = await _extract_candidate_records(paths)
+    records = await _extract_candidate_records(paths, source_names=source_names)
     return _publish_candidate_generation(
         records,
         artifact_root=artifact_root,
@@ -267,6 +270,7 @@ async def build_incremental_index_candidate(
     *,
     active_generation: Optional[str] = None,
     force_replace: bool = False,
+    source_name: Optional[str] = None,
     artifact_root: Optional[Path] = None,
     created_at: Optional[datetime] = None,
 ) -> RAGIndexManifest:
@@ -281,11 +285,14 @@ async def build_incremental_index_candidate(
     active_documents = get_medical_store().export_generation_documents(
         active_generation
     )
-    incoming = await _extract_candidate_records([document_path])
+    incoming = await _extract_candidate_records(
+        [document_path],
+        source_names={document_path: source_name} if source_name else None,
+    )
     snapshot = build_candidate_snapshot(
         active_documents,
         incoming,
-        source_name=document_path.name,
+        source_name=source_name or document_path.name,
         force_replace=force_replace,
     )
     return _publish_candidate_generation(

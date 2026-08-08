@@ -243,3 +243,128 @@ async def test_activation_validates_and_loads_enabled_sparse_artifact(
 
     load_bm25.assert_called_once_with(generation, tmp_path)
     load_sparse.assert_called_once_with(generation, tmp_path, install=True)
+
+
+def test_task_uses_fixed_index_build_phases():
+    from app.tasks.rag_index_task import INDEX_BUILD_PHASES
+
+    assert INDEX_BUILD_PHASES == (
+        "snapshot",
+        "parse",
+        "chunk",
+        "embed",
+        "chroma",
+        "bm25",
+        "sparse",
+        "validate",
+        "switch",
+        "publish",
+    )
+
+
+def test_redis_index_lock_uses_task_id_and_renewable_ttl():
+    from app.tasks.rag_index_task import (
+        RAG_INDEX_BUILD_LOCK,
+        RedisIndexBuildLock,
+    )
+
+    redis = Mock()
+    redis.set.return_value = True
+    redis.eval.return_value = 1
+    lock = RedisIndexBuildLock(redis, ttl=90)
+
+    assert lock.acquire("task-1") is True
+    assert redis.set.call_args.args[:2] == (RAG_INDEX_BUILD_LOCK, "task-1")
+    assert redis.set.call_args.kwargs == {"nx": True, "ex": 90}
+    assert lock.renew("task-1") is True
+    assert lock.release("task-1") is True
+    assert redis.eval.call_count == 2
+
+
+def test_switch_event_contains_generation_previous_and_manifest_digest():
+    import json
+
+    from app.services.rag.indexing.versioning import publish_index_switched
+
+    redis = Mock()
+    redis.publish.return_value = 1
+
+    assert publish_index_switched(
+        "rag-new", "rag-old", "a" * 64, redis=redis
+    ) is True
+
+    channel, raw_payload = redis.publish.call_args.args
+    assert channel == "rag:index-switched"
+    assert json.loads(raw_payload) == {
+        "generation": "rag-new",
+        "previous": "rag-old",
+        "manifest_sha256": "a" * 64,
+    }
+
+
+def test_worker_loads_and_installs_generation_atomically(
+    candidate_manifest, monkeypatch, tmp_path
+):
+    from app.services.rag.indexing import versioning
+
+    collection = Mock()
+    collection.count.return_value = candidate_manifest.chunk_count
+    store = Mock()
+    store.collection = object()
+    store.get_collection_for_generation.return_value = collection
+    loaded_bm25 = Mock(initialized=True)
+    installed = Mock()
+    monkeypatch.setattr(
+        versioning,
+        "load_rag_index_manifest",
+        lambda *_args, **_kwargs: candidate_manifest,
+        raising=False,
+    )
+    monkeypatch.setattr(versioning, "get_medical_store", lambda: store)
+    monkeypatch.setattr(versioning, "load_bm25_artifact", lambda *args, **kwargs: loaded_bm25)
+    monkeypatch.setattr(versioning, "install_bm25_index", installed, raising=False)
+
+    result = versioning.load_generation_for_worker(
+        candidate_manifest.index_generation,
+        artifact_root=tmp_path,
+    )
+
+    assert result == candidate_manifest.index_generation
+    installed.assert_called_once_with(candidate_manifest.index_generation, loaded_bm25)
+    assert store.collection is collection
+
+
+def test_worker_load_failure_keeps_old_local_reference(
+    candidate_manifest, monkeypatch, tmp_path
+):
+    from app.services.rag.indexing import versioning
+
+    old_collection = object()
+    collection = Mock()
+    collection.count.return_value = candidate_manifest.chunk_count
+    store = Mock()
+    store.collection = old_collection
+    store.get_collection_for_generation.return_value = collection
+    monkeypatch.setattr(
+        versioning,
+        "load_rag_index_manifest",
+        lambda *_args, **_kwargs: candidate_manifest,
+        raising=False,
+    )
+    monkeypatch.setattr(versioning, "get_medical_store", lambda: store)
+    monkeypatch.setattr(
+        versioning,
+        "load_bm25_artifact",
+        Mock(side_effect=RuntimeError("bad mmap")),
+    )
+    installed = Mock()
+    monkeypatch.setattr(versioning, "install_bm25_index", installed, raising=False)
+
+    with pytest.raises(RuntimeError, match="bad mmap"):
+        versioning.load_generation_for_worker(
+            candidate_manifest.index_generation,
+            artifact_root=tmp_path,
+        )
+
+    installed.assert_not_called()
+    assert store.collection is old_collection

@@ -2,15 +2,22 @@
 """索引版本管理 — 版本切换、健康检查与自动回滚"""
 
 import asyncio
+import hashlib
+import json
 import logging
+import threading
 from typing import Any, Optional, cast
 
+import redis
 import redis.asyncio as aioredis
 
 from app.core.config import settings
+from app.services.rag.bm25_search import install_bm25_index
 from app.services.rag.indexing.manifest import (
     IndexGenerationMismatch,
     RAGIndexManifest,
+    load_rag_index_manifest,
+    manifest_path,
     validate_candidate_manifest,
 )
 from app.services.rag.lexical.artifacts import load_bm25_artifact
@@ -20,6 +27,7 @@ from app.services.rag.sparse_search import load_sparse_artifact
 logger = logging.getLogger(__name__)
 
 ACTIVE_GENERATION_KEY = "rag:active_generation"
+INDEX_SWITCHED_CHANNEL = "rag:index-switched"
 _CAS_ACTIVE_GENERATION = """
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
@@ -29,15 +37,150 @@ end
 return 0
 """
 _generation_redis: Optional[aioredis.Redis] = None
+_generation_redis_loop: Optional[asyncio.AbstractEventLoop] = None
+_worker_reload_lock = threading.RLock()
+_worker_listener_stop: Optional[threading.Event] = None
+_worker_listener_thread: Optional[threading.Thread] = None
 
 
 class ActiveGenerationConflict(RuntimeError):
     """Raised when another publisher wins the active pointer race."""
 
 
+def publish_index_switched(
+    generation: str,
+    previous: Optional[str],
+    manifest_sha256: str,
+    *,
+    redis: Any = None,
+) -> bool:
+    """Publish a validated generation switch for every application Worker."""
+    client = redis or _get_sync_redis()
+    payload = json.dumps(
+        {
+            "generation": generation,
+            "previous": previous,
+            "manifest_sha256": manifest_sha256,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    client.publish(INDEX_SWITCHED_CHANNEL, payload)
+    return True
+
+
+def _get_sync_redis() -> Any:
+    return redis.Redis.from_url(
+        settings.REDIS_CHECKPOINT_URL,
+        decode_responses=True,
+        socket_connect_timeout=3.0,
+        socket_timeout=3.0,
+    )
+
+
+def load_generation_for_worker(
+    generation: str,
+    *,
+    manifest_sha256: Optional[str] = None,
+    artifact_root: Any = None,
+) -> str:
+    """Validate and atomically install one generation in this Worker.
+
+    Every potentially failing load occurs before the local references are
+    changed.  A failed event therefore leaves the old BM25 and Chroma objects
+    serving requests.
+    """
+    manifest = load_rag_index_manifest(generation, artifact_root)
+    validate_candidate_manifest(manifest)
+    if manifest_sha256 is not None:
+        actual_digest = hashlib.sha256(
+            manifest_path(generation, artifact_root).read_bytes()
+        ).hexdigest()
+        if actual_digest != manifest_sha256:
+            raise IndexGenerationMismatch("RAG manifest SHA-256 does not match switch event")
+
+    store = get_medical_store()
+    collection = store.get_collection_for_generation(generation)
+    if collection.count() != manifest.chunk_count:
+        raise IndexGenerationMismatch("chroma document count does not match manifest")
+
+    # These are local candidates.  Do not install them until all validation is
+    # complete, especially because bm25s mmap loading can fail on a cold Worker.
+    bm25_candidate = load_bm25_artifact(generation, artifact_root, mmap=True)
+    sparse_candidate = None
+    if settings.BGE_M3_ENABLED:
+        sparse_candidate = load_sparse_artifact(
+            generation, artifact_root, install=False
+        )
+
+    with _worker_reload_lock:
+        install_bm25_index(generation, bm25_candidate)
+        if sparse_candidate is not None:
+            # The public loader is the supported installation point for the
+            # sparse registry; all expensive validation already happened above.
+            load_sparse_artifact(generation, artifact_root, install=True)
+        store.collection = collection
+        # Keep legacy no-argument callers aligned with the Redis-published
+        # generation. This is process-local runtime state, never .env storage.
+        settings.ACTIVE_INDEX_VERSION = generation
+    return generation
+
+
+def _worker_event_loop(client: Any, stop_event: threading.Event) -> None:
+    pubsub = client.pubsub(ignore_subscribe_messages=True)
+    pubsub.subscribe(INDEX_SWITCHED_CHANNEL)
+    try:
+        while not stop_event.is_set():
+            message = pubsub.get_message(timeout=1.0)
+            if not message:
+                continue
+            try:
+                payload = json.loads(message.get("data", "{}"))
+                load_generation_for_worker(
+                    payload["generation"],
+                    manifest_sha256=payload.get("manifest_sha256"),
+                )
+            except Exception:
+                logger.exception("failed to load RAG generation switch event")
+    finally:
+        pubsub.close()
+
+
+def start_index_switch_listener() -> None:
+    """Start the per-process Redis listener used by Celery Workers."""
+    global _worker_listener_stop, _worker_listener_thread
+    if _worker_listener_thread and _worker_listener_thread.is_alive():
+        return
+    _worker_listener_stop = threading.Event()
+    client = _get_sync_redis()
+    _worker_listener_thread = threading.Thread(
+        target=_worker_event_loop,
+        args=(client, _worker_listener_stop),
+        name="rag-index-switch-listener",
+        daemon=True,
+    )
+    _worker_listener_thread.start()
+
+
+def stop_index_switch_listener() -> None:
+    global _worker_listener_stop, _worker_listener_thread
+    if _worker_listener_stop is not None:
+        _worker_listener_stop.set()
+    if _worker_listener_thread is not None:
+        _worker_listener_thread.join(timeout=2.0)
+    _worker_listener_stop = None
+    _worker_listener_thread = None
+
+
 async def _get_generation_redis() -> aioredis.Redis:
-    global _generation_redis
-    if _generation_redis is None:
+    global _generation_redis, _generation_redis_loop
+    current_loop = asyncio.get_running_loop()
+    if _generation_redis is None or _generation_redis_loop is not current_loop:
+        if _generation_redis is not None:
+            try:
+                await _generation_redis.aclose()
+            except Exception:
+                logger.debug("closing stale generation Redis client failed", exc_info=True)
         _generation_redis = aioredis.from_url(
             settings.REDIS_CHECKPOINT_URL,
             decode_responses=True,
@@ -45,6 +188,7 @@ async def _get_generation_redis() -> aioredis.Redis:
             socket_timeout=3.0,
         )
         await _generation_redis.ping()
+        _generation_redis_loop = current_loop
     return _generation_redis
 
 

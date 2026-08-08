@@ -44,31 +44,42 @@ _resolved_collection_name: Optional[str] = None
 _build_mode: bool = False
 
 
+class IndexGenerationUnavailable(RuntimeError):
+    """Raised when an explicitly requested generation cannot be served."""
+
+    status = "unavailable"
+
+
 def set_build_mode(enabled: bool) -> None:
     """设置构建模式标志（构建索引时调用，禁用 collection 回退逻辑）"""
     global _build_mode
     _build_mode = enabled
 
 
-def _get_collection_name(use_cache: bool = True) -> str:
-    """根据活跃索引版本返回 collection 名称，带向后兼容回退
+def _get_collection_name(
+    use_cache: bool = True,
+    *,
+    generation: Optional[str] = None,
+) -> str:
+    """根据指定 generation 返回 collection 名称。
 
-    首次调用时检查 ChromaDB 中实际存在的 collection，
-    如果版本化 collection 不存在则回退到旧名称 'medical_guidelines'。
+    生产默认不允许回退到旧名称。只有显式启用
+    ``RAG_LEGACY_COLLECTION_FALLBACK`` 的迁移窗口可以使用 legacy collection。
 
     构建模式下直接返回版本化名称，让 ChromaDB 的 get_or_create 自动创建。
     """
     global _resolved_collection_name
 
-    if use_cache and _resolved_collection_name is not None:
+    if generation is None and use_cache and _resolved_collection_name is not None:
         return _resolved_collection_name
 
-    version = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
+    version = generation or getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
     versioned_name = f"medical_guidelines_{version}"
 
     if _build_mode:
         # 构建模式：直接返回版本化名称，让 ChromaDB 自动创建
-        _resolved_collection_name = versioned_name
+        if generation is None:
+            _resolved_collection_name = versioned_name
         return versioned_name
 
     # 检索模式：保留回退逻辑
@@ -83,24 +94,36 @@ def _get_collection_name(use_cache: bool = True) -> str:
         collection_names = [c.name for c in collections] if collections else []
 
         if versioned_name in collection_names:
-            _resolved_collection_name = versioned_name
+            if generation is None:
+                _resolved_collection_name = versioned_name
             return versioned_name
 
-        # 回退到旧名称
-        if "medical_guidelines" in collection_names:
+        if (
+            settings.RAG_LEGACY_COLLECTION_FALLBACK
+            and COLLECTION_NAME in collection_names
+        ):
             logger.warning(
                 f"版本化 collection '{versioned_name}' 不存在，"
-                f"回退到旧 collection 'medical_guidelines'。"
+                f"显式迁移开关允许回退到旧 collection '{COLLECTION_NAME}'。"
                 f"建议运行索引重建并切换到新版本。"
             )
-            _resolved_collection_name = "medical_guidelines"
-            return "medical_guidelines"
+            if generation is None:
+                _resolved_collection_name = COLLECTION_NAME
+            return COLLECTION_NAME
     except Exception as e:
+        if isinstance(e, IndexGenerationUnavailable):
+            raise
         logger.debug(f"检查 collection 存在性失败: {e}")
 
-    # 默认返回版本化名称（首次部署场景）
-    _resolved_collection_name = versioned_name
-    return versioned_name
+    logger.error(
+        "RAG generation unavailable: generation=%s collection=%s; alert required",
+        version,
+        versioned_name,
+    )
+    raise IndexGenerationUnavailable(
+        f"RAG generation {version!r} is unavailable: "
+        f"collection {versioned_name!r} does not exist"
+    )
 
 
 def _reset_collection_cache() -> None:
@@ -161,6 +184,85 @@ class MedicalKnowledgeStore:
             logger.info(f"Collection 引用已刷新: {collection_name}")
         except Exception as e:
             logger.error(f"刷新 collection 引用失败: {e}")
+
+    def get_collection_for_generation(
+        self,
+        generation: str,
+        *,
+        create: bool = False,
+    ) -> chromadb.Collection:
+        """Return an exact generation collection without changing active state."""
+        client = self._ensure_client()
+        name = f"medical_guidelines_{generation}"
+        if create:
+            return client.get_or_create_collection(
+                name=name,
+                metadata=dict(COLLECTION_METADATA),
+            )
+        try:
+            return client.get_collection(name)
+        except Exception as exc:
+            logger.error(
+                "RAG generation unavailable: generation=%s collection=%s; "
+                "alert required",
+                generation,
+                name,
+            )
+            raise IndexGenerationUnavailable(
+                f"RAG generation {generation!r} is unavailable"
+            ) from exc
+
+    def get_documents_by_ids(
+        self,
+        doc_ids: List[str],
+        *,
+        generation: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Hydrate cache records from one exact generation by document ID."""
+        if not doc_ids:
+            return {}
+        collection = self.get_collection_for_generation(generation)
+        result = collection.get(ids=doc_ids, include=["documents", "metadatas"])
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        hydrated: Dict[str, Dict[str, Any]] = {}
+        for position, doc_id in enumerate(ids):
+            hydrated[str(doc_id)] = {
+                "text": documents[position] if position < len(documents) else "",
+                "metadata": (
+                    metadatas[position] if position < len(metadatas) else {}
+                ),
+            }
+        return hydrated
+
+    def export_generation_documents(self, generation: str) -> List[Dict[str, Any]]:
+        """Read a complete immutable snapshot for incremental candidate builds."""
+        collection = self.get_collection_for_generation(generation)
+        result = collection.get(include=["documents", "metadatas", "embeddings"])
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        embeddings = result.get("embeddings")
+        snapshot = []
+        for position, doc_id in enumerate(ids):
+            snapshot.append(
+                {
+                    "id": str(doc_id),
+                    "text": documents[position] if position < len(documents) else "",
+                    "metadata": (
+                        dict(metadatas[position])
+                        if position < len(metadatas)
+                        else {}
+                    ),
+                    "embedding": (
+                        list(embeddings[position])
+                        if embeddings is not None and position < len(embeddings)
+                        else None
+                    ),
+                }
+            )
+        return snapshot
 
     def add_documents(
         self,

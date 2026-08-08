@@ -67,6 +67,8 @@ class Settings(BaseSettings):
 
     # RAG 索引版本
     ACTIVE_INDEX_VERSION: str = "rag-v1"    # 当前活跃版本
+    # 仅供存量 collection 迁移窗口使用；生产默认禁止静默回退。
+    RAG_LEGACY_COLLECTION_FALLBACK: bool = False
 
     # BM25 词法检索
     BM25_K1: float = 1.2

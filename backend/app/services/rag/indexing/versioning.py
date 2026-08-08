@@ -3,13 +3,108 @@
 
 import asyncio
 import logging
-import re
-from pathlib import Path
-from typing import Any, cast
+from typing import Any, Optional, cast
 
+import redis.asyncio as aioredis
+
+from app.core.config import settings
+from app.services.rag.indexing.manifest import (
+    RAGIndexManifest,
+    validate_candidate_manifest,
+)
 from app.services.rag.medical_store import get_medical_store
 
 logger = logging.getLogger(__name__)
+
+ACTIVE_GENERATION_KEY = "rag:active_generation"
+_CAS_ACTIVE_GENERATION = """
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then
+    redis.call('SET', KEYS[1], ARGV[2])
+    return 1
+end
+return 0
+"""
+_generation_redis: Optional[aioredis.Redis] = None
+
+
+class ActiveGenerationConflict(RuntimeError):
+    """Raised when another publisher wins the active pointer race."""
+
+
+async def _get_generation_redis() -> aioredis.Redis:
+    global _generation_redis
+    if _generation_redis is None:
+        _generation_redis = aioredis.from_url(
+            settings.REDIS_CHECKPOINT_URL,
+            decode_responses=True,
+            socket_connect_timeout=3.0,
+            socket_timeout=3.0,
+        )
+        await _generation_redis.ping()
+    return _generation_redis
+
+
+async def get_active_index_generation(redis: Any = None) -> Optional[str]:
+    """Read the cluster-wide active generation pointer."""
+    client = redis or await _get_generation_redis()
+    value = await client.get(ACTIVE_GENERATION_KEY)
+    return str(value) if value is not None else None
+
+
+async def compare_and_set_active_generation(
+    *,
+    expected_generation: str,
+    candidate_generation: str,
+    redis: Any = None,
+) -> bool:
+    """Atomically activate a candidate only if the expected pointer still wins."""
+    client = redis or await _get_generation_redis()
+    switched = await client.eval(
+        _CAS_ACTIVE_GENERATION,
+        1,
+        ACTIVE_GENERATION_KEY,
+        expected_generation,
+        candidate_generation,
+    )
+    if int(switched) != 1:
+        actual = await client.get(ACTIVE_GENERATION_KEY)
+        raise ActiveGenerationConflict(
+            f"active generation changed concurrently: expected "
+            f"{expected_generation!r}, found {actual!r}"
+        )
+    return True
+
+
+async def activate_candidate_generation(
+    manifest: RAGIndexManifest,
+    *,
+    expected_generation: str,
+    redis: Any = None,
+) -> dict:
+    """Validate one candidate and atomically publish its shared pointer."""
+    validate_candidate_manifest(manifest)
+    store = get_medical_store()
+    collection = store.get_collection_for_generation(manifest.index_generation)
+    if collection.count() != manifest.chunk_count:
+        from app.services.rag.indexing.manifest import IndexGenerationMismatch
+
+        raise IndexGenerationMismatch(
+            "chroma document count does not match candidate manifest"
+        )
+    from app.services.rag.lexical.artifacts import load_bm25_artifact
+
+    load_bm25_artifact(manifest.index_generation)
+    await compare_and_set_active_generation(
+        expected_generation=expected_generation,
+        candidate_generation=manifest.index_generation,
+        redis=redis,
+    )
+    return {
+        "previous": expected_generation,
+        "current": manifest.index_generation,
+        "doc_count": manifest.chunk_count,
+    }
 
 
 async def switch_index_version(new_version: str, *, auto_rollback: bool = True) -> dict:
@@ -23,7 +118,6 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
         {"previous": str, "current": str, "doc_count": int}
         或 {"error": str} 如果切换失败
     """
-    from app.core.config import settings
     from app.services.rag.medical_store import _reset_collection_cache
 
     previous = getattr(settings, 'ACTIVE_INDEX_VERSION', 'rag-v1')
@@ -92,26 +186,6 @@ async def switch_index_version(new_version: str, *, auto_rollback: bool = True) 
                 except Exception:
                     pass
                 return {"error": f"健康检查失败，已回滚到 {original_version}"}
-
-        # 持久化到 .env 文件（健康检查通过后）
-        # 从 indexing/versioning.py 出发，向上 5 级到 backend/ 目录
-        env_path = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env"
-        if env_path.exists():
-            content = env_path.read_text(encoding="utf-8")
-            if "ACTIVE_INDEX_VERSION" in content:
-                content = re.sub(
-                    r'ACTIVE_INDEX_VERSION\s*=\s*.*',
-                    f'ACTIVE_INDEX_VERSION={new_version}',
-                    content,
-                )
-            else:
-                content += f"\nACTIVE_INDEX_VERSION={new_version}\n"
-            env_path.write_text(content, encoding="utf-8")
-            logger.info(f"已将 ACTIVE_INDEX_VERSION={new_version} 持久化到 .env")
-        else:
-            # .env 不存在时创建新文件
-            env_path.write_text(f"ACTIVE_INDEX_VERSION={new_version}\n", encoding="utf-8")
-            logger.info(f"已创建 .env 文件并写入 ACTIVE_INDEX_VERSION={new_version}")
 
     except Exception as e:
         logger.error(f"Switch failed: {e}")

@@ -3,10 +3,16 @@
 
 import json
 import logging
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
-from app.services.rag.embeddings import get_embeddings
+from app.services.rag.embeddings import (
+    EMBEDDING_DIM,
+    EMBEDDING_MODEL,
+    get_embeddings,
+)
 from app.services.rag.entity_resolver import extract_entities
 from app.services.rag.indexing.chunking import (
     _extract_chunks_from_page,
@@ -21,6 +27,15 @@ from app.services.rag.indexing.extractors import (
     SUPPORTED_EXTENSIONS,
     extract_document,
 )
+from app.services.rag.indexing.manifest import (
+    RAGIndexManifest,
+    build_index_generation,
+    compute_corpus_sha256,
+    load_rag_index_manifest,
+    write_rag_index_manifest,
+)
+from app.services.rag.lexical.artifacts import build_bm25_artifact
+from app.services.rag.lexical.tokenizer import TOKENIZER_VERSION
 from app.services.rag.medical_store import get_medical_store
 from app.services.rag.metadata_config import get_enriched_metadata
 from app.services.rag.ocr import apply_ocr_to_pages
@@ -30,6 +45,248 @@ logger = logging.getLogger(__name__)
 # PDF 目录（项目根目录下的 data/）
 # 从 indexing/builder.py 出发，向上 6 级到项目根目录，再进入 data/
 PDF_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent.parent / "data"
+
+PARSER_VERSION = "document-extractors-v1"
+CHUNKER_VERSION = "medical-chunker-v1"
+
+
+def _record_source(document: dict[str, Any]) -> str:
+    metadata = document.get("metadata") or {}
+    return str(metadata.get("source") or document.get("source") or "")
+
+
+def build_candidate_snapshot(
+    active_documents: List[dict[str, Any]],
+    incoming_documents: List[dict[str, Any]],
+    *,
+    source_name: str,
+    force_replace: bool,
+) -> List[dict[str, Any]]:
+    """Copy active corpus and apply one source change without mutating it."""
+    source_exists = any(
+        _record_source(document) == source_name for document in active_documents
+    )
+    if source_exists and not force_replace:
+        raise FileExistsError(
+            f"source {source_name!r} already exists in the active generation"
+        )
+    snapshot = [
+        deepcopy(document)
+        for document in active_documents
+        if not (force_replace and _record_source(document) == source_name)
+    ]
+    snapshot.extend(deepcopy(incoming_documents))
+    return snapshot
+
+
+async def _extract_candidate_records(
+    document_paths: List[Path],
+) -> List[dict[str, Any]]:
+    chunks: List[dict[str, Any]] = []
+    source_seq_counter: Dict[str, int] = {}
+    for document_path in document_paths:
+        pages = extract_document(document_path)
+        await apply_ocr_to_pages(pages)
+        for page_info in pages:
+            for position, item in enumerate(_extract_chunks_from_page(page_info)):
+                text = item["text"]
+                source = page_info["source"]
+                chunk_seq = source_seq_counter.get(source, 0)
+                source_seq_counter[source] = chunk_seq + 1
+                chunks.append(
+                    {
+                        "id": generate_doc_id(
+                            source, page_info["page"], position, text
+                        ),
+                        "text": text,
+                        "source": source,
+                        "page": page_info["page"],
+                        "heading_path": item.get("heading_path", ""),
+                        "content_type": page_info.get("content_type", "text"),
+                        "chunk_seq": chunk_seq,
+                    }
+                )
+    if not chunks:
+        raise ValueError("candidate corpus contains no chunks")
+
+    embedding_texts = []
+    records = []
+    for chunk in chunks:
+        doc_meta = get_enriched_metadata(chunk["source"])
+        recommendation_level = _extract_recommendation_level(chunk["text"])
+        evidence_level = _extract_evidence_level(chunk["text"])
+        entities = extract_entities(chunk["text"])
+        metadata = {
+            "source": chunk["source"],
+            "page": chunk["page"],
+            "heading_path": chunk.get("heading_path", ""),
+            "content_type": chunk.get("content_type", "text"),
+            "chunk_seq": chunk.get("chunk_seq", -1),
+            "organization": doc_meta.organization or "",
+            "year": doc_meta.year or 0,
+            "version": doc_meta.version or "",
+            "document_type": doc_meta.document_type,
+            "title": doc_meta.title,
+            "departments": json.dumps(doc_meta.departments, ensure_ascii=False),
+            "disease_tags": json.dumps(doc_meta.disease_tags, ensure_ascii=False),
+            "population": json.dumps(doc_meta.population, ensure_ascii=False),
+            "recommendation_level": recommendation_level,
+            "evidence_level": evidence_level,
+            "entities": json.dumps(entities, ensure_ascii=False) if entities else "",
+            "entity_names": " ".join(entity["normalized"] for entity in entities),
+        }
+        records.append(
+            {
+                "id": chunk["id"],
+                "text": chunk["text"],
+                "metadata": metadata,
+                "embedding": None,
+            }
+        )
+        embedding_texts.append(
+            _build_embedding_text(
+                chunk["text"],
+                doc_meta,
+                heading_path=chunk.get("heading_path", ""),
+                recommendation_level=recommendation_level,
+                evidence_level=evidence_level,
+            )
+        )
+    embeddings = await get_embeddings(embedding_texts)
+    if len(embeddings) != len(records):
+        raise ValueError("embedding count does not match candidate chunk count")
+    for record, embedding in zip(records, embeddings, strict=True):
+        record["embedding"] = embedding
+    return records
+
+
+def _bm25_documents(records: List[dict[str, Any]]) -> List[dict[str, Any]]:
+    return [
+        {
+            "id": record["id"],
+            "text": record["text"],
+            **dict(record.get("metadata") or {}),
+        }
+        for record in records
+    ]
+
+
+def _publish_chroma_candidate(
+    generation: str,
+    records: List[dict[str, Any]],
+) -> str:
+    store = get_medical_store()
+    client = store._ensure_client()
+    collection_name = f"medical_guidelines_{generation}"
+    existing_names = {collection.name for collection in client.list_collections()}
+    if collection_name in existing_names:
+        raise FileExistsError(
+            f"Chroma candidate already exists for {generation!r}"
+        )
+    collection = store.get_collection_for_generation(generation, create=True)
+    for offset in range(0, len(records), 1000):
+        batch = records[offset : offset + 1000]
+        collection.add(
+            ids=[record["id"] for record in batch],
+            documents=[record["text"] for record in batch],
+            embeddings=[record["embedding"] for record in batch],
+            metadatas=[
+                {**dict(record.get("metadata") or {}), "index_generation": generation}
+                for record in batch
+            ],
+        )
+    if collection.count() != len(records):
+        raise RuntimeError("Chroma candidate count validation failed")
+    return collection_name
+
+
+def _publish_candidate_generation(
+    records: List[dict[str, Any]],
+    *,
+    artifact_root: Optional[Path] = None,
+    created_at: Optional[datetime] = None,
+) -> RAGIndexManifest:
+    bm25_documents = _bm25_documents(records)
+    corpus_sha256 = compute_corpus_sha256(bm25_documents)
+    timestamp = created_at or datetime.now(timezone.utc)
+    generation = build_index_generation(corpus_sha256, timestamp)
+
+    build_bm25_artifact(generation, bm25_documents, artifact_root)
+    collection_name = _publish_chroma_candidate(generation, records)
+    manifest = RAGIndexManifest(
+        index_generation=generation,
+        corpus_sha256=corpus_sha256,
+        source_count=len({_record_source(record) for record in records}),
+        chunk_count=len(records),
+        parser_version=PARSER_VERSION,
+        chunker_version=CHUNKER_VERSION,
+        tokenizer_version=TOKENIZER_VERSION,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_dimension=EMBEDDING_DIM,
+        chroma_collection=collection_name,
+        bm25_artifact=f"{generation}/bm25",
+        sparse_artifact=None,
+        created_at=timestamp,
+    )
+    write_rag_index_manifest(manifest, artifact_root)
+    return manifest
+
+
+async def build_full_index_candidate(
+    document_paths: Optional[List[Path]] = None,
+    *,
+    artifact_root: Optional[Path] = None,
+    created_at: Optional[datetime] = None,
+) -> RAGIndexManifest:
+    """Build full dense and BM25 candidates without changing active state."""
+    paths = document_paths
+    if paths is None:
+        paths = sorted(
+            path
+            for path in PDF_DIR.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+        )
+    if not paths:
+        raise ValueError("no supported source documents found")
+    records = await _extract_candidate_records(paths)
+    return _publish_candidate_generation(
+        records,
+        artifact_root=artifact_root,
+        created_at=created_at,
+    )
+
+
+async def build_incremental_index_candidate(
+    document_path: Path,
+    *,
+    active_generation: Optional[str] = None,
+    force_replace: bool = False,
+    artifact_root: Optional[Path] = None,
+    created_at: Optional[datetime] = None,
+) -> RAGIndexManifest:
+    """Build a copy-on-write candidate snapshot for one source update."""
+    if active_generation is None:
+        from app.services.rag.indexing.versioning import get_active_index_generation
+
+        active_generation = await get_active_index_generation()
+    if not active_generation:
+        raise RuntimeError("no active RAG generation pointer is available")
+    load_rag_index_manifest(active_generation, artifact_root)
+    active_documents = get_medical_store().export_generation_documents(
+        active_generation
+    )
+    incoming = await _extract_candidate_records([document_path])
+    snapshot = build_candidate_snapshot(
+        active_documents,
+        incoming,
+        source_name=document_path.name,
+        force_replace=force_replace,
+    )
+    return _publish_candidate_generation(
+        snapshot,
+        artifact_root=artifact_root,
+        created_at=created_at,
+    )
 
 
 async def build_medical_index(target_version: str = "rag-v2"):

@@ -15,7 +15,8 @@ import hashlib
 import json
 import logging
 import random
-from typing import Optional
+from copy import deepcopy
+from typing import Any, Optional, Sequence
 
 import redis.asyncio as aioredis
 
@@ -83,22 +84,101 @@ async def _get_redis() -> Optional[aioredis.Redis]:
         return None
 
 
+def _query_fingerprint(queries: Any) -> list[tuple[str, str, str]]:
+    if isinstance(queries, str):
+        return [("legacy", "clinical_facts", queries)]
+    return [
+        (str(query.query_type), str(query.source), str(query.text))
+        for query in queries
+    ]
+
+
+def build_retrieval_cache_key(
+    queries: Sequence[Any] | str,
+    *,
+    generation: str,
+    top_k: int,
+) -> str:
+    """Build a stable fingerprint for every retrieval-affecting input."""
+    fingerprint = {
+        "generation": generation,
+        "queries": _query_fingerprint(queries),
+        "top_k": top_k,
+        "rrf": [
+            settings.RRF_K,
+            settings.RRF_WEIGHT_BM25,
+            settings.RRF_WEIGHT_DENSE,
+            settings.RRF_WEIGHT_SPARSE,
+        ],
+        "reranker": settings.RERANK_MODEL,
+        "metadata_filter": settings.ENABLE_METADATA_FILTER,
+    }
+    serialized = json.dumps(
+        fingerprint,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return f"{CACHE_KEY_PREFIX}:{generation}:{content_hash}"
+
+
 def _build_cache_key(queries_text: str, index_version: str) -> str:
-    """构建缓存键
-
-    Args:
-        queries_text: 所有查询文本的拼接
-        index_version: 当前索引版本
-
-    Returns:
-        缓存键字符串
-    """
-    normalized = queries_text.strip().lower()
-    content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return f"{CACHE_KEY_PREFIX}:{index_version}:{content_hash}"
+    """Backward-compatible wrapper for callers migrated in Task 7."""
+    return build_retrieval_cache_key(
+        queries_text,
+        generation=index_version,
+        top_k=0,
+    )
 
 
-async def get_cached_bundle(queries_text: str, index_version: str) -> Optional[dict]:
+def compact_cached_bundle(bundle_dict: dict) -> dict:
+    """Remove document bodies while preserving IDs, scores, and metadata."""
+    compact = deepcopy(bundle_dict)
+    for candidate in compact.get("candidates") or []:
+        candidate.pop("text", None)
+    return compact
+
+
+def hydrate_cached_bundle(
+    bundle_dict: dict,
+    *,
+    generation: str,
+    store: Any = None,
+) -> dict:
+    """Read candidate bodies by ID from the exact requested generation."""
+    hydrated = deepcopy(bundle_dict)
+    candidates = hydrated.get("candidates") or []
+    current = [
+        candidate
+        for candidate in candidates
+        if candidate.get("generation") in (None, generation)
+    ]
+    if not current:
+        hydrated["candidates"] = []
+        return hydrated
+    if store is None:
+        from app.services.rag.medical_store import get_medical_store
+
+        store = get_medical_store()
+    document_ids = [str(candidate.get("doc_id", "")) for candidate in current]
+    documents = store.get_documents_by_ids(document_ids, generation=generation)
+    complete = []
+    for candidate in current:
+        document = documents.get(str(candidate.get("doc_id", "")))
+        if document is None:
+            continue
+        candidate["text"] = document.get("text", "")
+        complete.append(candidate)
+    hydrated["candidates"] = complete
+    return hydrated
+
+
+async def get_cached_bundle(
+    queries: Sequence[Any] | str,
+    index_version: str,
+    top_k: int = 0,
+) -> Optional[dict]:
     """从缓存获取 RetrievalBundle
 
     Returns:
@@ -115,14 +195,21 @@ async def get_cached_bundle(queries_text: str, index_version: str) -> Optional[d
         await _incr_counter(REDIS_KEY_MISSES)
         return None
 
-    cache_key = _build_cache_key(queries_text, index_version)
+    cache_key = build_retrieval_cache_key(
+        queries,
+        generation=index_version,
+        top_k=top_k,
+    )
 
     try:
         cached = await redis.get(cache_key)
         if cached:
             await _incr_counter(REDIS_KEY_HITS)
             logger.debug(f"检索缓存命中: {cache_key}")
-            return json.loads(cached)
+            return hydrate_cached_bundle(
+                json.loads(cached),
+                generation=index_version,
+            )
         await _incr_counter(REDIS_KEY_MISSES)
         logger.debug(f"检索缓存未命中: {cache_key}")
         return None
@@ -133,9 +220,10 @@ async def get_cached_bundle(queries_text: str, index_version: str) -> Optional[d
 
 
 async def set_cached_bundle(
-    queries_text: str,
+    queries: Sequence[Any] | str,
     index_version: str,
     bundle_dict: dict,
+    top_k: int = 0,
 ) -> None:
     """将 RetrievalBundle 写入缓存
 
@@ -153,10 +241,14 @@ async def set_cached_bundle(
     if redis is None:
         return
 
-    cache_key = _build_cache_key(queries_text, index_version)
+    cache_key = build_retrieval_cache_key(
+        queries,
+        generation=index_version,
+        top_k=top_k,
+    )
 
     try:
-        serialized = json.dumps(bundle_dict, ensure_ascii=False)
+        serialized = json.dumps(compact_cached_bundle(bundle_dict), ensure_ascii=False)
         await redis.set(
             cache_key,
             serialized,

@@ -439,7 +439,7 @@ async def test_task_reports_phases_only_when_builder_reaches_them(
 
 
 @pytest.mark.asyncio
-async def test_task_rechecks_lock_owner_before_switch_and_publish(
+async def test_task_finishes_notification_after_successful_cas_even_if_lock_expires(
     candidate_manifest, monkeypatch
 ):
     from app.services.rag.indexing import versioning
@@ -469,18 +469,71 @@ async def test_task_rechecks_lock_owner_before_switch_and_publish(
         "app.services.rag.indexing.manifest.validate_candidate_manifest", Mock()
     )
 
-    with pytest.raises(rag_index_task.LostIndexBuildLock):
-        await rag_index_task._build_candidate(
-            Mock(),
-            operation="rebuild",
-            redis_client=Mock(),
-            lock=lock,
-            task_id="task-1",
-            lost_lock_event=threading.Event(),
-        )
+    result = await rag_index_task._build_candidate(
+        Mock(),
+        operation="rebuild",
+        redis_client=Mock(),
+        lock=lock,
+        task_id="task-1",
+        lost_lock_event=threading.Event(),
+    )
 
     activate.assert_awaited_once()
-    publish.assert_not_called()
+    publish.assert_called_once()
+    assert lock.is_owned_by.call_count == 1
+    assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_reports_warning_instead_of_failure_when_switch_event_cannot_publish(
+    candidate_manifest, monkeypatch
+):
+    from app.services.rag.indexing import versioning
+    from app.tasks import rag_index_task
+
+    async def build_candidate(*, phase_callback, **_kwargs):
+        for phase in ("parse", "chunk", "embed", "chroma", "bm25", "sparse"):
+            phase_callback(phase)
+        return candidate_manifest
+
+    lock = Mock()
+    lock.is_owned_by.return_value = True
+    publish = Mock(side_effect=ConnectionError("redis publish unavailable"))
+    monkeypatch.setattr(builder, "build_full_index_candidate", build_candidate)
+    monkeypatch.setattr(
+        versioning, "_get_generation_redis", AsyncMock(return_value=AsyncMock())
+    )
+    monkeypatch.setattr(
+        versioning,
+        "get_active_index_generation",
+        AsyncMock(return_value="g-old"),
+    )
+    monkeypatch.setattr(
+        versioning,
+        "activate_candidate_generation",
+        AsyncMock(return_value={"previous": "g-old"}),
+    )
+    monkeypatch.setattr(versioning, "publish_index_switched", publish)
+    monkeypatch.setattr(
+        rag_index_task, "_manifest_sha256", Mock(return_value="a" * 64)
+    )
+    monkeypatch.setattr(
+        "app.services.rag.indexing.manifest.validate_candidate_manifest", Mock()
+    )
+
+    result = await rag_index_task._build_candidate(
+        Mock(),
+        operation="rebuild",
+        redis_client=Mock(),
+        lock=lock,
+        task_id="task-1",
+        lost_lock_event=threading.Event(),
+    )
+
+    assert publish.call_count == 3
+    assert result["status"] == "completed_with_warning"
+    assert result["notification"]["ok"] is False
+    assert result["notification"]["attempts"] == 3
 
 
 def test_switch_event_contains_generation_previous_and_manifest_digest():
@@ -502,6 +555,33 @@ def test_switch_event_contains_generation_previous_and_manifest_digest():
         "previous": "rag-old",
         "manifest_sha256": "a" * 64,
     }
+
+
+def test_worker_listener_reconciles_active_generation_without_pubsub_event(
+    monkeypatch,
+):
+    from app.services.rag.indexing import versioning
+
+    pubsub = Mock()
+    pubsub.get_message.return_value = None
+    client = Mock()
+    client.pubsub.return_value = pubsub
+    client.get.return_value = "rag-new"
+    stop_event = Mock()
+    stop_event.is_set.side_effect = [False, True]
+    load_generation = Mock()
+    monkeypatch.setattr(versioning.settings, "ACTIVE_INDEX_VERSION", "rag-old")
+    monkeypatch.setattr(
+        versioning,
+        "load_generation_for_worker",
+        load_generation,
+    )
+
+    versioning._worker_event_loop(client, stop_event)
+
+    client.get.assert_called_once_with(versioning.ACTIVE_GENERATION_KEY)
+    load_generation.assert_called_once_with("rag-new")
+    pubsub.close.assert_called_once_with()
 
 
 def test_worker_loads_and_installs_generation_atomically(

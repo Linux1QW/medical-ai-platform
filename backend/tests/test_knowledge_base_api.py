@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,6 +41,50 @@ def test_rebuild_returns_task_id(client, admin_headers, monkeypatch):
 
     assert response.status_code == 202
     assert response.json()["task_id"] == "task-1"
+
+
+def test_stats_reads_the_shared_active_generation(client, admin_headers, monkeypatch):
+    collection = Mock()
+    collection.count.return_value = 7
+    store = Mock()
+    store.get_collection_for_generation.return_value = collection
+    active_generation = AsyncMock(return_value="rag-new")
+    indexed_sources = AsyncMock(
+        return_value=[{"source": "source-1", "chunks": 7}]
+    )
+    monkeypatch.setattr(knowledge_base, "get_medical_store", lambda: store)
+    monkeypatch.setattr(
+        knowledge_base, "get_active_index_generation", active_generation
+    )
+    monkeypatch.setattr(knowledge_base, "get_indexed_sources", indexed_sources)
+    monkeypatch.setattr(knowledge_base, "get_embed_cache_stats", lambda: {})
+
+    response = client.get("/api/v1/knowledge-base/stats", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["total_chunks"] == 7
+    assert response.json()["total_sources"] == 1
+    active_generation.assert_awaited_once_with()
+    store.get_collection_for_generation.assert_called_once_with("rag-new")
+    indexed_sources.assert_awaited_once_with(generation="rag-new")
+
+
+def test_stats_returns_503_when_active_generation_is_unavailable(
+    client, admin_headers, monkeypatch
+):
+    store = Mock()
+    monkeypatch.setattr(knowledge_base, "get_medical_store", lambda: store)
+    monkeypatch.setattr(
+        knowledge_base,
+        "get_active_index_generation",
+        AsyncMock(return_value=None),
+    )
+
+    response = client.get("/api/v1/knowledge-base/stats", headers=admin_headers)
+
+    assert response.status_code == 503
+    store.count.assert_not_called()
+    store.get_collection_for_generation.assert_not_called()
 
 
 @pytest.mark.parametrize("force_replace", [False, True])

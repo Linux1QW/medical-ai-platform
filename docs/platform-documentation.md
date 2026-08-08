@@ -59,7 +59,7 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8000/api/v1/knowledge-base/add-pdf
 ```
 
-状态 phase 依次为 snapshot、parse、chunk、embed、chroma、bm25、sparse、validate、switch、publish。只有完整校验后才切换 Redis active generation。
+状态 phase 依次为 snapshot、parse、chunk、embed、chroma、bm25、sparse、validate、switch、publish。只有完整校验后才切换 Redis active generation。若最终结果为 `completed_with_warning`，说明指针已切换但 Pub/Sub 通知 3 次重试仍失败；Worker 会每 5 秒按 active pointer 自动重同步，不能把它当作“未切换”直接重跑。持续不收敛时检查 Redis、manifest、artifact 和 Worker 日志。
 
 `python -m app.services.rag.build_medical_index` 是旧兼容入口，不会执行 manifest/CAS/Pub/Sub 发布，不要用于生产发布。当前也没有受支持的 RAG 回滚 API；回滚需按 [总手册回滚 runbook](PROJECT_GUIDE.md#142-回滚原则) 由运维实施。
 

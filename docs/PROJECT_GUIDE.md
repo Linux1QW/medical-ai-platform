@@ -466,11 +466,11 @@ generation 名称固定为 `rag-YYYYMMDDHHMMSS-<corpus_sha256前8位>`。一个 
 
 ### 13.4 激活、缓存与多 Worker
 
-RAG 构建使用 Redis key `rag:index-build-lock`，TTL 30 分钟并由 heartbeat 续期。候选校验通过后，`rag:active_generation` 通过 compare-and-set 从任务快照中的旧 generation 原子切到新 generation；并发发布者改变指针时任务失败。之后发布 `rag:index-switched`，消息含 new、previous 和 manifest SHA-256。
+RAG 构建使用 Redis key `rag:index-build-lock`，TTL 30 分钟并由 heartbeat 续期。候选校验、manifest 摘要和最终锁确认都在切换前完成；`rag:active_generation` 再通过 compare-and-set 从任务快照中的旧 generation 原子切到新 generation，并发发布者改变指针时任务失败。CAS 成功后不再因锁过期把已切换任务误报为失败；`rag:index-switched` 通知最多尝试 3 次，消息含 new、previous 和 manifest SHA-256。三次均失败时任务返回 `completed_with_warning` 和 notification error，Redis active pointer 仍是权威状态；Worker listener 每 5 秒对照该指针自动重同步，持续失败时再排查 Redis、manifest 或本地 artifact。
 
 Worker 收到事件后先加载并验证 manifest、Chroma count、BM25 和可选 Sparse，再在进程锁内一次性替换本地引用。任何预加载或安装失败都保留旧引用。检索 cache key 含 generation；回填时还会过滤 generation 不匹配文档。
 
-注意：FastAPI 自身没有在 lifespan 启动 Pub/Sub listener，但检索入口会读取 Redis active generation 并按 generation 获取组件；Celery fork Worker 会启动 listener。
+注意：FastAPI 自身没有在 lifespan 启动 Pub/Sub listener，但检索入口和知识库统计会读取 Redis active generation 并按 generation 获取组件；active pointer 缺失时统计接口返回 503，不回退到可能过期的本地 collection。Celery fork Worker 会启动 listener，并周期 reconciliation。
 
 ### 13.5 旧兼容路径
 
@@ -506,7 +506,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/api/v1/knowledge-base/rebuild/status
 ```
 
-状态可见 `PENDING/PROGRESS/SUCCESS/FAILURE`，PROGRESS 含真实到达的 phase；成功可含 generation、manifest、switch 和 validation。
+状态可见 `PENDING/PROGRESS/SUCCESS/FAILURE`，PROGRESS 含真实到达的 phase；成功可含 generation、manifest、switch、notification 和 validation。若结果 `status=completed_with_warning`，表示 active pointer 已提交但切换通知重试失败，不能把任务当作未切换后直接重跑；Worker 通常会在下一次 5 秒 reconciliation 自动收敛。
 
 ### 14.2 回滚原则
 
@@ -561,7 +561,7 @@ cd backend
 
 当前不能宣称门禁已通过：工作区中的 `backend/evaluation_reports/bm25-v1.json` 是未跟踪的本地报告，schema 缺少 Task 8 所需 overall/exact-term/consistency；而 `evaluate_bm25.py` CLI 当前没有注入真实一致性计数的参数，默认报告把一致性标记为未测量。因此 `--fail-on-regression` 的完整绿灯需要先提供同 schema 的真实 baseline/candidate 和实际一致性遥测接线。
 
-CI 的 `python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold` 只阻断评测框架回归；它不证明真实检索、真实 LLM 或候选 generation 的质量。CI 只有在 checkout 同时存在 measured report 和 generation/Chroma artifacts 时才尝试真实门禁，否则明确 SKIP。
+CI 的 `python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold` 只阻断评测框架回归；它不证明真实检索、真实 LLM 或候选 generation 的质量。普通 CI 只有在 checkout 同时存在 measured report 和 generation/Chroma artifacts 时才尝试真实门禁，否则明确 SKIP；因此该步骤不是强制发布门禁。生产发布流程必须另设 required measured-gate job，缺少任一真实输入时直接失败。
 
 ## 16. 监控、日志与安全运维
 

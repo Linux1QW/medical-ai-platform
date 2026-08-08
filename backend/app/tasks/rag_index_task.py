@@ -29,6 +29,7 @@ INDEX_BUILD_PHASES = (
     "publish",
 )
 INDEX_BUILD_LOCK_TTL = 30 * 60
+INDEX_SWITCH_PUBLISH_ATTEMPTS = 3
 _RENEW_SCRIPT = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('EXPIRE', KEYS[1], ARGV[2])
@@ -87,6 +88,47 @@ class RedisIndexBuildLock:
 
 class LostIndexBuildLock(RuntimeError):
     """Raised when a task no longer owns the distributed build lock."""
+
+
+def _publish_switch_event_with_retries(
+    publish: Any,
+    *,
+    generation: str,
+    previous: Optional[str],
+    manifest_sha256: str,
+    redis_client: Any,
+) -> dict[str, Any]:
+    """Best-effort notification after the active pointer has been committed.
+
+    Once CAS succeeds, notification failures must not turn the task into a
+    misleading FAILURE: request paths reconcile against the durable active
+    pointer.  The result still exposes the warning so operators can replay or
+    restart listeners if all bounded attempts fail.
+    """
+    last_error: Optional[Exception] = None
+    for attempt in range(1, INDEX_SWITCH_PUBLISH_ATTEMPTS + 1):
+        try:
+            publish(
+                generation,
+                previous,
+                manifest_sha256,
+                redis=redis_client,
+            )
+            return {"ok": True, "attempts": attempt}
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "RAG generation %s switch notification attempt %s/%s failed: %s",
+                generation,
+                attempt,
+                INDEX_SWITCH_PUBLISH_ATTEMPTS,
+                exc,
+            )
+    return {
+        "ok": False,
+        "attempts": INDEX_SWITCH_PUBLISH_ATTEMPTS,
+        "error": str(last_error) if last_error is not None else "unknown error",
+    }
 
 
 def _get_redis() -> Any:
@@ -258,6 +300,7 @@ async def _build_candidate(
         generation=manifest.index_generation,
     )
     validate_candidate_manifest(manifest)
+    digest = _manifest_sha256(manifest, artifact_root)
     _raise_if_lock_lost(lock, task_id, lost_lock_event, verify_owner=True)
     _set_phase(task, "switch", generation=manifest.index_generation)
     switched = await activate_candidate_generation(
@@ -266,17 +309,23 @@ async def _build_candidate(
         redis=generation_redis,
         artifact_root=artifact_root,
     )
-    digest = _manifest_sha256(manifest, artifact_root)
-    _raise_if_lock_lost(lock, task_id, lost_lock_event, verify_owner=True)
-    _set_phase(task, "publish", generation=manifest.index_generation)
-    publish_index_switched(
-        manifest.index_generation,
-        switched.get("previous", active_generation),
-        digest,
-        redis=redis_client,
+    try:
+        _set_phase(task, "publish", generation=manifest.index_generation)
+    except Exception:
+        logger.warning(
+            "RAG generation %s switched but publish phase state could not be recorded",
+            manifest.index_generation,
+            exc_info=True,
+        )
+    notification = _publish_switch_event_with_retries(
+        publish_index_switched,
+        generation=manifest.index_generation,
+        previous=switched.get("previous", active_generation),
+        manifest_sha256=digest,
+        redis_client=redis_client,
     )
     return {
-        "status": "completed",
+        "status": "completed" if notification["ok"] else "completed_with_warning",
         "operation": operation,
         "generation": manifest.index_generation,
         "previous": switched.get("previous", active_generation),
@@ -284,6 +333,7 @@ async def _build_candidate(
         "manifest_sha256": digest,
         "validation": {"ok": True, "chunk_count": manifest.chunk_count},
         "switch": switched,
+        "notification": notification,
         "phase": "publish",
     }
 

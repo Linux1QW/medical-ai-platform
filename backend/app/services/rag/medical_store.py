@@ -478,9 +478,13 @@ class MedicalKnowledgeStore:
             return 0
         return self.collection.count()
 
-    def get_all_sources(self) -> List[str]:
+    def get_all_sources(self, *, generation: Optional[str] = None) -> List[str]:
         """返回知识库中所有已索引的来源文件名（去重列表）"""
-        collection = self._ensure_collection()
+        collection = (
+            self.get_collection_for_generation(generation)
+            if generation is not None
+            else self._ensure_collection()
+        )
         if collection.count() == 0:
             return []
         result = collection.get(include=["metadatas"])
@@ -491,9 +495,18 @@ class MedicalKnowledgeStore:
                 sources.add(src)
         return sorted(sources)
 
-    def get_source_doc_count(self, source: str) -> int:
+    def get_source_doc_count(
+        self,
+        source: str,
+        *,
+        generation: Optional[str] = None,
+    ) -> int:
         """返回指定来源的文档块数量"""
-        collection = self._ensure_collection()
+        collection = (
+            self.get_collection_for_generation(generation)
+            if generation is not None
+            else self._ensure_collection()
+        )
         result = collection.get(
             where={"source": source},
             include=[],

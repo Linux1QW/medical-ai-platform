@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from typing import Any, Optional, cast
 
 import redis
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_GENERATION_KEY = "rag:active_generation"
 INDEX_SWITCHED_CHANNEL = "rag:index-switched"
+WORKER_RECONCILE_INTERVAL_SECONDS = 5.0
 _CAS_ACTIVE_GENERATION = """
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
@@ -148,19 +150,33 @@ def load_generation_for_worker(
 def _worker_event_loop(client: Any, stop_event: threading.Event) -> None:
     pubsub = client.pubsub(ignore_subscribe_messages=True)
     pubsub.subscribe(INDEX_SWITCHED_CHANNEL)
+    next_reconcile = 0.0
     try:
         while not stop_event.is_set():
             message = pubsub.get_message(timeout=1.0)
-            if not message:
-                continue
-            try:
-                payload = json.loads(message.get("data", "{}"))
-                load_generation_for_worker(
-                    payload["generation"],
-                    manifest_sha256=payload.get("manifest_sha256"),
-                )
-            except Exception:
-                logger.exception("failed to load RAG generation switch event")
+            if message:
+                try:
+                    payload = json.loads(message.get("data", "{}"))
+                    load_generation_for_worker(
+                        payload["generation"],
+                        manifest_sha256=payload.get("manifest_sha256"),
+                    )
+                except Exception:
+                    logger.exception("failed to load RAG generation switch event")
+
+            now = time.monotonic()
+            if now >= next_reconcile:
+                next_reconcile = now + WORKER_RECONCILE_INTERVAL_SECONDS
+                try:
+                    active = client.get(ACTIVE_GENERATION_KEY)
+                    if active is not None:
+                        generation = str(active)
+                        if generation != settings.ACTIVE_INDEX_VERSION:
+                            load_generation_for_worker(generation)
+                except Exception:
+                    logger.exception(
+                        "failed to reconcile Worker with active RAG generation"
+                    )
     finally:
         pubsub.close()
 

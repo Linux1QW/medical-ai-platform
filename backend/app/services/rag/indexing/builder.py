@@ -620,11 +620,22 @@ async def index_single_pdf(
             _reset_collection_cache()
 
 
-async def get_indexed_sources() -> List[dict]:
+async def get_indexed_sources(
+    *,
+    generation: Optional[str] = None,
+) -> List[dict]:
     """获取已建索的来源列表，含每个来源的文档块数量"""
     store = get_medical_store()
-    sources = store.get_all_sources()
+    sources = store.get_all_sources(generation=generation)
     result = []
     for src in sources:
-        result.append({"source": src, "chunks": store.get_source_doc_count(src)})
+        result.append(
+            {
+                "source": src,
+                "chunks": store.get_source_doc_count(
+                    src,
+                    generation=generation,
+                ),
+            }
+        )
     return result

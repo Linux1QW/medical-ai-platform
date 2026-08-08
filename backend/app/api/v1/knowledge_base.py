@@ -110,9 +110,16 @@ def _manifest_payload(generation: str | None) -> dict | None:
 @router.get("/stats", response_model=KBStatsResponse, summary="获取知识库统计信息")
 async def get_kb_stats(_: User = Depends(get_current_admin)):
     store = get_medical_store()
-    sources = await get_indexed_sources()
+    generation = await get_active_index_generation()
+    if generation is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG active generation is unavailable",
+        )
+    collection = store.get_collection_for_generation(generation)
+    sources = await get_indexed_sources(generation=generation)
     return KBStatsResponse(
-        total_chunks=store.count(),
+        total_chunks=collection.count(),
         total_sources=len(sources),
         sources=sources,
         embed_cache=get_embed_cache_stats(),

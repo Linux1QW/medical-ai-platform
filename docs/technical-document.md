@@ -75,7 +75,7 @@ generation 为 `rag-YYYYMMDDHHMMSS-<sha8>`。候选包含：
 - `<generation>/bm25/` 的原生索引、manifest、hash inventory 和 `READY`；
 - BGE-M3 启用时 `<generation>/sparse/` 的 documents、sparse payload、manifest、hash 和 `READY`。
 
-构建使用 Redis `rag:index-build-lock`（30 分钟、heartbeat 续租）。校验通过后，以旧 generation 为 expected 对 `rag:active_generation` 执行 CAS，再向 `rag:index-switched` 发布 new/previous/manifest SHA-256。每个 Celery fork Worker 先完整加载并验证新组件，再原子替换本地引用；失败时保留旧引用。
+构建使用 Redis `rag:index-build-lock`（30 分钟、heartbeat 续租）。校验、manifest 摘要和最终锁确认完成后，以旧 generation 为 expected 对 `rag:active_generation` 执行 CAS，再向 `rag:index-switched` 发布 new/previous/manifest SHA-256。CAS 后通知最多重试 3 次；仍失败则任务以 `completed_with_warning` 返回，而不是把已切换指针误报为 FAILURE。每个 Celery fork Worker 先完整加载并验证新组件，再原子替换本地引用；失败时保留旧引用。listener 每 5 秒读取 Redis active pointer 做 reconciliation，因此漏掉瞬时 Pub/Sub 事件也能自动收敛。
 
 以下入口**不是**上述生产发布：
 

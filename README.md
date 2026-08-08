@@ -107,7 +107,7 @@ cd backend
   --output evaluation_reports/tuning.json
 ```
 
-调参只能用独立 dev split 选参，test split 只对胜出组合评估一次。CI 中的 mock RAG 阈值步骤验证的是评测管道，不代表真实候选性能；真实门禁还要求真实 active generation、真实基线和一致性遥测。详见 [PROJECT_GUIDE](docs/PROJECT_GUIDE.md#15-评测调参与质量门禁)。
+调参只能用独立 dev split 选参，test split 只对胜出组合评估一次。CI 中的 mock RAG 阈值步骤验证的是评测管道，不代表真实候选性能；普通 CI 缺少真实 artifact 时会明确 SKIP measured gate，因此生产发布必须另设缺失输入即失败的 required gate。真实门禁还要求真实 active generation、真实基线和一致性遥测。详见 [PROJECT_GUIDE](docs/PROJECT_GUIDE.md#15-评测调参与质量门禁)。
 
 ## Docker Compose
 

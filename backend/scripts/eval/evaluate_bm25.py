@@ -13,13 +13,21 @@ import json
 import math
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from evaluation.metrics import (  # noqa: E402
+    RAG_K_VALUES,
+    RAG_STRATA,
+    aggregate_stratified_retrieval_metrics,
+    evaluate_rag_quality_gates,
+)
+
 DEFAULT_GOLDEN = Path(__file__).with_name("bm25_golden_set.json")
+REQUIRED_CATEGORIES = tuple(RAG_STRATA)
+REQUIRED_K_VALUES = tuple(RAG_K_VALUES)
 
 
 def _match_group(source: str, groups: Iterable[str]) -> str:
@@ -139,6 +147,11 @@ def _preservation_exit_code(report: Dict[str, Any], *, fail_on_token_loss: bool)
     return 1 if fail_on_token_loss and not preservation_passed else 0
 
 
+def compare_reports(candidate: Mapping[str, Any], baseline: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compare a candidate generation against a measured BM25 baseline."""
+    return evaluate_rag_quality_gates(candidate, baseline)
+
+
 def _load_golden(path: Path) -> Tuple[List[Dict[str, Any]], Tuple[int, ...]]:
     with path.open(encoding="utf-8") as golden_file:
         golden = json.load(golden_file)
@@ -156,16 +169,31 @@ def _load_golden(path: Path) -> Tuple[List[Dict[str, Any]], Tuple[int, ...]]:
     return cases, k_values
 
 
-def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
-    """Evaluate the active index without rebuilding or changing active sources."""
+def evaluate(
+    golden_path: Path,
+    top_k: int,
+    *,
+    index: Any = None,
+    cold_load_seconds: Optional[float] = None,
+    consistency: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Evaluate an active index without rebuilding or changing active sources.
+
+    ``index`` and ``cold_load_seconds`` are injectable for deterministic unit
+    tests.  Production callers leave them unset and obtain the public active
+    BM25 singleton exactly once.
+    """
     started = time.perf_counter()
     from app.services.rag.bm25_search import get_bm25_index, tokenize_medical_text
 
-    index = get_bm25_index()
-    cold_load_seconds = time.perf_counter() - started
-    cases, k_values = _load_golden(golden_path)
-    retrieval_k = max(top_k, max(k_values))
-    metrics_by_category: Dict[str, List[Dict[str, float]]] = defaultdict(list)
+    if index is None:
+        index = get_bm25_index()
+    measured_cold_load = time.perf_counter() - started
+    if cold_load_seconds is None:
+        cold_load_seconds = measured_cold_load
+
+    cases, _golden_k_values = _load_golden(golden_path)
+    retrieval_k = max(top_k, max(REQUIRED_K_VALUES))
     latency_ms: List[float] = []
     case_reports: List[Dict[str, Any]] = []
 
@@ -174,9 +202,10 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
         results = index.search(case["query"], top_k=retrieval_k)
         elapsed_ms = (time.perf_counter() - query_started) * 1000
         latency_ms.append(elapsed_ms)
-        ranked_ids, relevant_ids = _ranked_and_relevant(results, case["relevant_source_contains"])
-        case_metrics = _case_metrics(ranked_ids, relevant_ids, k_values)
-        metrics_by_category[case["category"]].append(case_metrics)
+        ranked_ids, relevant_ids = _ranked_and_relevant(
+            results, case["relevant_source_contains"]
+        )
+        case_metrics = _case_metrics(ranked_ids, relevant_ids, REQUIRED_K_VALUES)
         case_reports.append(
             {
                 "id": case["id"],
@@ -188,54 +217,118 @@ def evaluate(golden_path: Path, top_k: int) -> Dict[str, Any]:
                     case["must_preserve_tokens"],
                     tokenize_medical_text,
                 ),
-                "top_sources": [str(result.get("source", "")) for result in results[:5]],
+                "top_sources": [
+                    str(result.get("source", "")) for result in results[:5]
+                ],
             }
         )
 
-    aggregated = {
-        category: {
-            "case_count": len(category_metrics),
-            **{metric: round(_mean([item[metric] for item in category_metrics]), 6) for metric in category_metrics[0]},
-        }
-        for category, category_metrics in sorted(metrics_by_category.items())
+    aggregated = aggregate_stratified_retrieval_metrics(case_reports)
+    token_count = getattr(
+        index,
+        "token_count",
+        sum(len(tokens) for tokens in getattr(index, "doc_tokens", [])),
+    )
+    normalized_consistency = {
+        "measured": consistency is not None,
+        "generation_mismatch_count": None,
+        "stale_cache_hit_count": None,
     }
-    token_count = getattr(index, "token_count", sum(len(tokens) for tokens in getattr(index, "doc_tokens", [])))
-    return {
+    if consistency is not None:
+        normalized_consistency.update(dict(consistency))
+    p50_ms = round(_percentile(latency_ms, 0.50), 4)
+    p95_ms = round(_percentile(latency_ms, 0.95), 4)
+    report = {
         "index_version": _active_index_version(index),
         "document_count": index.doc_count,
         "token_count": token_count,
-        "cold_load_seconds": round(cold_load_seconds, 6),
-        "latency_ms": {"p50": round(_percentile(latency_ms, 0.50), 4), "p95": round(_percentile(latency_ms, 0.95), 4)},
+        "cold_load_seconds": round(float(cold_load_seconds), 6),
+        "latency_ms": {"p50": p50_ms, "p95": p95_ms},
+        "performance": {
+            "cold_load_seconds": round(float(cold_load_seconds), 6),
+            "search_p50_ms": p50_ms,
+            "search_p95_ms": p95_ms,
+        },
+        # Keep the historical direct category keys while adding explicit
+        # overall/exact-term summaries required by the Task 8 gate.
         "metrics": aggregated,
+        "stratified_metrics": {
+            category: aggregated[category] for category in REQUIRED_CATEGORIES
+        },
         "case_count": len(cases),
-        "k_values": list(k_values),
+        "k_values": list(REQUIRED_K_VALUES),
         "token_preservation": _token_preservation_result(case_reports),
+        "consistency": normalized_consistency,
         "cases": case_reports,
     }
+    return report
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate a read-only BM25 baseline report")
-    parser.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN, help="Path to bm25_golden_set.json")
-    parser.add_argument("--output", type=Path, required=True, help="Destination JSON report path")
+    parser.add_argument(
+        "--golden", type=Path, default=DEFAULT_GOLDEN, help="Path to bm25_golden_set.json"
+    )
+    parser.add_argument("--output", type=Path, help="Destination JSON report path")
     parser.add_argument("--top-k", type=int, default=10, help="Minimum number of BM25 candidates to retrieve")
     parser.add_argument(
         "--fail-on-token-loss",
         action="store_true",
         help="Exit non-zero after writing the report if a required token is missing",
     )
+    parser.add_argument(
+        "--compare",
+        type=Path,
+        help="Measured baseline report used for Task 8 quality/performance gates",
+    )
+    parser.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Exit non-zero when any Task 8 candidate-generation gate fails",
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
     if args.top_k <= 0:
         parser.error("--top-k must be positive")
+    if args.fail_on_regression and args.compare is None:
+        parser.error("--fail-on-regression requires --compare")
     golden_path = args.golden.resolve()
     if not golden_path.is_file():
         parser.error(f"golden set does not exist: {golden_path}")
-    report = evaluate(golden_path, args.top_k)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as output_file:
-        json.dump(report, output_file, ensure_ascii=False, indent=2)
-        output_file.write("\n")
-    print(f"BM25 baseline written to {args.output} ({report['case_count']} cases)")
+
+    # A missing/empty active index is an honest offline skip.  It is not a
+    # fabricated green candidate and leaves the real-gate decision to CI once
+    # a generation is available.
+    from app.services.rag.bm25_search import get_bm25_index
+
+    active_index = get_bm25_index()
+    if not getattr(active_index, "initialized", False) or getattr(active_index, "doc_count", 0) == 0:
+        print("BM25 evaluation skipped: no initialized active generation (offline verification only).")
+        return 0
+
+    report = evaluate(golden_path, args.top_k, index=active_index)
+    gate_result = None
+    if args.compare is not None:
+        if not args.compare.is_file():
+            parser.error(f"baseline report does not exist: {args.compare.resolve()}")
+        with args.compare.open(encoding="utf-8") as baseline_file:
+            baseline = json.load(baseline_file)
+        gate_result = compare_reports(report, baseline)
+        report["gates"] = gate_result
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("w", encoding="utf-8") as output_file:
+            json.dump(report, output_file, ensure_ascii=False, indent=2)
+            output_file.write("\n")
+        print(f"BM25 report written to {args.output} ({report['case_count']} cases)")
+    else:
+        print(f"BM25 report evaluated ({report['case_count']} cases)")
+
     exit_code = _preservation_exit_code(
         report,
         fail_on_token_loss=args.fail_on_token_loss,
@@ -248,6 +341,12 @@ def main() -> int:
             f"across {preservation['failed_case_count']} case(s)",
             file=sys.stderr,
         )
+    if args.fail_on_regression and gate_result is not None and not gate_result["passed"]:
+        print(
+            "BM25 Task 8 gates failed: " + ", ".join(gate_result["failures"]),
+            file=sys.stderr,
+        )
+        exit_code = 1
     return exit_code
 
 

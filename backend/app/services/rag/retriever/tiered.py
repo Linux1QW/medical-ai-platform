@@ -7,7 +7,10 @@ from typing import Any, Literal
 
 from app.core.config import settings
 from app.services.observability.langfuse_client import get_tracer
-from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
+from app.services.observability.metrics import (
+    RAG_RETRIEVAL_DURATION,
+    record_rag_observability,
+)
 from app.services.rag.indexing.manifest import IndexGenerationMismatch
 from app.services.rag.indexing.versioning import get_active_index_generation
 from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
@@ -233,11 +236,20 @@ async def tiered_retrieve(  # noqa: C901
     )
     if cached is not None:
         logger.info(f"tiered_retrieve 缓存命中: {index_generation}")
-        return RetrievalBundle.model_validate(cached)
+        cached_result = RetrievalBundle.model_validate(cached)
+        cached_result.trace = record_rag_observability(
+            {
+                **cached_result.trace,
+                "index_generation": index_generation,
+                "cache_hit": True,
+            }
+        )
+        return cached_result
 
     start = time.monotonic()
     trace: dict[str, Any] = {
         "index_generation": index_generation,
+        "cache_hit": False,
         "queries": [{"type": q.query_type, "text": q.text[:100], "source": q.source} for q in queries],
         "levels_attempted": [],
         "retrieval_level": "base",
@@ -352,6 +364,7 @@ async def tiered_retrieve(  # noqa: C901
             confidence=confidence.value,
             trace=trace,
         )
+        result.trace = record_rag_observability(result.trace)
         await set_cached_bundle(
             queries,
             index_generation,
@@ -424,6 +437,7 @@ async def tiered_retrieve(  # noqa: C901
             confidence=confidence.value,
             trace=trace,
         )
+        result.trace = record_rag_observability(result.trace)
         await set_cached_bundle(
             queries,
             index_generation,
@@ -485,6 +499,7 @@ async def tiered_retrieve(  # noqa: C901
         confidence=confidence.value,
         trace=trace,
     )
+    result.trace = record_rag_observability(result.trace)
 
     # ── 写入缓存 ──
     await set_cached_bundle(

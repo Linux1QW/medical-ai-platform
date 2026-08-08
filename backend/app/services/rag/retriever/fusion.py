@@ -3,9 +3,11 @@
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from app.core.config import settings
+from app.services.observability.metrics import record_rag_observability
 from app.services.rag.bm25_search import get_bm25_index
 from app.services.rag.hybrid_fusion import weighted_rrf
 from app.services.rag.indexing.manifest import IndexGenerationMismatch
@@ -203,6 +205,7 @@ async def hybrid_recall(
         raise IndexGenerationUnavailable("no active RAG generation in Redis")
     recall_k = top_k * 3
     loop = asyncio.get_running_loop()
+    bm25_observation: dict[str, float | int] = {}
 
     async def dense_search() -> list[dict[str, Any]]:
         try:
@@ -216,11 +219,30 @@ async def hybrid_recall(
             return []
 
     def bm25_search() -> list[dict[str, Any]]:
+        load_started = time.perf_counter()
         try:
-            return get_bm25_index(selected_generation).search(
-                query, top_k=recall_k
+            index = get_bm25_index(selected_generation)
+            bm25_observation["bm25_load_seconds"] = (
+                time.perf_counter() - load_started
             )
+            query_started = time.perf_counter()
+            results = index.search(query, top_k=recall_k)
+            bm25_observation["bm25_query_seconds"] = (
+                time.perf_counter() - query_started
+            )
+            bm25_observation["bm25_candidates"] = len(results)
+            bm25_observation["bm25_top_score"] = max(
+                (float(item.get("bm25_score", 0.0)) for item in results),
+                default=0.0,
+            )
+            return results
         except Exception as error:
+            bm25_observation.setdefault(
+                "bm25_load_seconds", time.perf_counter() - load_started
+            )
+            bm25_observation.setdefault("bm25_query_seconds", 0.0)
+            bm25_observation.setdefault("bm25_candidates", 0)
+            bm25_observation.setdefault("bm25_top_score", 0.0)
             logger.warning("hybrid_recall BM25 channel failed: %s", error)
             return []
 
@@ -244,10 +266,22 @@ async def hybrid_recall(
         )
         sparse = []
 
-    return run_three_way_fusion(
+    fused, meta = run_three_way_fusion(
         bm25=bm25,
         dense=dense,
         sparse=sparse,
         top_k=top_k,
         generation=selected_generation,
     )
+    meta.update(
+        {
+            "index_generation": selected_generation,
+            "channel_candidates": {
+                "bm25": len(bm25),
+                "dense": len(dense),
+                "sparse": len(sparse),
+            },
+            **bm25_observation,
+        }
+    )
+    return fused, record_rag_observability(meta)

@@ -86,6 +86,47 @@ jobs:
           cd backend
           python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold
 
+      - name: Run Task 8 quality gate tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: test-secret-key-for-ci
+          DASHSCOPE_API_KEY: test-key
+          LANGGRAPH_ENABLED: 'false'
+          TESTING: 'true'
+        run: |
+          cd backend
+          python -m pytest \
+            tests/evaluation/test_task8_tuning.py \
+            tests/evaluation/test_task8_metrics.py \
+            tests/evaluation/test_task8_bm25_eval.py \
+            tests/rag/test_task8_observability.py -q
+          python -m pytest tests/rag -q
+
+      - name: Run measured Task 8 gates when local artifacts are present
+        shell: bash
+        run: |
+          cd backend
+          if [[ -f evaluation_reports/bm25-v1.json && -n "$(find data/rag_indexes -mindepth 2 -maxdepth 2 -name manifest.json -print -quit 2>/dev/null)" ]]; then
+            python scripts/eval/evaluate_bm25.py \
+              --compare evaluation_reports/bm25-v1.json \
+              --fail-on-regression
+          else
+            echo "SKIP: no measured BM25 baseline and generation artifacts in checkout"
+          fi
+          if [[ -f evaluation/rag_cases/rag_gold_cases.jsonl && -d data/medical_kb && -n "$(find data/rag_indexes -mindepth 2 -maxdepth 2 -name manifest.json -print -quit 2>/dev/null)" ]]; then
+            python -m evaluation.rag_eval \
+              --mode both \
+              --split regression \
+              --fail-on-threshold
+          else
+            echo "SKIP: no measured RAG gold cases and Chroma generation in checkout"
+          fi
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
@@ -156,6 +197,15 @@ jobs:
       - name: Run ruff
         run: |
           ruff check backend/
+
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.sha }}"
+          else
+            git diff --check "${{ github.event.before }}...${{ github.sha }}"
+          fi
 
       # mypy 阻断门禁已移至 backend-test 作业（需完整依赖环境，与本地结果一致）
 

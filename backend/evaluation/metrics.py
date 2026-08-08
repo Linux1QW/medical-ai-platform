@@ -3,9 +3,33 @@ Core metrics calculation for RAG evaluation.
 """
 import math
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .datasets import RagEvalResult, RagGoldCase, StanceType
+
+# Task 8 uses one fixed report contract.  Keep the names in one place so the
+# evaluator, tuning report and CI gate cannot silently drift apart.
+RAG_STRATA: Tuple[str, ...] = (
+    "disease_alias",
+    "drug_dose",
+    "gene_variant",
+    "lab_unit",
+    "negation",
+    "icd_code",
+)
+RAG_REQUIRED_CATEGORIES = RAG_STRATA
+RAG_K_VALUES: Tuple[int, ...] = (1, 3, 5, 10)
+RAG_EXACT_TERM_STRATA = frozenset(
+    {"drug_dose", "gene_variant", "lab_unit", "icd_code"}
+)
+RAG_RANK_METRIC_NAMES: Tuple[str, ...] = (
+    "recall@1",
+    "recall@3",
+    "recall@5",
+    "recall@10",
+    "mrr",
+    "ndcg@10",
+)
 
 
 def recall_at_k(retrieved_ids: List[str], gold_ids: List[str], k: int) -> float:
@@ -1013,3 +1037,347 @@ def tool_use_metrics(  # noqa: C901
         "accuracy": accuracy,
         "per_tool": per_tool_summary,
     }
+
+
+# ============================================================================
+# Task 8 retrieval report and release-gate metrics
+# ============================================================================
+
+
+def rag_rank_metrics(
+    retrieved_ids: Sequence[str],
+    gold_ids: Iterable[str],
+    k_values: Sequence[int] = RAG_K_VALUES,
+) -> Dict[str, float]:
+    """Return the fixed retrieval metric names used by the Task 8 report.
+
+    The existing ``retrieval_metrics`` function intentionally retains its
+    historical ``recall_at_10`` naming.  This adapter provides the report
+    spelling (``recall@10`` / ``ndcg@10``) without changing that public API.
+    """
+    gold = list(gold_ids)
+    grades = {doc_id: 1 for doc_id in gold}
+    result: Dict[str, float] = {
+        "mrr": mrr(list(retrieved_ids), gold),
+    }
+    for k in k_values:
+        result[f"recall@{k}"] = recall_at_k(list(retrieved_ids), gold, k)
+        result[f"ndcg@{k}"] = ndcg_at_k(list(retrieved_ids), grades, k)
+    return result
+
+
+def _empty_rag_rank_metrics(case_count: int = 0) -> Dict[str, float]:
+    return {
+        "case_count": case_count,
+        **{metric: 0.0 for metric in RAG_RANK_METRIC_NAMES},
+    }
+
+
+def _case_metric_value(metrics: Mapping[str, Any], metric: str) -> float:
+    """Read both Task 8 report keys and legacy ``*_at_*`` keys."""
+    value = metrics.get(metric)
+    if value is None and "@" in metric:
+        value = metrics.get(metric.replace("@", "_at_"))
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _aggregate_rag_records(records: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    if not records:
+        return _empty_rag_rank_metrics()
+    result = _empty_rag_rank_metrics(len(records))
+    for metric in RAG_RANK_METRIC_NAMES:
+        result[metric] = round(
+            sum(
+                _case_metric_value(record.get("metrics", record), metric)
+                for record in records
+            )
+            / len(records),
+            6,
+        )
+    return result
+
+
+def aggregate_stratified_retrieval_metrics(
+    records: Sequence[Mapping[str, Any]],
+) -> Dict[str, Dict[str, float]]:
+    """Aggregate retrieval metrics for the six required medical strata.
+
+    Each record contains ``category`` and either a precomputed ``metrics``
+    mapping or ``retrieved_ids``/``gold_ids``.  Empty strata remain present
+    with zero values so a report cannot accidentally omit a safety-sensitive
+    category.
+    """
+    by_category: Dict[str, List[Mapping[str, Any]]] = {
+        category: [] for category in RAG_STRATA
+    }
+    normalized: List[Mapping[str, Any]] = []
+    for record in records:
+        category = str(record.get("category", ""))
+        if category not in by_category:
+            continue
+        if "metrics" not in record and (
+            "retrieved_ids" in record or "gold_ids" in record
+        ):
+            enriched = dict(record)
+            enriched["metrics"] = rag_rank_metrics(
+                record.get("retrieved_ids", []),
+                record.get("gold_ids", []),
+            )
+            record = enriched
+        by_category[category].append(record)
+        normalized.append(record)
+
+    result = {
+        category: _aggregate_rag_records(category_records)
+        for category, category_records in by_category.items()
+    }
+    result["overall"] = _aggregate_rag_records(normalized)
+    exact_records = [
+        record
+        for record in normalized
+        if record.get("category") in RAG_EXACT_TERM_STRATA
+    ]
+    result["exact_term"] = _aggregate_rag_records(exact_records)
+    return result
+
+
+def _mapping_value(report: Mapping[str, Any], key: str) -> Any:
+    """Look up a scalar in the common report sections without inventing it."""
+    containers: List[Mapping[str, Any]] = [report]
+    for section in ("metrics", "aggregate", "performance", "consistency", "gates"):
+        value = report.get(section)
+        if isinstance(value, Mapping):
+            containers.append(value)
+    for container in containers:
+        if key in container:
+            return container[key]
+    return None
+
+
+def _numeric_metric(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _section_metric(section: Any, metric: str) -> Optional[float]:
+    if not isinstance(section, Mapping):
+        return None
+    value = section.get(metric)
+    if value is None and "@" in metric:
+        value = section.get(metric.replace("@", "_at_"))
+    return _numeric_metric(value)
+
+
+def _legacy_overall_metric(metrics: Mapping[str, Any], metric: str) -> Optional[float]:
+    overall = _section_metric(metrics.get("overall"), metric)
+    if overall is not None:
+        return overall
+
+    # Legacy BM25 reports contain one mapping per category. Rebuild the
+    # overall macro average from those measured category values.
+    category_values: List[Tuple[float, int]] = []
+    for category in RAG_STRATA:
+        category_report = metrics.get(category)
+        if not isinstance(category_report, Mapping):
+            continue
+        value = _section_metric(category_report, metric)
+        count = category_report.get("case_count", 0)
+        if value is not None and isinstance(count, int) and count > 0:
+            category_values.append((value, count))
+    if not category_values:
+        return None
+    total = sum(count for _, count in category_values)
+    return sum(value * count for value, count in category_values) / total
+
+
+def _case_metric_average(cases: Any, metric: str) -> Optional[float]:
+    if not isinstance(cases, list):
+        return None
+    values: List[float] = []
+    for case in cases:
+        if not isinstance(case, Mapping):
+            continue
+        value = _section_metric(case.get("metrics", case), metric)
+        if value is not None:
+            values.append(value)
+    return sum(values) / len(values) if values else None
+
+
+def _metric_from_report(report: Mapping[str, Any], metric: str) -> Optional[float]:
+    direct = _numeric_metric(_mapping_value(report, metric))
+    if direct is not None:
+        return direct
+
+    for section_name in ("overall", "aggregate"):
+        value = _section_metric(report.get(section_name), metric)
+        if value is not None:
+            return value
+
+    metrics = report.get("metrics")
+    if isinstance(metrics, Mapping):
+        value = _legacy_overall_metric(metrics, metric)
+        if value is not None:
+            return value
+
+    return _case_metric_average(report.get("cases"), metric)
+
+
+def _exact_term_metric_from_report(report: Mapping[str, Any]) -> Optional[float]:
+    for container in (report, report.get("metrics", {})):
+        if not isinstance(container, Mapping):
+            continue
+        for key in ("exact_term_recall@10", "exact_term_recall_at_10"):
+            value = container.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+        exact_term = container.get("exact_term")
+        if isinstance(exact_term, Mapping):
+            value = exact_term.get("recall@10", exact_term.get("recall_at_10"))
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+
+    metrics = report.get("metrics")
+    if isinstance(metrics, Mapping):
+        values: List[Tuple[float, int]] = []
+        for category in RAG_EXACT_TERM_STRATA:
+            category_metrics = metrics.get(category)
+            if not isinstance(category_metrics, Mapping):
+                continue
+            value = category_metrics.get(
+                "recall@10", category_metrics.get("recall_at_10")
+            )
+            count = category_metrics.get("case_count", 0)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and isinstance(count, int)
+                and count > 0
+            ):
+                values.append((float(value), count))
+        if values:
+            total = sum(count for _, count in values)
+            return sum(value * count for value, count in values) / total
+    return None
+
+
+def _performance_value(report: Mapping[str, Any], key: str) -> Optional[float]:
+    value = _mapping_value(report, key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    performance = report.get("performance")
+    if isinstance(performance, Mapping):
+        value = performance.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    latency = report.get("latency_ms")
+    if key == "search_p95_ms" and isinstance(latency, Mapping):
+        value = latency.get("p95")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def _consistency_value(report: Mapping[str, Any], key: str) -> Optional[float]:
+    value = _mapping_value(report, key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _comparison_check(
+    candidate: Optional[float],
+    baseline: Optional[float],
+    *,
+    threshold: Optional[float] = None,
+    operator: str = "ge",
+) -> Dict[str, Any]:
+    if candidate is None or (operator == "ge" and baseline is None):
+        return {
+            "passed": False,
+            "candidate": candidate,
+            "baseline": baseline,
+            "threshold": threshold,
+            "reason": "unavailable measurement",
+        }
+    target = baseline if threshold is None else baseline + threshold
+    passed = candidate >= target if operator == "ge" else candidate <= target
+    return {
+        "passed": passed,
+        "candidate": candidate,
+        "baseline": baseline,
+        "threshold": target,
+        "reason": "meets threshold" if passed else "threshold violated",
+    }
+
+
+def evaluate_rag_quality_gates(
+    candidate: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Evaluate the Task 8 candidate-generation release gates.
+
+    Missing telemetry is an unavailable measurement and therefore fails the
+    gate; it is never converted to a fabricated zero.
+    """
+    checks: Dict[str, Dict[str, Any]] = {
+        "overall_recall@10": _comparison_check(
+            _metric_from_report(candidate, "recall@10"),
+            _metric_from_report(baseline, "recall@10"),
+        ),
+        "overall_ndcg@10": _comparison_check(
+            _metric_from_report(candidate, "ndcg@10"),
+            _metric_from_report(baseline, "ndcg@10"),
+        ),
+        "exact_term_recall@10": _comparison_check(
+            _exact_term_metric_from_report(candidate),
+            _exact_term_metric_from_report(baseline),
+            threshold=0.05,
+        ),
+        "cold_load_seconds": {
+            "passed": (
+                _performance_value(candidate, "cold_load_seconds") is not None
+                and _performance_value(candidate, "cold_load_seconds") <= 10.0
+            ),
+            "candidate": _performance_value(candidate, "cold_load_seconds"),
+            "threshold": 10.0,
+            "reason": "meets threshold"
+            if (
+                _performance_value(candidate, "cold_load_seconds") is not None
+                and _performance_value(candidate, "cold_load_seconds") <= 10.0
+            )
+            else "unavailable measurement or threshold violated",
+        },
+        "search_p95_ms": {
+            "passed": (
+                _performance_value(candidate, "search_p95_ms") is not None
+                and _performance_value(candidate, "search_p95_ms") <= 5.0
+            ),
+            "candidate": _performance_value(candidate, "search_p95_ms"),
+            "threshold": 5.0,
+            "reason": "meets threshold"
+            if (
+                _performance_value(candidate, "search_p95_ms") is not None
+                and _performance_value(candidate, "search_p95_ms") <= 5.0
+            )
+            else "unavailable measurement or threshold violated",
+        },
+        "generation_mismatch_count": {
+            "passed": _consistency_value(candidate, "generation_mismatch_count") == 0,
+            "candidate": _consistency_value(candidate, "generation_mismatch_count"),
+            "threshold": 0,
+            "reason": "equals zero"
+            if _consistency_value(candidate, "generation_mismatch_count") == 0
+            else "unavailable measurement or non-zero count",
+        },
+        "stale_cache_hit_count": {
+            "passed": _consistency_value(candidate, "stale_cache_hit_count") == 0,
+            "candidate": _consistency_value(candidate, "stale_cache_hit_count"),
+            "threshold": 0,
+            "reason": "equals zero"
+            if _consistency_value(candidate, "stale_cache_hit_count") == 0
+            else "unavailable measurement or non-zero count",
+        },
+    }
+    failures = [name for name, check in checks.items() if not check["passed"]]
+    return {"passed": not failures, "checks": checks, "failures": failures}

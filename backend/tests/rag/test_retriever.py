@@ -86,3 +86,60 @@ async def test_tiered_retrieve_passes_original_query_text_to_hybrid_recall(monke
     )
 
     hybrid_recall.assert_awaited_once_with(original_text, top_k=5)
+
+
+def test_merge_evidence_converts_each_channel_rank_to_rrf():
+    bm25_only = EvidenceItem(
+        doc_id="bm25",
+        text="bm25",
+        source="a.pdf",
+        bm25_score=100.0,
+    )
+    dense_only = EvidenceItem(
+        doc_id="dense",
+        text="dense",
+        source="b.pdf",
+        vector_score=0.01,
+    )
+    sparse_only = EvidenceItem(
+        doc_id="sparse",
+        text="sparse",
+        source="c.pdf",
+        sparse_score=8.0,
+    )
+
+    merged = tiered._merge_evidence(
+        [bm25_only],
+        [dense_only],
+        [sparse_only],
+    )
+
+    assert [item.doc_id for item in merged] == ["bm25", "dense", "sparse"]
+    assert {item.rrf_score for item in merged} == {
+        round(1.0 / (tiered.settings.RRF_K + 1), 6)
+    }
+
+
+def test_dict_to_evidence_preserves_all_retrieval_fields():
+    item = tiered._dict_to_evidence(
+        [
+            {
+                "doc_id": 7,
+                "text": "evidence",
+                "source": "guide.pdf",
+                "bm25_score": 4.0,
+                "vector_score": 0.8,
+                "sparse_score": 2.0,
+                "rrf_score": 0.03,
+                "generation": "rag-v9",
+            }
+        ],
+        "case",
+    )[0]
+
+    assert item.doc_id == "7"
+    assert item.bm25_score == 4.0
+    assert item.vector_score == 0.8
+    assert item.sparse_score == 2.0
+    assert item.rrf_score == 0.03
+    assert item.generation == "rag-v9"

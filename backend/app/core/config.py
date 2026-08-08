@@ -93,6 +93,7 @@ class Settings(BaseSettings):
 
     # ── C. 融合 / 重排权重外置（便于基于评估集调参）──
     # 三路 RRF 权重 [BM25, Dense, Sparse]；两路时取前两项归一化
+    RRF_K: int = 35
     RRF_WEIGHT_BM25: float = 0.30
     RRF_WEIGHT_DENSE: float = 0.45
     RRF_WEIGHT_SPARSE: float = 0.25

@@ -12,6 +12,8 @@
 
 from typing import Optional
 
+from app.core.config import settings
+
 
 def normalize_scores(scores: list[float]) -> list[float]:
     """Min-Max 归一化到 [0, 1]
@@ -32,11 +34,10 @@ def normalize_scores(scores: list[float]) -> list[float]:
 
 
 def weighted_rrf(
-    rankings: list[list[tuple[int, float]]],
+    rankings: list[list[tuple[str, float]]],
     weights: Optional[list[float]] = None,
-    k: int = 35,
-    score_normalize: bool = True,
-) -> list[tuple[int, float]]:
+    k: Optional[int] = None,
+) -> list[tuple[str, float]]:
     """加权 RRF (Reciprocal Rank Fusion) 融合
 
     公式：score(d) = Σ weight_i / (k + rank_i(d))
@@ -46,8 +47,7 @@ def weighted_rrf(
         rankings: 每个检索源的结果 [(doc_id, score), ...]
         weights: 每个检索源的权重
                  默认 [0.30, 0.45, 0.25] 对应 [BM25, Dense, Sparse]
-        k: RRF 常数（医学场景建议 30-40，默认 35）
-        score_normalize: 是否先归一化分数（保留参数但 RRF 仅依赖排名）
+        k: RRF 常数；未提供时读取统一配置
 
     Returns:
         融合后的 [(doc_id, fused_score), ...] 按分数降序
@@ -55,31 +55,47 @@ def weighted_rrf(
     if not rankings:
         return []
 
+    if k is None:
+        k = settings.RRF_K
+
     n_sources = len(rankings)
     if weights is None:
         # 医学场景默认权重：向量主导，BM25 补充精确匹配
         if n_sources == 3:
-            weights = [0.30, 0.45, 0.25]  # BM25, Dense, Sparse
+            weights = [
+                settings.RRF_WEIGHT_BM25,
+                settings.RRF_WEIGHT_DENSE,
+                settings.RRF_WEIGHT_SPARSE,
+            ]
         elif n_sources == 2:
-            weights = [0.40, 0.60]  # BM25, Dense
+            total = settings.RRF_WEIGHT_BM25 + settings.RRF_WEIGHT_DENSE
+            weights = (
+                [
+                    settings.RRF_WEIGHT_BM25 / total,
+                    settings.RRF_WEIGHT_DENSE / total,
+                ]
+                if total > 0
+                else [0.40, 0.60]
+            )
         else:
             weights = [1.0 / n_sources] * n_sources
 
     # 加权 RRF 计算（RRF 仅依赖排名，不依赖原始分数）
-    fused_scores: dict[int, float] = {}
+    fused_scores: dict[str, float] = {}
     for ranking, weight in zip(rankings, weights, strict=False):
         for rank, (doc_id, _score) in enumerate(ranking):
             rrf_score = weight / (k + rank + 1)
-            fused_scores[doc_id] = fused_scores.get(doc_id, 0.0) + rrf_score
+            document_id = str(doc_id)
+            fused_scores[document_id] = fused_scores.get(document_id, 0.0) + rrf_score
 
     # 按融合分数降序排列
     return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
 
 
 def simple_weighted_sum(
-    rankings: list[list[tuple[int, float]]],
+    rankings: list[list[tuple[str, float]]],
     weights: Optional[list[float]] = None,
-) -> list[tuple[int, float]]:
+) -> list[tuple[str, float]]:
     """简单加权分数融合（备选方案）
 
     适用于各检索源分数已归一化到同一量纲的场景。
@@ -99,9 +115,10 @@ def simple_weighted_sum(
     if weights is None:
         weights = [1.0 / n_sources] * n_sources
 
-    fused: dict[int, float] = {}
+    fused: dict[str, float] = {}
     for ranking, weight in zip(rankings, weights, strict=False):
         for doc_id, score in ranking:
-            fused[doc_id] = fused.get(doc_id, 0.0) + weight * score
+            document_id = str(doc_id)
+            fused[document_id] = fused.get(document_id, 0.0) + weight * score
 
     return sorted(fused.items(), key=lambda x: x[1], reverse=True)

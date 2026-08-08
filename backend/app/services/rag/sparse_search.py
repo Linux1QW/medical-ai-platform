@@ -19,6 +19,7 @@ from typing import Optional
 
 import numpy as np
 
+from app.core.config import settings
 from app.services.rag.dual_encoder import DualEncoder, get_dual_encoder
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ class LearnedSparseSearch:
         self._encoder: Optional[DualEncoder] = None
         self._corpus_sparse: list = []   # list of {token_id: weight}
         self._corpus_dense: Optional[np.ndarray] = None  # (N, 1024)
+        self._corpus_doc_ids: list[str] = []
+        self._corpus_documents: list[dict] = []
 
     def set_encoder(self, encoder: DualEncoder) -> None:
         """设置双表示编码器
@@ -51,20 +54,44 @@ class LearnedSparseSearch:
         self._encoder = encoder
         logger.info("LearnedSparseSearch: 编码器已设置")
 
-    def build_index(self, texts: list) -> None:
+    def build_index(self, documents: list[dict]) -> None:
         """构建稀疏索引（编码所有文档）
 
         Args:
-            texts: 语料文本列表
+            documents: 包含真实 doc_id、文本和最小元数据的语料列表
 
         Raises:
             RuntimeError: 编码器未设置时
         """
+        self._corpus_sparse = []
+        self._corpus_dense = None
+        self._corpus_doc_ids = []
+        self._corpus_documents = []
+
         if not self._encoder:
             logger.warning("LearnedSparseSearch.build_index: 编码器未设置，跳过索引构建")
             return
 
         try:
+            self._corpus_documents = [
+                {
+                    "doc_id": str(document["doc_id"]),
+                    "text": document.get("text", ""),
+                    **{
+                        key: document[key]
+                        for key in ("source", "page", "heading_path", "generation")
+                        if key in document
+                    },
+                }
+                for document in documents
+                if document.get("doc_id") not in (None, "")
+            ]
+            self._corpus_doc_ids = [
+                document["doc_id"] for document in self._corpus_documents
+            ]
+            texts = [document["text"] for document in self._corpus_documents]
+            if not texts:
+                return
             result = self._encoder.encode_corpus(texts)
             self._corpus_dense = result["dense"]
             self._corpus_sparse = result["sparse"]
@@ -76,6 +103,8 @@ class LearnedSparseSearch:
             logger.error(f"LearnedSparseSearch 索引构建失败: {e}")
             self._corpus_sparse = []
             self._corpus_dense = None
+            self._corpus_doc_ids = []
+            self._corpus_documents = []
 
     def search(self, query: str, top_k: int = 30) -> list:
         """检索：使用 learned sparse 表示计算相似度
@@ -85,7 +114,7 @@ class LearnedSparseSearch:
             top_k: 返回条数
 
         Returns:
-            [(doc_index, score), ...] 按分数降序排列
+            带真实字符串 doc_id、最小元数据和 sparse_score 的字典列表
             当编码器不可用或索引未构建时返回空列表（降级）
         """
         if not self._encoder:
@@ -108,11 +137,18 @@ class LearnedSparseSearch:
 
             # 按分数降序排列，取 top_k
             scores.sort(key=lambda x: x[1], reverse=True)
-            result = scores[:top_k]
+            result = [
+                {
+                    **self._corpus_documents[index],
+                    "doc_id": self._corpus_doc_ids[index],
+                    "sparse_score": score,
+                }
+                for index, score in scores[:top_k]
+            ]
 
             logger.debug(
                 f"LearnedSparseSearch.search: query='{query[:40]}...' "
-                f"→ {len(result)} 条结果，top score={result[0][1]:.4f}" if result else "→ 0 条结果"
+                f"→ {len(result)} 条结果，top score={result[0]['sparse_score']:.4f}" if result else "→ 0 条结果"
             )
             return result
 
@@ -208,27 +244,40 @@ def rebuild_sparse_index() -> bool:
 
         # 从 collection 获取所有文档文本
         count = collection.count()
-        all_texts: list[str] = []
+        all_documents: list[dict] = []
         batch_size = 1000
         for offset in range(0, count, batch_size):
             result = collection.get(
                 limit=batch_size,
                 offset=offset,
-                include=["documents"],
+                include=["documents", "metadatas"],
             )
             if result["documents"]:
-                all_texts.extend(result["documents"])
+                for document_id, text, metadata in zip(
+                    result["ids"],
+                    result["documents"],
+                    result.get("metadatas") or [None] * len(result["ids"]),
+                    strict=False,
+                ):
+                    all_documents.append(
+                        {
+                            **(metadata or {}),
+                            "doc_id": str(document_id),
+                            "text": text,
+                            "generation": str(settings.ACTIVE_INDEX_VERSION),
+                        }
+                    )
 
-        if not all_texts:
+        if not all_documents:
             logger.warning("Sparse 索引: 无文档可索引")
             return False
 
         # 重建实例
         _sparse_search = LearnedSparseSearch()
         _sparse_search.set_encoder(encoder)
-        _sparse_search.build_index(all_texts)
+        _sparse_search.build_index(all_documents)
 
-        logger.info(f"Sparse 索引已重建: {len(all_texts)} 条文档")
+        logger.info(f"Sparse 索引已重建: {len(all_documents)} 条文档")
         return True
 
     except Exception as e:

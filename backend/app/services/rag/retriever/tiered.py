@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.services.observability.langfuse_client import get_tracer
 from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
 from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
-from app.services.rag.retriever.fusion import RRF_K, hybrid_recall
+from app.services.rag.retriever.fusion import hybrid_recall
 from app.services.rag.retriever.hyde import hyde_retrieve
 from app.services.rag.retriever.mqe import expand_queries
 from app.services.rag.retriever.similarity import _filter_by_embedding_similarity
@@ -36,16 +36,21 @@ def _dict_to_evidence(
     """将 dict 格式的检索结果转为 EvidenceItem"""
     items = []
     for d in dicts:
+        vector_score = d.get("vector_score")
+        if vector_score is None and d.get("rrf_score") is None:
+            vector_score = d.get("score")
         item = EvidenceItem(
-            doc_id=d.get("doc_id", d.get("id", "")),
+            doc_id=str(d.get("doc_id", d.get("id", ""))),
+            generation=d.get("generation", str(settings.ACTIVE_INDEX_VERSION)),
             text=d.get("text", ""),
             source=d.get("source", "未知"),
             page=d.get("page"),
             heading_path=d.get("heading_path", ""),
             chunk_seq=d.get("chunk_seq") if isinstance(d.get("chunk_seq"), int) and d.get("chunk_seq", -1) >= 0 else None,
             query_types=[query_type],
-            vector_score=d.get("vector_score") or d.get("score"),
+            vector_score=vector_score,
             bm25_score=d.get("bm25_score"),
+            sparse_score=d.get("sparse_score"),
             rrf_score=d.get("rrf_score"),
             # 从 metadata 提取增强字段（如果存在）
             organization=d.get("organization"),
@@ -133,44 +138,35 @@ def _merge_evidence(
     """合并多路证据并去重（按 doc_id），保留最高分数"""
     seen: dict = {}
 
-    for results in result_lists:
-        for item in results:
-            key = item.doc_id
+    for result_list in result_lists:
+        for rank, item in enumerate(result_list, 1):
+            candidate = item.model_copy()
+            if candidate.rrf_score is None:
+                candidate.rrf_score = round(1.0 / (settings.RRF_K + rank), 6)
+
+            key = candidate.doc_id
             if key in seen:
                 existing = seen[key]
                 # 合并 query_types
-                existing.query_types = list(set(existing.query_types + item.query_types))
+                existing.query_types = list(
+                    dict.fromkeys(existing.query_types + candidate.query_types)
+                )
                 # 保留各阶段最高分
-                if (item.vector_score or 0) > (existing.vector_score or 0):
-                    existing.vector_score = item.vector_score
-                if (item.bm25_score or 0) > (existing.bm25_score or 0):
-                    existing.bm25_score = item.bm25_score
-                if (item.rrf_score or 0) > (existing.rrf_score or 0):
-                    existing.rrf_score = item.rrf_score
+                if (candidate.vector_score or 0) > (existing.vector_score or 0):
+                    existing.vector_score = candidate.vector_score
+                if (candidate.bm25_score or 0) > (existing.bm25_score or 0):
+                    existing.bm25_score = candidate.bm25_score
+                if (candidate.sparse_score or 0) > (existing.sparse_score or 0):
+                    existing.sparse_score = candidate.sparse_score
+                if (candidate.rrf_score or 0) > (existing.rrf_score or 0):
+                    existing.rrf_score = candidate.rrf_score
+                if existing.generation is None:
+                    existing.generation = candidate.generation
             else:
-                seen[key] = item.model_copy()
+                seen[key] = candidate
 
-    # 合并后重新计算 RRF 分数，确保所有文档都有可比的排序分数
     results = list(seen.values())
-    # 先按已有分数做初步排序（rrf_score 优先，vector_score / bm25_score 兜底）
-    def _preliminary_sort_key(item: "EvidenceItem") -> float:
-        if item.rrf_score is not None:
-            return item.rrf_score
-        if item.vector_score is not None:
-            return item.vector_score
-        if item.bm25_score is not None:
-            return item.bm25_score / 10.0  # BM25 分数通常较大，粗略归一化
-        return 0.0
-
-    results.sort(key=_preliminary_sort_key, reverse=True)
-
-    # 为缺少 rrf_score 的文档补算一个基于排名的 RRF 分数，统一量纲
-    for i, item in enumerate(results):
-        if item.rrf_score is None:
-            item.rrf_score = round(1.0 / (RRF_K + i + 1), 6)
-
-    # 最终按统一后的 rrf_score 排序
-    results.sort(key=lambda x: x.rrf_score, reverse=True)
+    results.sort(key=lambda item: item.rrf_score or 0.0, reverse=True)
     return results
 
 

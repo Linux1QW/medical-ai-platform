@@ -59,6 +59,7 @@ class EvidenceItem(BaseModel):
     并携带增强元数据以支撑权威性/时效性计算。
     """
     doc_id: str
+    generation: Optional[str] = None                   # 生成该候选的索引代次
     text: str
     source: str                                    # PDF 来源文件名
     page: Optional[int] = None
@@ -71,6 +72,7 @@ class EvidenceItem(BaseModel):
     # 各阶段分数（独立保存，不相互覆盖）
     vector_score: Optional[float] = None
     bm25_score: Optional[float] = None
+    sparse_score: Optional[float] = None
     rrf_score: Optional[float] = None
     rerank_score: Optional[float] = None
 

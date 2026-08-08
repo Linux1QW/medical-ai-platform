@@ -27,7 +27,6 @@ from app.services.rag.retriever.base import (
     retrieve_medical_evidence,
 )
 from app.services.rag.retriever.fusion import (
-    RRF_K,
     hybrid_recall,
     reciprocal_rank_fusion,
 )
@@ -72,7 +71,6 @@ __all__ = [
     # mqe
     "expand_queries",
     # fusion
-    "RRF_K",
     "reciprocal_rank_fusion",
     "hybrid_recall",
     # hybrid

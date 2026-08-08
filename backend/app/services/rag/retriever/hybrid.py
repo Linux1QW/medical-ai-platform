@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
-"""混合检索入口 — BM25+向量+RRF+重排序，以及 MQE 增强检索"""
+"""兼容混合检索入口和 MQE 增强检索。"""
 
-import asyncio
 import logging
 import time
 from typing import Dict, List
 
-from app.services.rag.bm25_search import get_bm25_index
 from app.services.rag.reranker import rerank_documents
 from app.services.rag.retriever.base import retrieve_medical_evidence
-from app.services.rag.retriever.fusion import reciprocal_rank_fusion
-from app.services.rag.retriever.hyde import hyde_retrieve
+from app.services.rag.retriever.fusion import hybrid_recall
 from app.services.rag.retriever.tiered import tiered_retrieve
 from app.services.rag.types import RetrievalQuery
 
@@ -24,21 +21,14 @@ async def hybrid_retrieve(
     rerank_threshold: float = 4,
     enable_hyde: bool = False,
 ) -> List[Dict]:
-    """混合检索：BM25 关键词检索 + 向量语义检索 + RRF 融合 + Cross-Encoder 重排序
-
-    检索流程：
-    1. 并行执行向量检索和 BM25 关键词检索（各取 top_k*2 条粗召回）
-       - 当 enable_hyde=True 时，向量检索通道同时执行普通向量检索和 HyDE 检索，
-         通过 RRF 融合两路结果后再与 BM25 结果融合
-    2. 使用 Reciprocal Rank Fusion (RRF) 融合两路结果
-    3. （可选）使用 Cross-Encoder 对融合结果进行精排
+    """适配旧参数到统一三路召回，并可选执行 Cross-Encoder 重排序。
 
     Args:
         query: 查询文本
         top_k: 最终返回条数
         enable_rerank: 是否启用 Cross-Encoder 重排序
         rerank_threshold: 重排序相关性阈值（0-10）
-        enable_hyde: 是否启用 HyDE 假设性文档增强
+        enable_hyde: 保留的兼容参数；HyDE 由分级检索入口负责
 
     Returns:
         检索结果列表
@@ -47,76 +37,11 @@ async def hybrid_retrieve(
         return []
 
     start_time = time.time()
-    recall_k = top_k * 3  # 粗召回数量（给 RRF 和重排序留足候选）
-
-    # ── Step 1: 真并行执行双路检索 ──
-    # 向量检索是 I/O 密集型（embedding API），BM25 是 CPU 密集型（内存计算）
-    # 使用 asyncio.gather + run_in_executor 实现真正并行
-    loop = asyncio.get_event_loop()
-
-    async def vector_search() -> List[Dict]:
-        try:
-            if enable_hyde:
-                # 并行执行普通向量检索和 HyDE 检索
-                normal_results, hyde_results = await asyncio.gather(
-                    retrieve_medical_evidence(query, top_k=recall_k),
-                    hyde_retrieve(query, top_k=recall_k),
-                )
-                # 两路都有结果时使用 RRF 融合
-                if normal_results and hyde_results:
-                    fused = reciprocal_rank_fusion(
-                        normal_results, hyde_results, top_k=recall_k
-                    )
-                    logger.info(
-                        f"HyDE+向量 RRF 融合：普通 {len(normal_results)} + "
-                        f"HyDE {len(hyde_results)} → {len(fused)} 条"
-                    )
-                    return fused
-                elif normal_results:
-                    return normal_results
-                else:
-                    return hyde_results
-            else:
-                return await retrieve_medical_evidence(query, top_k=recall_k)
-        except Exception as e:
-            logger.warning(f"混合检索-向量通道失败: {e}")
-            return []
-
-    def bm25_search_sync() -> List[Dict]:
-        try:
-            index = get_bm25_index()
-            return index.search(query, top_k=recall_k)
-        except Exception as e:
-            logger.warning(f"混合检索-BM25通道失败: {e}")
-            return []
-
-    # asyncio.gather 同时触发向量检索和 BM25（放入线程池）
-    vector_results, bm25_results = await asyncio.gather(
-        vector_search(),
-        loop.run_in_executor(None, bm25_search_sync),
-    )
-
-    logger.info(
-        f"混合检索粗召回完成：向量 {len(vector_results)} 条，BM25 {len(bm25_results)} 条"
-    )
-
-    # ── Step 2: RRF 融合 ──
-    if vector_results and bm25_results:
-        # 两路都有结果时使用 RRF 融合
-        fused_results = reciprocal_rank_fusion(
-            vector_results, bm25_results, top_k=recall_k
-        )
-        logger.info(f"RRF 融合完成：{len(fused_results)} 条结果")
-    elif vector_results:
-        # 仅向量通道有结果
-        fused_results = vector_results[:recall_k]
-    elif bm25_results:
-        # 仅 BM25 通道有结果
-        fused_results = bm25_results[:recall_k]
-    else:
+    recall_k = top_k * 3
+    fused_results, fusion_meta = await hybrid_recall(query, top_k=recall_k)
+    if not fused_results:
         return []
 
-    # ── Step 3: Cross-Encoder 重排序（可选）──
     if enable_rerank and len(fused_results) > top_k:
         final_results = await rerank_documents(
             query=query,
@@ -124,14 +49,35 @@ async def hybrid_retrieve(
             top_k=top_k,
             threshold=rerank_threshold,
         )
+        retrieval_fields = (
+            "bm25_score",
+            "vector_score",
+            "sparse_score",
+            "rrf_score",
+            "generation",
+        )
+        recalled_by_id = {
+            str(document.get("doc_id", document.get("id", ""))): document
+            for document in fused_results
+        }
+        for document in final_results:
+            recalled = recalled_by_id.get(str(document.get("doc_id", "")), {})
+            for field in retrieval_fields:
+                if document.get(field) is None and recalled.get(field) is not None:
+                    document[field] = recalled[field]
     else:
         final_results = fused_results[:top_k]
 
     elapsed_time = time.time() - start_time
     logger.info(
-        f"混合检索完成：向量 {len(vector_results)} + BM25 {len(bm25_results)} "
-        f"→ RRF {len(fused_results)} → 最终 {len(final_results)} 条，"
-        f"rerank={'ON' if enable_rerank else 'OFF'}，耗时 {elapsed_time:.3f}s"
+        "兼容混合检索完成：sources=%s → RRF %d → 最终 %d 条，"
+        "rerank=%s，enable_hyde=%s（由 tiered 入口处理），耗时 %.3fs",
+        fusion_meta.get("sources", {}),
+        len(fused_results),
+        len(final_results),
+        "ON" if enable_rerank else "OFF",
+        enable_hyde,
+        elapsed_time,
     )
 
     return final_results

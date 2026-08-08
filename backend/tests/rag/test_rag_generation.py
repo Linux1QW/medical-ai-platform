@@ -394,6 +394,7 @@ async def test_task_reports_phases_only_when_builder_reaches_them(
     from app.services.rag.indexing import versioning
     from app.tasks import rag_index_task
 
+    monkeypatch.setattr(builder, "PDF_DIR", tmp_path)
     task = Mock()
     phases = []
     task.update_state.side_effect = lambda **call: phases.append(call["meta"]["phase"])
@@ -440,10 +441,12 @@ async def test_task_reports_phases_only_when_builder_reaches_them(
 
 @pytest.mark.asyncio
 async def test_task_finishes_notification_after_successful_cas_even_if_lock_expires(
-    candidate_manifest, monkeypatch
+    candidate_manifest, monkeypatch, tmp_path
 ):
     from app.services.rag.indexing import versioning
     from app.tasks import rag_index_task
+
+    monkeypatch.setattr(builder, "PDF_DIR", tmp_path)
 
     async def build_candidate(*, phase_callback, **_kwargs):
         for phase in ("parse", "chunk", "embed", "chroma", "bm25", "sparse"):
@@ -486,10 +489,12 @@ async def test_task_finishes_notification_after_successful_cas_even_if_lock_expi
 
 @pytest.mark.asyncio
 async def test_task_reports_warning_instead_of_failure_when_switch_event_cannot_publish(
-    candidate_manifest, monkeypatch
+    candidate_manifest, monkeypatch, tmp_path
 ):
     from app.services.rag.indexing import versioning
     from app.tasks import rag_index_task
+
+    monkeypatch.setattr(builder, "PDF_DIR", tmp_path)
 
     async def build_candidate(*, phase_callback, **_kwargs):
         for phase in ("parse", "chunk", "embed", "chroma", "bm25", "sparse"):

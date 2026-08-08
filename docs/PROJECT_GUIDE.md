@@ -1,595 +1,682 @@
-# 基于多智能体的医生临床问诊评估平台
+# 项目总手册：基于多智能体的医生临床问诊评估平台
 
-> 本文是当前仓库的项目总手册。文中的目录、命令、端口、接口和配置以当前源代码、docker-compose.yml、backend/app/core/config.py 与 backend/.env.example 为准。API 的完整参数约束以运行中的 OpenAPI 为最终准绳：<http://localhost:8000/docs>。
+本文是项目的权威说明，事实基线为分支 `codex/rag-bm25-optimization` 的当前代码。内容由代码、配置、FastAPI 路由、Docker Compose、SQLAlchemy/Alembic、前端调用、测试和 CI 交叉核对。其他文档如与本文冲突，应回到对应源码确认并同步本文。
 
-## 1. 项目定位与边界
+## 1. 项目定位、安全与边界
 
-本项目是面向医学教育和临床问诊训练的 AI 评估平台。医生或学员与虚拟患者进行模拟问诊，系统保存会话，再由多智能体评估流程从五个维度分析问诊质量，并返回结构化评分、建议和知识库证据。
+平台服务于医学教育、虚拟病例问诊训练、结构化评估和教学复核。医生用户选择虚拟患者并完成对话、诊断和治疗方案；系统保存全过程，通过多智能体与知识库生成五维分析、分数、引用、建议和复核状态；管理员维护病例并查看全局统计、运行追踪、知识库和人工复核数据。
 
-五个评估维度为：
+平台不是医疗器械或临床决策系统：
 
-| 维度 | 关注点 |
-| --- | --- |
-| 问诊分析 | 信息采集的完整性、顺序和效率 |
-| 医学知识核对 | 关键信息与医学知识库证据的一致性 |
-| 人文关怀 | 沟通方式、解释、共情和患者体验 |
-| 诊断评估 | 鉴别诊断、风险识别和诊断依据 |
-| 治疗方案 | 方案完整性、合理性、风险和随访建议 |
+- 输出不能替代真实诊断、处方、急救决策、会诊或专业审核。
+- Safety Agent 只是教学工作流的风险门控，不保证发现全部急危重症。
+- LLM、Embedding、Rerank 和 OCR 均可能失败、幻觉、遗漏或受第三方服务变化影响。
+- 真实医疗问题必须转交合格医务人员；急危重症必须立即联系当地急救和医疗机构。
 
-平台的评估结果用于训练、教学和质量改进，不替代真实临床诊断、处方或医疗机构的专业审核。仓库中的医学资料、虚拟患者数据和模型输出都应按实际部署的数据治理要求管理。
+隐私与数据治理要求：
 
-### 1.1 当前实现的主要能力
+- 不采集或提交不必要的真实身份、联系方式、证件号、生产病历和密钥。
+- 导入数据前取得合法授权，完成最小化、去标识化、用途限制和访问控制。
+- 对话、Prompt、知识库、日志、审计、缓存、导出、备份、trace 和评测报告都可能包含敏感信息，必须按同一数据等级管理。
+- 普通医生接口会隐藏虚拟患者标准答案和系统 Prompt，并对姓名脱敏；管理员仍可访问完整病例，因此管理员账户必须最小化分配。
+- `database/seed.sql` 的 `admin/admin123` 只用于隔离开发，生产必须删除或立即改密。
 
-- 用户注册、登录、刷新令牌、登出和个人资料管理。
-- 虚拟患者列表、病例推荐、难度查询和管理员维护。
-- 问诊会话创建、消息发送、流式患者回复、延长会话、提交诊断、结束会话和删除会话。
-- 异步评估任务、评估锁、取消、状态查询、WebSocket 进度推送和结果查看。
-- LangGraph 编排的多智能体评估流程；Redis checkpoint 支持长任务恢复。
-- 混合知识检索、PDF 增量入库、索引重建、来源删除、Embedding 缓存清理和检索统计。
-- 人工复核队列、复核提交和复核状态查询。
-- 审计日志、Prometheus 指标、管理员监控查询和定期数据清理。
-- Docker Compose 部署，包含 MySQL、Redis、FastAPI、Celery Worker、Celery Beat、Nginx 前端，以及可选的 Prometheus/Grafana。
+## 2. 产品角色与端到端流程
 
-### 1.2 明确不应从文档推断的内容
+### 2.1 角色
 
-- 没有配置真实 LLM API Key 时，系统不能完成真实模型推理。
-- data/ 中是否存在医学 PDF 取决于当前部署目录；仓库不会自动生成或下载医学资料。
-- RAG 索引、模型版本和提示词版本必须以当前实例中的数据和配置为准，不能把示例版本当成已经完成的生产基线。
-- Docker Compose 的首次初始化脚本只在 MySQL 空数据卷第一次创建时执行；已有数据卷不会自动重新执行 database/init.sql。
+数据库只定义 `doctor` 和 `admin` 两种角色。用户还可在 `users.permissions` 中设置自定义权限列表；一旦非空，它会覆盖角色默认权限。
 
-## 2. 系统架构
+- `doctor`：查看脱敏病例、创建和访问自己的问诊、触发/取消自己的评估、查看自己的统计和导出自己的数据。
+- `admin`：继承默认的评估、问诊、病例、用户、系统和模型管理权限；可查看全平台问诊、维护完整病例、操作知识库、查看监控并提交人工复核。
 
-~~~mermaid
-flowchart TD
-    U[医生或管理员] --> FE[React + Vite 前端]
-    FE -->|REST /api/v1| API[FastAPI API]
-    FE -->|WebSocket 评估进度| API
-    API --> DB[(MySQL 8)]
-    API --> R[(Redis 7)]
-    API --> V[(ChromaDB 持久化目录)]
-    API --> LLM[兼容 OpenAI 协议的 Qwen API]
-    API --> Q[Celery Broker]
-    Q --> W[Celery Worker]
-    W --> G[LangGraph 评估编排]
-    G --> R
-    G --> V
-    W --> DB
-    B[Celery Beat] --> Q
-    M[Prometheus / Grafana 可选] --> API
-~~~
+默认权限来自 `backend/app/core/permissions.py`。部分路由只检查角色，部分检查细粒度权限，不能仅凭前端菜单判断后端授权。
 
-### 2.1 运行组件
+### 2.2 医生流程
 
-| 组件 | 开发入口 | Docker 服务 | 作用 |
-| --- | --- | --- | --- |
-| 前端 | frontend/，Vite 5173 | frontend，Nginx 80/443 | 登录、问诊、评估、统计和管理界面 |
-| API | backend/app/main.py | backend，8000 | 认证、业务 API、健康检查和指标 |
-| 数据库 | MySQL 8 | mysql，3306 | 用户、患者、问诊、评估、复核和审计数据 |
-| Redis | Redis 7 | redis，6379 | Celery 队列、结果、缓存、取消标志和 LangGraph checkpoint |
-| 向量库 | ChromaDB | chroma_data 卷 | 医学文档向量索引；BM25 等索引也依赖持久化目录 |
-| 异步执行 | Celery 5.6 | celery-worker | 执行长耗时评估任务 |
-| 定时调度 | Celery Beat | celery-beat | 每日触发过期数据清理 |
-| 监控 | Prometheus/Grafana | monitoring profile | 指标抓取和可视化 |
+1. 注册或登录，前端把 access token 和用户信息存入 `sessionStorage`。
+2. 在“虚拟患者”中筛选病例；普通医生看到姓名脱敏后的病例，不会收到 `expected_diagnosis` 和 `system_prompt`。
+3. 创建问诊。默认 `consultation_type=initial`、`max_rounds=20`；每次医生消息产生医生与患者两条消息，可使用普通 JSON 或 SSE 流式回复。
+4. 达到轮次限制时可调用延长接口，每次增加 10 轮。
+5. 提交诊断和治疗方案会结束问诊；也可直接结束问诊。
+6. 触发评估。非测试模式下任务应交给 Celery；前端同时使用 WebSocket 和锁状态轮询显示进度。
+7. 查看五个维度、总分、分析、建议、引用和复核提示。缺少维度或风险/一致性门控失败时，总分可为 `null`，状态可进入 `needs_review`。
 
-### 2.2 请求与评估时序
+### 2.3 管理员流程
 
-~~~mermaid
-sequenceDiagram
-    participant D as 医生
-    participant F as 前端
-    participant A as FastAPI
-    participant DB as MySQL
-    participant C as Celery
-    participant G as LangGraph
-    participant R as Redis/Chroma
+- 创建、编辑、删除和导出虚拟患者；查看全平台问诊与统计。
+- 通过 API 查看待复核项、提交复核意见和可选评分调整。
+- 将仓库根目录 `data/` 中的 PDF/DOCX 异步添加、替换、删除或全量重建为新 RAG generation。
+- 查看缓存、Tool runtime、run trace、失败归因和 Token 用量。
+- 管理模型版本注册记录。注意模型版本注册表与实际 `settings`/Provider 路由不是自动绑定的部署系统。
 
-    D->>F: 创建问诊并发送问题
-    F->>A: REST 请求，携带 Bearer access_token
-    A->>DB: 保存会话和消息
-    A-->>F: 患者回复或流式响应
-    D->>F: 提交诊断并触发评估
-    F->>A: POST /evaluations/
-    A->>DB: 获取评估锁
-    A->>C: 提交 run_evaluation
-    C->>G: 执行评估图
-    G->>R: 读取 checkpoint 和医学证据
-    G->>DB: 保存节点结果、运行记录和最终评估
-    G-->>A: WebSocket 推送进度
-    A-->>F: 结果或 needs_review
-~~~
+## 3. 系统架构
 
-评估锁用于防止同一问诊被并发重复评估。Celery 任务默认软超时 300 秒、硬超时 600 秒；网络、超时、临时不可用和限流类错误最多重试 2 次，退避时间为 30 秒、60 秒。重试时会尝试从 LangGraph checkpoint 继续执行。
+```text
+React SPA (5173 / Nginx 80,443)
+        │ REST / SSE / WebSocket
+        ▼
+FastAPI (8000)
+  ├─ Auth/RBAC/Audit/Rate limit/Security headers
+  ├─ SQLAlchemy async ───────────── MySQL 8
+  ├─ LangGraph orchestration ────── Redis checkpoint db=1
+  ├─ cache/JWT/token/RAG pointers ─ Redis db=2/3 + shared instance
+  ├─ task submission ────────────── Celery broker db=4/result db=5
+  └─ RAG retrieval
+       ├─ Chroma Dense: backend/data/medical_kb
+       ├─ BM25 artifacts: backend/data/rag_indexes/<generation>/bm25
+       ├─ optional Sparse: .../<generation>/sparse
+       └─ manifest + Redis active pointer + Pub/Sub switch
 
-## 3. 代码目录与职责
+Celery Worker
+  ├─ run_evaluation
+  ├─ rebuild/add/replace/delete_rag_index
+  └─ per-process generation switch listener
 
-~~~text
-medical-ai-platform/
-├─ backend/
-│  ├─ app/
-│  │  ├─ api/v1/          REST/WebSocket 路由
-│  │  ├─ core/            配置、认证、权限、审计、限流、日志、中间件
-│  │  ├─ db/              SQLAlchemy 异步会话
-│  │  ├─ models/          SQLAlchemy ORM 模型
-│  │  ├─ schemas/         Pydantic 请求/响应模型
-│  │  ├─ services/        问诊、评估、RAG、缓存、用户等业务服务
-│  │  ├─ orchestration/   LangGraph 状态、图、节点和 checkpoint
-│  │  ├─ tasks/           Celery 评估与清理任务
-│  │  ├─ prompts/         提示词和 manifest
-│  │  └─ main.py          FastAPI 应用入口
-│  ├─ evaluation/         基准集、Rubric、安全、复核、RAG 评估工具
-│  ├─ alembic/            数据库迁移
-│  ├─ scripts/            初始化、知识库、数据迁移和评估脚本
-│  ├─ tests/              后端单元、集成、RAG、编排和 E2E 测试
-│  ├─ requirements.txt
-│  └─ .env.example
-├─ frontend/
-│  ├─ src/pages/          登录、仪表盘、患者、问诊、评估、统计和管理页面
-│  ├─ src/components/     通用 UI 组件
-│  ├─ src/api/            API 调用封装
-│  ├─ src/store/          登录和应用状态
-│  ├─ src/utils/          请求客户端及工具
-│  └─ package.json
-├─ database/               init.sql、seed.sql 和历史迁移 SQL
-├─ monitoring/             Prometheus 配置和 Grafana dashboard
-├─ data/                   医学 PDF 挂载目录，不保证包含实际资料
-├─ docker-compose*.yml
-├─ Dockerfile.backend / Dockerfile.frontend
-└─ docs/                   主题文档和本项目总手册
-~~~
+Celery Beat ── daily cleanup_expired_records
+Prometheus/Grafana ── optional monitoring profile
+```
 
-后端源码从 backend 目录启动时使用 app.main:app；生产 Docker 镜像使用 backend.app.main:app 并设置 PYTHONPATH=/app/backend。这两个入口是由运行位置不同造成的正常差异。
+FastAPI lifespan 会执行 `Base.metadata.create_all`、安全检查、Agent adapter 注册、Redis checkpointer 初始化和可选 Tool 健康探测。`LANGGRAPH_ENABLED=true` 且 Redis checkpointer 初始化失败时，服务会拒绝启动；若要显式使用旧评估路径，应设置 `LANGGRAPH_ENABLED=false`。
 
-## 4. 环境与配置
+## 4. 目录与模块职责
 
-### 4.1 前置条件
+| 路径 | 责任 |
+|---|---|
+| `backend/app/main.py` | FastAPI 生命周期、中间件、异常处理、`/health`、`/metrics` |
+| `backend/app/api/v1/` | REST/WS 路由；总前缀 `/api/v1` |
+| `backend/app/core/` | 配置、JWT、依赖、权限、访问控制、审计、脱敏、日志、限流 |
+| `backend/app/models/`、`schemas/` | SQLAlchemy 模型和 Pydantic API 契约 |
+| `backend/app/services/agents/` | 患者 Agent、五维评估 Agent、Safety、Reflection、Suggestion |
+| `backend/app/orchestration/` | LangGraph state、route plan、graph、adapter、checkpointer |
+| `backend/app/services/rag/` | 检索、索引、artifact、generation、cache、rerank、OCR |
+| `backend/app/tasks/`、`celery_app.py` | 评估、索引、清理任务和 Worker 生命周期 |
+| `backend/evaluation/`、`backend/scripts/eval/` | Gold cases、指标、报告、A/B、BM25 评测和调参 |
+| `backend/alembic/` | 权威迁移链 |
+| `database/` | Compose 初始化 SQL 和演示数据；不等价于完整迁移链 |
+| `frontend/src/api/`、`pages/`、`components/` | API 封装、页面和展示组件 |
+| `docker-compose*.yml`、`Dockerfile.*` | 容器编排、开发/预发/生产覆盖 |
+| `monitoring/` | Prometheus 配置和 Grafana provisioning/dashboard |
+| `.github/workflows/` | CI 与手动部署 |
 
-本地开发需要 Python 3.10 或更高版本、Node.js/npm、MySQL 8 和 Redis 7。真实评估还需要兼容 OpenAI API 的 Qwen/DashScope 凭据。Docker 用户需要 Docker Engine 与 Docker Compose v2。
+## 5. 技术栈
 
-### 4.2 后端环境文件
+- 后端镜像/CI：Python 3.10；FastAPI 0.115.6、Uvicorn 0.34.0、Pydantic 2.10.4。
+- 数据：SQLAlchemy 2.0.36、Alembic 1.18.5、aiomysql/pymysql、MySQL 8.0。
+- 编排与队列：LangGraph 1.2.6、Redis 6.4 Python client、Redis 7 server、Celery 5.6.3。
+- RAG：ChromaDB 1.5.7、PyMuPDF、jieba、bm25s 0.3.9；可选 FlagEmbedding/BGE-M3 未写入默认 requirements。
+- LLM：OpenAI-compatible client、DashScope；默认 Provider adapter 为 `openai_compatible`。
+- 前端：Node 18 构建；React 19.2、TypeScript 5.9、Vite 7.3、Ant Design 6.3、Axios、Recharts。
+- 可观测性：Prometheus client、可选 Langfuse 2.60.10、Prometheus 2.53、Grafana 11.1。
 
-~~~powershell
+精确锁定版本见 `backend/requirements.txt` 和 `frontend/package.json`。
+
+## 6. 配置与默认值
+
+后端在**当前工作目录**读取 `.env`；因此本地命令应从 `backend/` 执行并使用 `backend/.env`。权威字段是 `backend/app/core/config.py`，模板是 `backend/.env.example`。环境变量优先于模板和代码默认值。
+
+### 6.1 基础、认证与数据
+
+| 变量 | 代码默认值 | 说明 |
+|---|---:|---|
+| `ENVIRONMENT` | `development` | `production` 时默认 SECRET_KEY 会阻止启动，`staging` 没有独立安全分支 |
+| `API_V1_PREFIX` | `/api/v1` | OpenAPI 为 `/api/v1/openapi.json` |
+| `SECRET_KEY` | `change-this-to-a-secure-random-string` | 生产必须替换 |
+| `ALGORITHM` | `HS256` | JWT 算法 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | access token 24 小时 |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | refresh token |
+| `JWT_TOKEN_BLACKLIST_ENABLED` | `true` | 黑名单 Redis 不可用时当前实现会 fail open |
+| `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `localhost/3306/root/空/medical_ai` | 应用账户应最小授权 |
+| `DB_POOL_SIZE/MAX_OVERFLOW/RECYCLE/TIMEOUT` | `20/10/3600/30` | SQLAlchemy 连接池 |
+| `CORS_ORIGINS` | `localhost:5173`、`localhost:3000` | JSON 数组格式 |
+
+注册密码允许 6–128 字符；密码先做 SHA-256 归一化再由 passlib bcrypt_sha256/bcrypt 存储。登录和注册各限流 5 次/分钟。
+
+### 6.2 LLM、LangGraph 与任务
+
+| 变量 | 代码默认值 | 说明 |
+|---|---:|---|
+| `QWEN_API_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI 兼容地址 |
+| `QWEN_MODEL` | `qwen3.7-plus` | `backend/.env.example` 和 Compose 显式给出 `qwen3.7-max`，以实际环境值为准 |
+| `LLM_PROVIDER_TYPE` | `openai_compatible` | `LLM_*` 为空时回退 `QWEN_*` |
+| `LLM_MAX_CONCURRENT` / `LLM_SEMAPHORE_TIMEOUT` | `10` / `60` 秒 | 全局 LLM 并发 |
+| `LANGGRAPH_ENABLED` / `LANGGRAPH_SHADOW_MODE` | `true` / `false` | Shadow 配置存在，返回仍以实现路径为准 |
+| `LANGGRAPH_GRAPH_VERSION` | `evaluation-graph-v1` | 写入运行/评估记录 |
+| `REDIS_CHECKPOINT_URL` / `REDIS_CHECKPOINT_TTL` | `redis://localhost:6379/1` / `86400` | Checkpoint |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `redis://localhost:6379/4` / `redis://localhost:6379/5` | API 与 Worker 必须一致 |
+| `EVALUATION_RUN_TIMEOUT_SECONDS` | `240` | 应小于 Celery soft limit 300 秒 |
+| `AGENT_TIMEOUT_SECONDS` | `180` | 旧编排单 Agent 超时 |
+| `EVAL_RESUME_FROM_CHECKPOINT` | `true` | Celery 重试尝试复用失败 run checkpoint |
+| `EVAL_CANCEL_POLL_SECONDS` | `2` | 协作式取消轮询 |
+
+Celery 全局 hard/soft time limit 为 600/300 秒，`worker_prefetch_multiplier=1`。评估任务最多重试 2 次，只重试网络/连接/超时类异常，退避 30 秒、60 秒。Beat 每 86400 秒调度一次留存清理。
+
+### 6.3 RAG 与缓存
+
+| 变量 | 默认值 |
+|---|---:|
+| `ACTIVE_INDEX_VERSION` | `rag-v1`（仅启动/旧兼容回退；集群 active 以 Redis 指针为准） |
+| `RAG_LEGACY_COLLECTION_FALLBACK` | `false` |
+| `BM25_K1/BM25_B/BM25_METHOD` | `1.2/0.8/lucene` |
+| `BM25_TOKENIZER_VERSION` | `medical-lexical-v3` |
+| `BM25_ENABLE_CJK_BIGRAM` | `false` |
+| `BM25_HEADING_BOOST/BM25_ENTITY_BOOST` | `2/3`，均限制 1–3 |
+| `RRF_K` | `35` |
+| `RRF_WEIGHT_BM25/DENSE/SPARSE` | `0.30/0.45/0.25` |
+| `BGE_M3_ENABLED` | `false` |
+| `RERANK_MODEL` | `gte-rerank` |
+| `ENABLE_METADATA_FILTER`、`ENABLE_DIVERSITY_RERANK` | `false`、`false` |
+| `ENABLE_CONTEXT_EXPANSION`、`ENABLE_CONTEXT_COMPRESSION` | `false`、`false` |
+| `ENABLE_OCR` | `false` |
+| `RETRIEVAL_CACHE_ENABLED/TTL/MAX_SIZE` | `true/86400/5000` |
+| `LLM_CACHE_ENABLED/TTL/MAX_SIZE` | `true/86400/10000` |
+
+固定实现值：Embedding 模型 `qwen3.7-text-embedding`、维度 1024；分块大小 500、重叠 100；Embedding LRU 是每进程内存缓存，最大 1000 条。检索缓存 key 含 generation、query shape、top-k 和检索设置，缓存体不持久化正文，命中时从指定 generation 的 Chroma 回填并丢弃 stale candidate。
+
+### 6.4 Tool、监控与留存
+
+代码默认 `ENABLE_TOOL_USE=true`、`ENABLE_PATIENT_TOOL_USE=true`、`TOOL_EXECUTOR_HARDENED=true`、`TOOL_BUDGET_MANAGER_ENABLED=true`、`TOOL_HEALTH_CHECK_ENABLED=false`。基础 Compose 对 FastAPI 显式设置 `ENABLE_TOOL_USE=false`，所以容器默认与代码默认不同。
+
+`AUDIT_LOG_RETENTION_DAYS=90`、`EVALUATION_RUN_RETENTION_DAYS=180`、`TOKEN_DAILY_LIMIT=1000000`、`COST_PER_1K_TOKENS=0.02`、`LANGFUSE_ENABLED=false`、`METRICS_TOKEN` 为空。生产环境若 `METRICS_TOKEN` 为空，`/metrics` 返回 403；非空时必须携带精确的 Bearer token。
+
+## 7. 启动与部署
+
+### 7.1 本地进程：推荐的可控路径
+
+前置：Python 3.10、Node 18、MySQL 8、Redis 7。先创建空数据库，不要先运行 `database/init.sql`。
+
+```powershell
 cd backend
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-~~~
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-backend/.env 由 Pydantic Settings 读取；Docker Compose 则主要读取仓库根目录的 .env，并把关键值传入容器。两种方式不要混为一谈。任何环境都不得提交真实密钥。
+另开终端：
 
-| 变量 | 默认/示例 | 说明 |
-| --- | --- | --- |
-| ENVIRONMENT | development | production 时必须显式设置安全的 SECRET_KEY |
-| MYSQL_HOST | localhost | Docker 内应为 mysql |
-| MYSQL_PORT | 3306 | MySQL 端口 |
-| MYSQL_USER / MYSQL_PASSWORD | root / 空 | 生产应使用最小权限业务账户；Compose 默认将密码用于 root 初始化 |
-| MYSQL_DATABASE | medical_ai | 业务数据库名 |
-| SECRET_KEY | 占位字符串 | JWT 签名密钥，生产必须替换为高强度随机值 |
-| ACCESS_TOKEN_EXPIRE_MINUTES | 1440 | access token 有效期 |
-| REFRESH_TOKEN_EXPIRE_DAYS | 7 | refresh token 有效期 |
-| DASHSCOPE_API_KEY | 空 | Qwen API Key；QWEN_API_KEY 默认从它读取 |
-| QWEN_API_BASE_URL | DashScope 兼容地址 | OpenAI 兼容接口地址 |
-| QWEN_MODEL | qwen3.7-plus（代码默认） | Compose 默认覆盖为 qwen3.7-max，以实际部署变量为准 |
-| REDIS_CHECKPOINT_URL | redis://localhost:6379/1 | LangGraph checkpoint Redis 数据库 |
-| CELERY_BROKER_URL | redis://localhost:6379/4 | Celery 消息代理 |
-| CELERY_RESULT_BACKEND | redis://localhost:6379/5 | Celery 结果存储 |
-| LANGGRAPH_ENABLED | true | 是否启用 LangGraph 编排 |
-| ACTIVE_INDEX_VERSION | rag-v1 | 当前 RAG 索引版本标识 |
-| ENABLE_TOOL_USE | true（代码默认） | Compose 默认传入 false，必须以运行环境为准 |
-| LLM_MAX_CONCURRENT | 10 | LLM 全局并发上限 |
-| LLM_CACHE_ENABLED | true | LLM 响应缓存开关 |
-| AUDIT_LOG_ENABLED | true | 审计日志开关 |
-| METRICS_TOKEN | 空 | 生产建议配置，保护 /metrics |
-
-完整配置项及注释见 [backend/.env.example](../backend/.env.example)；配置实现见 [backend/app/core/config.py](../backend/app/core/config.py)。模型、RAG、Tool Use、缓存、数据留存和可观测性参数不要只改文档，应直接改环境变量或配置实现。
-
-## 5. 启动方式
-
-### 5.1 本地启动后端
-
-推荐使用仓库已有的后端虚拟环境；若不存在则创建：
-
-~~~powershell
+```powershell
 cd backend
-python -m venv venv
-venv\Scripts\python.exe -m pip install -r requirements.txt
-venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-~~~
+.\.venv\Scripts\python.exe -m celery -A app.celery_app worker --loglevel=info -P solo
+.\.venv\Scripts\python.exe -m celery -A app.celery_app beat --loglevel=info
+```
 
-当前依赖包含 celery[redis]==5.6.3。在 Windows 本地启动 Celery Worker 时使用 -P solo：
+Linux Worker 可使用默认 prefork；基础 Compose 使用 `--concurrency=2`。Beat 必须保持单实例。每个 fork Worker 在 `worker_process_init` 启动 `rag:index-switched` 监听器。
 
-~~~powershell
-cd backend
-venv\Scripts\python.exe -m celery -A app.celery_app worker --loglevel=info -P solo
-venv\Scripts\python.exe -m celery -A app.celery_app beat --loglevel=info
-~~~
+前端：
 
-Worker 和 Beat 应在独立终端运行。若只做 API、认证或同步测试，可暂不启动它们；真实生产评估依赖 Worker，定时清理依赖 Beat。项目虚拟环境中的 Celery 可用性可用下面命令确认：
-
-~~~powershell
-backend\venv\Scripts\python.exe -c "import celery; print(celery.__version__)"
-~~~
-
-### 5.2 本地启动前端
-
-~~~powershell
+```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
-~~~
+```
 
-Vite 默认监听 5173，/api 和 WebSocket 请求代理到 http://localhost:8000。前端请求客户端的 API 前缀是 /api/v1，普通请求超时 60 秒，评估相关请求超时 300 秒。
+Vite 固定代理 `/api` 到 `http://localhost:8000`；Axios 固定 `baseURL=/api/v1`。当前 `VITE_API_BASE_URL` 虽在 Docker 构建/override 中出现，但 `frontend/src/utils/request.ts` 未读取它。
 
-默认访问地址：
+### 7.2 Compose 服务与端口
 
-- 前端：<http://localhost:5173>
-- API 文档：<http://localhost:8000/docs>
-- ReDoc：<http://localhost:8000/redoc>
-- OpenAPI JSON：<http://localhost:8000/api/v1/openapi.json>
-- 健康检查：<http://localhost:8000/health>
-- Prometheus 指标：<http://localhost:8000/metrics>
+`docker-compose.yml` 定义：MySQL 3306、Redis 6379、FastAPI 8000、Nginx 80/443、Celery Worker、Celery Beat；monitoring profile 增加 Prometheus 9090 和 Grafana 3000。端口均可由同名 Compose 变量覆盖。
 
-### 5.3 Docker Compose
-
-在仓库根目录创建 .env，至少设置 MYSQL_PASSWORD、SECRET_KEY 和 DASHSCOPE_API_KEY；启用 monitoring profile 还要设置 GRAFANA_ADMIN_PASSWORD。然后执行：
-
-~~~powershell
+```powershell
 docker compose up -d
 docker compose ps
-docker compose logs -f backend
-~~~
-
-基础栈端口为：前端 80、后端 8000、MySQL 3306、Redis 6379。可用 BACKEND_PORT、FRONTEND_PORT、MYSQL_PORT、REDIS_PORT 修改宿主机映射。前端容器通过 Nginx 提供 SPA；提供 certs/server.crt 与 certs/server.key 后才适合启用 HTTPS 监听。
-
-监控栈：
-
-~~~powershell
+docker compose logs -f backend celery-worker
 docker compose --profile monitoring up -d
-~~~
+```
 
-Prometheus 默认 9090，Grafana 默认 3000。Grafana 默认用户名为 admin，密码由 GRAFANA_ADMIN_PASSWORD 提供。docker-compose.override.yml 是本地开发覆盖配置；docker-compose.staging.yml 和 docker-compose.prod.yml 是镜像/资源/日志覆盖配置，不是独立的完整 Compose 文件。
+当前 Compose 必须在部署前修正或外部覆盖：
 
-## 6. 数据库初始化与迁移
+1. `backend` 没有注入 `CELERY_BROKER_URL=redis://redis:6379/4` 和 `CELERY_RESULT_BACKEND=redis://redis:6379/5`，API `.delay()` 会使用代码默认的容器内 `localhost`。
+2. `builder.PDF_DIR` 在容器中解析为 `/app/data`；Compose 当前把 `./data` 挂到 `/app/backend/data/medical_pdfs`。RAG Worker 需要可读的 `/app/data`，且 FastAPI 与所有 Worker 必须共享同一 source、Chroma 和 artifact 存储。
+3. `database/init.sql` 不是当前 ORM/Alembic 的完整等价物，见下一节。
+4. `container_name` 会限制 `docker compose --scale celery-worker=N`；多容器 Worker 部署前应调整编排，但 Beat 仍只能一个。
 
-项目提供两种互斥的全新数据库初始化方式，请不要把它们串联执行：
+`docker-compose.prod.yml` 和 `staging.yml` 使用 GHCR 镜像并将 Uvicorn workers 改为 4/2；`REPO` 必须配置。部署工作流仅执行 SSH pull/up，不自动执行 Alembic，因此迁移必须成为发布前明确步骤。
 
-1. **Alembic 路径**：创建空数据库后，在 backend 目录执行 alembic upgrade head。baseline migration 会创建表，新迁移会继续增加后续结构。
-2. **SQL/Compose 路径**：执行 database/init.sql 和 database/seed.sql。Docker Compose 在 MySQL 空数据卷第一次创建时自动执行这两个文件；当前 init.sql 已包含当前仓库需要的结构。
+### 7.3 TLS、备份和持久化
 
-如果已经用 init.sql 建好当前结构，不要再对一个没有 Alembic 版本记录的数据库直接执行 alembic upgrade head，因为 baseline migration 会尝试重复创建表。需要让后续迁移接管时，先确认 init.sql 对应的结构完整，再执行一次 alembic stamp head；这一步只登记版本，不执行结构变更。生产数据库应由备份、变更窗口和人工核对保护。
+前端容器检测 `certs/server.crt` 与 `certs/server.key`；存在时启用 443 并把 80 重定向到 HTTPS，否则仅 HTTP。生产必须使用可信证书、外部密钥管理和定期恢复演练。
 
-### 6.1 Alembic 路径（空数据库）
+Compose 命名卷：`mysql_data`、`redis_data`、`chroma_data`、`prometheus_data`、`grafana_data`。RAG generation 的 Chroma、BM25/Sparse artifact 必须一起备份；只备份一个组件无法恢复可验证 generation。
 
-~~~powershell
+## 8. 数据库与迁移
+
+### 8.1 权威迁移链
+
+当前 Alembic head 为 `1a2b3c4d5e6f`：
+
+- `0c1dfb4fea5f`：当前模型 baseline，创建 audit、checkpoint、model version、review、user、patient、consultation、lock、run、evaluation、node result 等表。
+- `1a2b3c4d5e6f`：增加 `virtual_patients.case_id` 唯一索引，以及 `(consultation_id, sequence)` 消息唯一约束。
+
+空数据库从 `backend/` 执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+升级已有数据库前先备份、在副本执行 `alembic current/history/upgrade head` 并运行应用测试。不要在不了解结构时 `stamp head`，因为 stamp 只写版本号，不补表或列。
+
+### 8.2 SQL 初始化的当前差异
+
+`database/init.sql` 创建 7 张主表，但当前模型还需要 `audit_logs`、`evaluation_checkpoints`、`model_versions`、`review_records`、`evaluation_locks`，且 SQL 中缺少至少 `users.permissions`、`consultations.max_rounds`、`consultations.memory_state`、`evaluations.review_completed_by` 和 `evaluations.review_completed_at`。应用启动的 `create_all` 只会创建缺失表，不会给既有表补列。
+
+因此：
+
+- 新环境优先使用空库 + Alembic；如需演示数据，在确认 schema 后单独审阅并执行 `database/seed.sql`。
+- Compose 的 MySQL entrypoint 会在空卷首次启动时自动执行 `init.sql` 和 `seed.sql`，当前不能视为已完成 Alembic 初始化。
+- 不能把 `init.sql` 后直接 `alembic upgrade head` 当作安全流程：baseline 会尝试创建已有表，后续迁移也会重复添加 `case_id`/约束。
+
+### 8.3 数据模型
+
+| 表/模型 | 用途 |
+|---|---|
+| `users` | 账户、角色、自定义权限、资料和密码哈希 |
+| `virtual_patients` | 稳定 `case_id`、人格、主诉、病史、标准答案和患者 Prompt |
+| `consultations` | 医生/患者关联、状态、诊断、治疗、类型、轮次、患者 memory state |
+| `consultation_messages` | 医生/患者消息和会话内唯一 sequence |
+| `evaluations` | 五维结果、总分、引用、RAG trace、Safety、复核和版本信息 |
+| `evaluation_locks` | 防重复评估、状态、run_id、心跳和过期时间 |
+| `evaluation_runs` | graph run、计划、选择的 Agent、执行结果、错误和 attempt |
+| `evaluation_node_results` | 节点级状态、耗时、脱敏摘要和错误 |
+| `evaluation_checkpoints` | 旧/兼容数据库 checkpoint 模型；当前主 checkpointer 为 Redis |
+| `review_records` | 人工复核意见与评分调整 |
+| `model_versions` | 模型版本登记状态，不自动改变 Provider 配置 |
+| `audit_logs` | 用户、动作、资源、来源请求信息和脱敏详情 |
+
+问诊状态主要为 `in_progress/completed/evaluated`；评估涉及 `pending/running/completed/needs_review/reviewed/failed` 等上下文状态，调用方应按具体响应字段处理，不要把所有状态混成一个枚举。
+
+## 9. 前端实现与操作界面
+
+React Router 路由：
+
+| 页面 | 路径 | 访问 |
+|---|---|---|
+| 登录、注册 | `/login`、`/register` | 公共 |
+| 工作台、病例、我的问诊、个人资料 | `/dashboard`、`/patients`、`/consultations`、`/profile` | 登录 |
+| 问诊、评估 | `/consultation/:id`、`/evaluation/:id` | 登录；后端再校验归属 |
+| 数据统计 | `/stats` | 登录；后端对医生返回本人、管理员返回全局 |
+| 全部问诊、患者管理 | `/admin/consultations`、`/admin/patients` | 前端 AdminRoute + 后端管理员检查 |
+
+`AdminReviews` 页面源码存在，但没有挂到 `App.tsx` 路由或菜单。知识库、模型版本和运行监控也没有完整管理 UI，需使用 OpenAPI/curl。前端 token 存于 sessionStorage，不是 HttpOnly cookie；生产必须防范 XSS，避免在前端记录 token。
+
+普通 Axios 请求超时 60 秒，包含 `/evaluation`、`/evaluate` 或 `/reports` 的请求为 300 秒。问诊消息支持 SSE；评估进度使用 WebSocket。
+
+## 10. 认证、权限与通用协议
+
+- REST 使用 `Authorization: Bearer <access_token>`。
+- WebSocket 连接 `/api/v1/evaluations/ws/{consultation_id}` 后，必须在 5 秒内发送 `{"type":"auth","token":"<JWT>"}`；成功收到 `{"type":"auth_ok"}`。token 不放 URL。
+- 医生只能访问自己的问诊；管理员可访问所有问诊。对应检查在 `require_consultation_access`。
+- 登出把 access token JTI 写入 Redis db=2；Redis 不可用时黑名单检查和写入会降级，已登出 token 可能在过期前继续有效。
+- 请求中间件生成/透传 `X-Request-ID`，统一错误含 `error_code/message/detail/request_id`；部分旧路由的 detail 仍可能是字符串。
+- 安全响应头包含 nosniff、DENY、no-referrer 和 API CSP；production 增加 HSTS。
+- CORS 允许 credentials；生产必须缩小 origins/methods/headers。
+
+## 11. 实际 REST、SSE 与 WebSocket API
+
+下面路径均含 `/api/v1`；“登录”表示 JWT，“管理员”表示 `role=admin`，“权限”表示细粒度权限依赖。
+
+### 11.1 认证、病例与问诊
+
+| 方法 | 路径 | 访问与行为 |
+|---|---|---|
+| POST | `/auth/register` | 公共；5/min |
+| POST | `/auth/login` | 公共；5/min；返回 access/refresh token |
+| POST | `/auth/refresh` | 公共；refresh token 换 access token |
+| POST | `/auth/logout` | 登录；access token 入黑名单 |
+| GET | `/auth/me` | 登录 |
+| PUT | `/auth/profile` | 登录 |
+| GET | `/patients/` | 登录；筛选 `personality_type/difficulty_level`，分页默认 200、上限 1000 |
+| GET | `/patients/{patient_id}` | 登录；医生脱敏、管理员完整 |
+| GET | `/patients/export` | `patient:export` |
+| POST/PUT/DELETE | `/patients/`、`/patients/{patient_id}` | 管理员；写操作 30/min |
+| GET | `/cases/recommend` | 登录；`count` 默认 5、范围 1–20 |
+| GET | `/cases/{case_id}/difficulty` | 登录；少于 2 个历史样本时可返回 null |
+| POST | `/consultations/` | 登录；body `patient_id` |
+| GET | `/consultations/` | 登录；本人列表，分页默认 200、上限 1000 |
+| GET | `/consultations/all` | 管理员；筛选用户、人格、分数、时间 |
+| GET | `/consultations/{consultation_id}` | 本人或管理员；含消息 |
+| POST | `/consultations/{id}/messages` | 本人或管理员；10/min；返回医生/患者消息 |
+| POST | `/consultations/{id}/messages/stream` | 本人或管理员；10/min；SSE |
+| POST | `/consultations/{id}/extend` | 本人或管理员；增加 10 轮 |
+| POST | `/consultations/{id}/submit-diagnosis` | 本人或管理员；结束问诊 |
+| POST | `/consultations/{id}/end` | 本人或管理员 |
+| DELETE | `/consultations/{id}` | 所有者/服务层授权 |
+
+### 11.2 评估、复核与统计
+
+| 方法 | 路径 | 访问与行为 |
+|---|---|---|
+| POST | `/evaluations/` | `evaluation:create` + 问诊访问；5/hour |
+| POST | `/evaluations/{consultation_id}/cancel` | 同上；Redis flag + best-effort Celery revoke |
+| GET | `/evaluations/{consultation_id}/lock-status` | 本人或管理员 |
+| GET | `/evaluations/{consultation_id}` | 本人或管理员 |
+| GET | `/evaluations/task/{task_id}/status` | 登录；当前未校验 task 归属 |
+| WS | `/evaluations/ws/{consultation_id}` | 首消息 JWT + 问诊访问校验 |
+| POST | `/reviews/{evaluation_id}/submit` | 管理员 |
+| GET | `/reviews/{evaluation_id}/status` | 登录；当前未额外校验评估归属 |
+| GET | `/reviews/pending` | 管理员 |
+| GET | `/stats/` | 登录；医生本人/管理员全局 |
+| GET | `/users/me/data-export` | `consultation:view`；导出本人账户、问诊、消息和评估 |
+
+重要契约限制：`POST /evaluations/` 声明 `response_model=EvaluationOut`，但非 `TESTING` 分支实际返回 `{"task_id":...,"status":"submitted"}`。FastAPI 响应校验可能因此失败；修复前不能把该生产异步响应当成稳定契约。测试模式会同步返回 `EvaluationOut`。
+
+### 11.3 知识库、管理和模型版本
+
+| 方法 | 路径 | 访问与行为 |
+|---|---|---|
+| GET | `/knowledge-base/stats` | 管理员 |
+| POST | `/knowledge-base/add-pdf` | 管理员；202；PDF/DOCX；add 或 replace |
+| DELETE | `/knowledge-base/sources/{source_name:path}` | 管理员；202 |
+| POST | `/knowledge-base/rebuild` | 管理员；202 |
+| GET | `/knowledge-base/rebuild/status?task_id=` | 管理员；任务状态；无 task_id 返回 active generation |
+| POST | `/knowledge-base/cache/clear` | 管理员；仅清进程内 Embedding LRU |
+| POST/GET | `/admin/cache/retrieval/clear`、`/admin/cache/retrieval/stats` | 管理员 |
+| GET | `/admin/cache-stats` | 管理员；LLM + retrieval cache |
+| POST | `/admin/cleanup` | 管理员；异步留存清理 |
+| GET | `/admin/monitoring/tool-runtime` | 管理员 |
+| GET | `/admin/monitoring/runs/{run_id}/trace` | 管理员 |
+| GET | `/admin/monitoring/failures/summary?days=7` | 管理员；days 收敛到 1–90 |
+| GET | `/admin/monitoring/usage/summary?days=7` | 管理员；days 收敛到 1–30 |
+| GET | `/model-versions/`、`/model-versions/{name}/active` | 当前实现未要求登录 |
+| POST | `/model-versions/` | `model:manage` |
+| PUT | `/model-versions/{id}/deprecate` | `model:manage` |
+| POST | `/model-versions/{id}/rollback` | `model:manage`；仅回滚登记状态，不切 RAG generation |
+
+系统端点：`GET /health` 公共，检查 MySQL/Redis并返回缓存、LLM、Token 和 checkpointer 状态；依赖不可用时 503。`GET /metrics` 不出现在 OpenAPI，按 `METRICS_TOKEN` 和环境保护。
+
+运行时 OpenAPI 是最终 HTTP 契约：<http://localhost:8000/docs>。
+
+## 12. LangGraph 多智能体实现
+
+### 12.1 图流程
+
+```text
+START → load_context → classify_consultation → safety_check
+  ├─ high/undetermined/immediate review → finalize_needs_review → END
+  └─ continue → plan_evaluation → validate_plan
+       ├─ invalid → finalize_needs_review
+       └─ Wave 1: knowledge + inquiry + humanistic (按计划存在项并行)
+            → extract_knowledge_citations
+            → Wave 2: diagnosis + treatment (按提交情况并行，注入知识引用)
+            → aggregate_results → deterministic_scoring
+            → reflection_check → review_gate_node
+                 ├─ needs_review → finalize_needs_review
+                 └─ generate_suggestion → finalize_completed → END
+```
+
+`initial/follow_up/emergency` 必选 inquiry、humanistic，条件选择 diagnosis、treatment、knowledge；未提交诊断/治疗时对应维度跳过。`communication` 只选择 inquiry、humanistic。
+
+Safety 先执行确定性红旗规则；硬高风险不可被 LLM 降级。无规则命中且 LLM 失败时返回 `undetermined` 并 fail closed 到人工复核。
+
+### 12.2 五维评估与评分
+
+- inquiry：病史采集与问诊技巧。
+- knowledge：医学知识一致性、RAG/Tool evidence 和引用。
+- humanistic：同理、沟通和人文关怀。
+- diagnosis：诊断合理性；可消费 knowledge citations。
+- treatment：治疗方案合理性；可消费 knowledge citations。
+
+默认固定权重 inquiry 0.25、knowledge 0.25、humanistic 0.20、diagnosis 0.15、treatment 0.15。评分器不会因缺失维度临时重分配权重；五项未全部为 scored 时 `total_score=null`。Reflection 是一致性检查和复核信号，不直接替代确定性评分器。
+
+### 12.3 运行、checkpoint、取消和降级
+
+每次运行写入 `evaluation_runs`，节点结果写入 `evaluation_node_results`；Redis thread id 为 `evaluation:<run_id>`。Celery 重试在配置允许时查找可恢复 run，并在 checkpoint 有待执行节点时以 `None` 输入继续；读取失败会降级为全新执行。
+
+取消同时使用 Redis 取消标志和 Celery revoke：排队任务 best-effort revoke，运行中任务由轮询看守协作中断。单 Agent 异常会生成 error envelope 并推动人工复核，而不是让其余维度全部丢失。
+
+## 13. RAG 检索与生成链
+
+### 13.1 Tokenizer、BM25、Dense 与 Sparse
+
+`medical-lexical-v3` tokenizer 保护医学缩写、基因变异、剂量/单位、ICD 风格代码等精确项，再对残余中文使用 jieba 和可选 CJK bigram；查询扩展保留稳定去重顺序。BM25 文档 token 可对 heading 和 entity 做 1–3 次有界 boost。
+
+Dense 使用 `qwen3.7-text-embedding` 1024 维向量和 Chroma cosine collection。BGE-M3 learned sparse 默认关闭；启用时还需手工安装兼容的 FlagEmbedding，并为同一 generation 构建/校验 Sparse artifact。
+
+`hybrid_recall` 从 Redis 读取 active generation，对 BM25、Dense 和启用时的 Sparse 并行召回；单个 channel 失败会记录 warning 并以空结果降级。融合只按稳定字符串 `doc_id`，拒绝跨 generation 结果。无 Sparse 时 BM25/Dense 权重归一化。
+
+### 13.2 RRF、tiered 与 rerank
+
+- Base：每个查询执行 hybrid recall + weighted RRF。
+- MQE：Base 未达 high 时，每次总计最多 2 个扩展，先做 embedding 相似度漂移过滤。
+- HyDE：仍为 low 时选择优先查询执行一次 hypothetical-document retrieval。
+- 候选上限 20。High 需要至少 5 条、3 个来源、最大 vector ≥0.7、覆盖至少 2 个 query type；Medium 需要至少 3 条、2 个来源，且 vector ≥0.5 或 RRF ≥0.015。
+- 两阶段 rerank：最多 20 条进入专用 reranker，最多 5 条进入 LLM 精排，最终分数组合 relevance/completeness/authority/freshness。任一阶段失败可降级到前序排序。
+
+Metadata filter、来源多样性、邻居上下文扩展和句级压缩均存在但默认关闭。OCR 只在启用且页面文本低于阈值时调用 Qwen-VL。
+
+### 13.3 Generation、manifest 与 artifact
+
+生产发布链由 `backend/app/tasks/rag_index_task.py` 驱动：
+
+```text
+snapshot → parse → chunk → embed → chroma → bm25 → sparse
+         → validate → switch → publish
+```
+
+generation 名称固定为 `rag-YYYYMMDDHHMMSS-<corpus_sha256前8位>`。一个 generation 包含：
+
+- Chroma collection `medical_guidelines_<generation>`，每条 metadata 写入 `index_generation`；
+- `backend/data/rag_indexes/<generation>/manifest.json`；
+- `<generation>/bm25/`：bm25s 原生文件、组件 manifest、SHA-256 inventory、`READY`；加载默认 mmap；
+- 启用 BGE-M3 时 `<generation>/sparse/`：documents、sparse payload、manifest、hash 和 `READY`。
+
+顶层 manifest 记录 corpus hash、source/chunk 数、parser/chunker/tokenizer、embedding 模型/维度和各组件 generation。顶层 manifest 最后原子写入；generation 目录与 component identity 必须完全一致，不能用其他 generation 的 artifact 补位。
+
+### 13.4 激活、缓存与多 Worker
+
+RAG 构建使用 Redis key `rag:index-build-lock`，TTL 30 分钟并由 heartbeat 续期。候选校验通过后，`rag:active_generation` 通过 compare-and-set 从任务快照中的旧 generation 原子切到新 generation；并发发布者改变指针时任务失败。之后发布 `rag:index-switched`，消息含 new、previous 和 manifest SHA-256。
+
+Worker 收到事件后先加载并验证 manifest、Chroma count、BM25 和可选 Sparse，再在进程锁内一次性替换本地引用。任何预加载或安装失败都保留旧引用。检索 cache key 含 generation；回填时还会过滤 generation 不匹配文档。
+
+注意：FastAPI 自身没有在 lifespan 启动 Pub/Sub listener，但检索入口会读取 Redis active generation 并按 generation 获取组件；Celery fork Worker 会启动 listener。
+
+### 13.5 旧兼容路径
+
+`python -m app.services.rag.build_medical_index` 调用旧 `build_medical_index(target_version="rag-v2")`：构建一个临时指定 collection，结束后恢复 `ACTIVE_INDEX_VERSION`，不写 Task 7 顶层 manifest、不 CAS active pointer、也不发布切换事件。`index_single_pdf`、`switch_index_version` 和 `rebuild_kb_from_cache.py` 同样是兼容/维护接口，不等价于 immutable generation 发布。
+
+`backend/data/embed_cache/*.npz` 属于旧 rebuild-from-cache 脚本的输入；当前 generation builder 使用进程内 1000 条 Embedding LRU，不会自动生成该磁盘 cache。
+
+## 14. 知识库操作与回滚
+
+### 14.1 API 操作
+
+源文件放在仓库根 `data/`。API 只接收相对文件名，拒绝绝对路径、盘符、`..` 和 PDF_DIR 外文件；扩展名只允许 `.pdf`/`.docx`。服务端将相对路径哈希为稳定的 `source-<24 hex>`，避免信任客户端 source id。
+
+```bash
+# 全量重建
+curl -H "Authorization: Bearer $TOKEN" -X POST \
+  http://localhost:8000/api/v1/knowledge-base/rebuild
+
+# 添加；已存在 source 时失败
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"filename":"guide.pdf","force_replace":false}' \
+  http://localhost:8000/api/v1/knowledge-base/add-pdf
+
+# 替换
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"filename":"guide.pdf","force_replace":true}' \
+  http://localhost:8000/api/v1/knowledge-base/add-pdf
+
+# 状态或 active generation
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/v1/knowledge-base/rebuild/status?task_id=<id>"
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/v1/knowledge-base/rebuild/status
+```
+
+状态可见 `PENDING/PROGRESS/SUCCESS/FAILURE`，PROGRESS 含真实到达的 phase；成功可含 generation、manifest、switch 和 validation。
+
+### 14.2 回滚原则
+
+当前没有 RAG generation 回滚 REST API。`/model-versions/{id}/rollback` 只改模型登记表，不能回滚 RAG。安全回滚必须由运维使用 `versioning` 的 manifest 校验、CAS active pointer 和同一 Pub/Sub 事件完成，且旧 generation 的 Chroma/BM25/可选 Sparse 必须仍完整存在。
+
+回滚步骤：
+
+1. 停止新的索引写任务并确认 `rag:index-build-lock` 所有者。
+2. 记录当前 active generation 和目标旧 generation；加载并执行 `validate_candidate_manifest`，检查 Chroma count、BM25 `READY`/hash 和可选 Sparse。
+3. 以当前 generation 为 expected 执行 CAS，避免覆盖并发发布。
+4. 计算目标 manifest SHA-256，向 `rag:index-switched` 发布与正常发布相同的消息。
+5. 在每个 Worker 验证 `index_generation` trace、候选数、cache hit 和真实查询；失败 Worker 保留旧本地引用，必须排查或重启。
+
+仓库没有封装上述操作的受支持 CLI/API，因此生产回滚应先在演练环境编写并审阅运维脚本，不能直接手改 `settings.ACTIVE_INDEX_VERSION`。至少保留两个已验证 generation；清理前确认无进程引用并保留对应 manifest、评测和审计记录。
+
+## 15. 评测、调参与质量门禁
+
+### 15.1 数据与指标
+
+- `backend/scripts/eval/bm25_golden_set.json`：BM25 词法集，要求至少 40 条，覆盖 `disease_alias/drug_dose/gene_variant/lab_unit/negation/icd_code`。
+- `backend/scripts/eval/golden_set.json`：一般检索来源命中集。
+- `backend/evaluation/rag_cases/*.jsonl`：dev/test/regression Gold cases；自动 bootstrap 标签必须人工复核，不能当最终 gold。
+- 指标：Recall@1/3/5/10、MRR、nDCG、source hit/citation validity、hallucination、refusal/false acceptance、Tool 成功/预算/延迟、claim coverage/contradiction。
+
+BM25 evaluator 是只读的，不重建或切换索引；没有 initialized active generation 时，普通运行诚实跳过，带 `--fail-on-regression` 则失败。
+
+### 15.2 调参
+
+`tune_weights.py` 的联合网格确实存在：BM25 `k1=[0.9,1.2,1.5]`、`b=[0.5,0.7,0.8]`、`heading_boost=[1,2]`、`entity_boost=[1,2,3]`、`RRF_K=[30,35,60]`。另有 6 组固定 BM25/Dense/Sparse 权重候选。
+
+```powershell
 cd backend
-venv\Scripts\python.exe -m alembic upgrade head
-~~~
+.\.venv\Scripts\python.exe scripts/eval/tune_weights.py `
+  --dev-golden <reviewed-dev.json> `
+  --test-golden <independent-reviewed-test.json> `
+  --retriever mqe --top-k 10 --primary ndcg@10 `
+  --output <tuning-report.json>
+```
 
-### 6.2 已有数据库
+只允许 dev 选参；test 只对最终胜出参数运行一次。示例 `golden_set.json` 不能同时伪装成 dev 和 test。
 
-不要用 Base.metadata.create_all() 代替迁移，也不要在有业务数据的环境中直接删除数据卷。当前修复新增的迁移为：
+### 15.3 Task 8 真实 generation 门禁
 
-1a2b3c4d5e6f_add_case_id_and_message_sequence_constraint
+候选必须同时满足：
 
-它会：
+- overall Recall@10 不低于实测 baseline；
+- overall nDCG@10 不低于实测 baseline；
+- exact-term Recall@10 至少比 baseline 高 0.05；
+- cold load ≤10 秒；search p95 ≤5 ms；
+- generation mismatch count = 0；stale cache hit count = 0；
+- 缺失测量按失败处理，绝不能填 0 或使用 mock 数字。
 
-1. 给 virtual_patients 增加可空的稳定病例标识 case_id，并建立唯一索引。
-2. 给 consultation_messages 增加 (consultation_id, sequence) 唯一约束，避免同一会话出现重复序号。
+当前不能宣称门禁已通过：工作区中的 `backend/evaluation_reports/bm25-v1.json` 是未跟踪的本地报告，schema 缺少 Task 8 所需 overall/exact-term/consistency；而 `evaluate_bm25.py` CLI 当前没有注入真实一致性计数的参数，默认报告把一致性标记为未测量。因此 `--fail-on-regression` 的完整绿灯需要先提供同 schema 的真实 baseline/candidate 和实际一致性遥测接线。
 
-已有库升级前先备份，再执行 alembic upgrade head。如果历史数据已经存在重复消息序号或重复病例标识，迁移会因唯一约束冲突失败，应先清理并核对数据。Compose 的 init.sql 已同步包含新结构，但它只对空 MySQL 卷生效。
+CI 的 `python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold` 只阻断评测框架回归；它不证明真实检索、真实 LLM 或候选 generation 的质量。CI 只有在 checkout 同时存在 measured report 和 generation/Chroma artifacts 时才尝试真实门禁，否则明确 SKIP。
 
-管理账号初始化脚本：
+## 16. 监控、日志与安全运维
 
-~~~powershell
+- `/health`：MySQL、Redis、LLM、缓存、Token、LangGraph/checkpointer；degraded 返回 503。
+- `/metrics`：HTTP 数量/耗时、LLM/RAG/缓存等 Prometheus 指标。生产必须配置 `METRICS_TOKEN`。
+- RAG trace/metrics 应关注 `index_generation`、`bm25_load_seconds`、`bm25_query_seconds`、`bm25_candidates`、`bm25_top_score`、`lexical_expansion_count`、`filter_fallback`、`cache_hit`、`retrieval_level` 和 channel candidate counts。
+- 管理 API 提供 run/node tree、failure reason 和 Redis Token 用量；Token run 数据保留 7 天。
+- 日志支持 JSON/text 和 `X-Request-ID`；审计 detail 应保持脱敏。
+- Tool health check 默认关闭，因为探测会产生真实调用和成本。
+- pip-audit、npm audit、Trivy 在 CI 当前为告警模式，不是阻断门禁。
+
+生产必须使用强 SECRET_KEY、独立数据库账号、最小 CORS、TLS、受保护 metrics、外部密钥管理、网络分段、备份恢复演练和数据删除流程。模型 Provider、Prompt 和知识库变更都应保留版本、审批、评测和回滚证据。
+
+## 17. 测试与 CI
+
+本地全量：
+
+```powershell
 cd backend
-venv\Scripts\python.exe scripts\init_admin.py
-~~~
-
-脚本支持的参数和默认行为以 backend/scripts/init_admin.py --help 及源码为准；不要把初始密码写入文档或提交到仓库。
-
-## 7. 用户功能与前端页面
-
-前端实际路由定义在 frontend/src/App.tsx：
-
-| 路由 | 页面 | 权限 |
-| --- | --- | --- |
-| /login | 登录 | 公开 |
-| /register | 注册 | 公开 |
-| /dashboard | 仪表盘 | 登录用户 |
-| /patients | 虚拟患者 | 登录用户，数据操作受后端权限控制 |
-| /consultations | 问诊列表 | 登录用户 |
-| /consultation/:id | 问诊详情与交互 | 有该问诊访问权 |
-| /evaluation/:id | 评估详情 | 有该问诊访问权 |
-| /stats | 统计 | 登录用户；具体数据仍由 API 权限控制 |
-| /admin/consultations | 管理员问诊管理 | 管理员 |
-| /admin/patients | 管理员患者管理 | 管理员 |
-| /profile | 个人资料 | 登录用户 |
-
-典型使用流程：
-
-1. 注册或由管理员创建账号并登录。
-2. 选择虚拟患者或使用病例推荐创建问诊。
-3. 逐轮发送问诊问题，等待患者回复；必要时延长或结束问诊。
-4. 提交诊断，确认会话内容后触发评估。
-5. 通过页面轮询、WebSocket 或评估状态 API 查看进度。
-6. 查看五维评分、证据、风险提示和建议；标记为 needs_review 的结果进入人工复核流程。
-
-## 8. 认证、权限与通用 API 约定
-
-### 8.1 JWT
-
-登录成功后返回 access_token、refresh_token 和用户信息。REST 请求使用：
-
-~~~http
-Authorization: Bearer <access_token>
-~~~
-
-前端将令牌放在 sessionStorage。401 响应会触发前端清理登录状态并跳转登录页；登出会将 access token 放入 Redis 黑名单（黑名单启用时）。
-
-WebSocket 评估进度连接建立后，客户端必须在 5 秒内发送以下首条消息，服务端不会从 URL 读取 token：
-
-~~~json
-{"type":"auth","token":"<access_token>"}
-~~~
-
-鉴权成功后服务端返回 {"type":"auth_ok"}，然后才开始接收该问诊的进度事件。
-
-### 8.2 角色
-
-代码内置 admin 和 doctor 两种角色，并允许用户使用自定义 permissions 覆盖角色默认权限：
-
-| 角色 | 默认权限摘要 |
-| --- | --- |
-| admin | 评估创建/查看/复核、问诊创建/查看、患者创建/查看/导出、用户/系统/模型管理 |
-| doctor | 评估创建/查看、问诊创建/查看、患者查看 |
-
-问诊详情、消息、评估等资源还会校验资源访问权：问诊所属医生或管理员才能访问。不要只依赖前端路由隐藏管理页面，后端权限才是安全边界。
-
-### 8.3 响应与错误
-
-后端统一错误响应通常包含 error_code、message、detail、request_id，并在响应头返回 X-Request-ID。客户端可以把 request_id 提供给运维人员定位日志。常见状态码：
-
-| 状态码 | 含义 |
-| --- | --- |
-| 401 | 未登录、令牌无效或过期 |
-| 403 | 权限不足或资源不属于当前用户 |
-| 404 | 资源不存在 |
-| 409 | 状态冲突，例如同一问诊已有评估在运行 |
-| 422 | 请求体或参数校验失败 |
-| 429 | 触发接口限流 |
-| 503 | 数据库、Redis 或其他依赖不可用 |
-
-## 9. REST 与 WebSocket API 目录
-
-所有路径都以 /api/v1 开头。列表中的“登录”表示需要有效 JWT；实际请求字段和响应模型请直接查看 /docs。
-
-### 9.1 认证 /auth
-
-| 方法 | 路径 | 作用 | 权限 |
-| --- | --- | --- | --- |
-| POST | /auth/register | 注册用户 | 公开 |
-| POST | /auth/login | 用户名密码登录 | 公开 |
-| POST | /auth/refresh | 用 refresh token 换新 access token | 公开 |
-| POST | /auth/logout | 登出并处理 token 黑名单 | 登录 |
-| GET | /auth/me | 获取当前用户 | 登录 |
-| PUT | /auth/profile | 更新当前用户资料 | 登录 |
-
-### 9.2 虚拟患者 /patients 与病例 /cases
-
-| 方法 | 路径 | 作用 | 权限 |
-| --- | --- | --- | --- |
-| GET | /patients/ | 查询患者列表 | patient:view |
-| GET | /patients/export | 导出患者数据 | patient:export |
-| GET | /patients/{patient_id} | 查询患者详情 | 登录/资源权限 |
-| POST | /patients/ | 创建虚拟患者 | patient:create |
-| PUT | /patients/{patient_id} | 更新患者 | 后端权限控制 |
-| DELETE | /patients/{patient_id} | 删除患者 | 后端权限控制 |
-| GET | /cases/recommend | 按条件推荐病例 | 登录 |
-| GET | /cases/{case_id}/difficulty | 查询病例难度 | 登录 |
-
-case_id 是数据集病例的稳定映射标识，名称不是可靠的唯一键。新增病例数据时应保持 case_id 稳定且唯一。
-
-### 9.3 问诊 /consultations
-
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| POST | /consultations/ | 创建问诊 |
-| GET | /consultations/ | 查询当前用户可见问诊 |
-| GET | /consultations/all | 查询全量/管理视图问诊 |
-| GET | /consultations/{consultation_id} | 获取问诊详情 |
-| POST | /consultations/{consultation_id}/messages | 发送问题并获取患者回复 |
-| POST | /consultations/{consultation_id}/messages/stream | 流式发送问题和患者回复 |
-| POST | /consultations/{consultation_id}/extend | 延长问诊 |
-| POST | /consultations/{consultation_id}/submit-diagnosis | 提交诊断 |
-| POST | /consultations/{consultation_id}/end | 结束问诊 |
-| DELETE | /consultations/{consultation_id} | 删除问诊 |
-
-同一会话消息序号由数据库唯一约束保护；客户端不要自行复用已经使用过的 sequence。
-
-### 9.4 评估 /evaluations
-
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| POST | /evaluations/ | 创建评估；生产模式返回 Celery task 信息 |
-| GET | /evaluations/{consultation_id} | 查询问诊对应评估结果 |
-| POST | /evaluations/{consultation_id}/cancel | 协作式取消评估 |
-| GET | /evaluations/{consultation_id}/lock-status | 查询评估锁状态 |
-| GET | /evaluations/task/{task_id}/status | 查询 Celery 任务状态 |
-| WS | /evaluations/ws/{consultation_id} | 订阅评估进度 |
-
-评估可能最终为 completed、needs_review 或其他失败/中间状态。不要只依据 Celery 的 SUCCESS 判断业务评估成功，应继续读取评估记录和锁状态。
-
-### 9.5 人工复核 /reviews
-
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| GET | /reviews/pending | 查询待复核评估 |
-| GET | /reviews/{evaluation_id}/status | 查询复核状态 |
-| POST | /reviews/{evaluation_id}/submit | 提交人工复核结果 |
-
-### 9.6 知识库 /knowledge-base
-
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| GET | /knowledge-base/stats | 查询索引和构建统计 |
-| POST | /knowledge-base/add-pdf | 增量添加单个 PDF |
-| DELETE | /knowledge-base/sources/{source_name} | 删除指定来源的全部索引块 |
-| POST | /knowledge-base/rebuild | 后台触发全量重建 |
-| GET | /knowledge-base/rebuild/status | 查询重建状态 |
-| POST | /knowledge-base/cache/clear | 清空 Embedding 缓存 |
-
-知识库写操作要求管理员权限。删除来源后系统会尝试重建 BM25 索引；失败会记录警告，需通过统计接口和日志确认最终状态。
-
-### 9.7 统计、管理、模型和导出
-
-| 模块 | 方法与路径 |
-| --- | --- |
-| 统计 | GET /stats/ |
-| 管理缓存 | POST /admin/cache/retrieval/clear；GET /admin/cache/retrieval/stats；GET /admin/cache-stats |
-| 管理清理 | POST /admin/cleanup |
-| 运行监控 | GET /admin/monitoring/tool-runtime；GET /admin/monitoring/runs/{run_id}/trace；GET /admin/monitoring/failures/summary；GET /admin/monitoring/usage/summary |
-| 模型版本 | GET/POST /model-versions/；GET /model-versions/{name}/active；PUT /model-versions/{version_id}/deprecate；POST /model-versions/{version_id}/rollback |
-| 数据导出 | GET /users/me/data-export |
-
-## 10. 评估与多智能体实现
-
-评估服务保存一次运行的 run_id，通过 LangGraph 图执行多个评估节点，读取问诊消息、患者资料和检索证据，最后写入结构化评估结果。节点结果、运行状态、token 使用、耗时、风险信息和引用信息分别落库或写入 trace，具体字段见 backend/app/models/evaluation*.py 与 backend/app/evaluation/。
-
-当前运行时支持以下保护机制：
-
-- 评估锁防重复提交，锁有状态迁移和心跳续期。
-- 任务取消同时使用 Redis 取消标志和 Celery revoke；执行中的任务由评估侧协作退出。
-- 网络/超时类失败才重试，业务校验错误不会盲目重试。
-- 评估级 deadline 默认 240 秒；单个 Agent 默认超时 180 秒。
-- 对话超过 6000 字符时可压缩上下文，保留最近 20 条完整消息。
-- Tool Use 有最大轮数、调用次数、超时、结果字符数、重试和熔断限制。
-- 安全红旗、证据不足或结果不确定时可以进入 needs_review，需人工复核，不应被当成自动通过。
-
-提示词版本在 backend/app/prompts/manifest.json 和对应目录中维护。修改模型、提示词、Rubric、RAG 索引或安全规则后，应重新运行回归集并记录版本，不要仅凭单次手工对话判断质量。
-
-## 11. RAG 知识库
-
-知识库以医学 PDF 为输入，经过文本抽取、分块、Embedding/向量索引，并结合检索与重排为评估节点提供证据。代码中提供 BM25、Dense 及可选 Sparse/重排相关配置；默认情况下部分增强开关关闭，是否启用必须以环境变量为准。
-
-常用参数：
-
-| 参数 | 默认值 | 作用 |
-| --- | --- | --- |
-| ACTIVE_INDEX_VERSION | rag-v1 | 当前索引版本标识 |
-| RRF_WEIGHT_BM25 / DENSE / SPARSE | 0.30/0.45/0.25 | 多路检索融合权重 |
-| ENABLE_METADATA_FILTER | false | 是否先做元数据/文档过滤 |
-| ENABLE_DIVERSITY_RERANK | false | 是否限制单一来源占比 |
-| ENABLE_CONTEXT_EXPANSION | false | 是否拼接相邻文本块 |
-| ENABLE_CONTEXT_COMPRESSION | false | 是否在送入 LLM 前抽取关键句 |
-| ENABLE_OCR | false | 扫描版 PDF 的 Qwen-VL OCR 兜底 |
-
-建议操作顺序：
-
-1. 将授权且脱敏的 PDF 放入 data/ 或通过管理员接口上传。
-2. 使用 POST /knowledge-base/add-pdf 做单文件增量入库，或使用 POST /knowledge-base/rebuild 全量构建。
-3. 通过 /knowledge-base/stats 和 /rebuild/status 检查块数、来源和构建状态。
-4. 改变索引或 Embedding 参数后清理缓存，并用 backend/scripts/eval/evaluate_retrieval.py 或 RAG 测试验证召回质量。
-
-知识库文件和 Chroma 数据卷都属于持久化数据。升级前备份，不能把大型索引直接当成可随意删除的临时文件。
-
-## 12. 数据模型
-
-核心表由 backend/app/models/__init__.py 汇总：
-
-| 表 | 用途 |
-| --- | --- |
-| users | 用户、角色、权限和认证相关信息 |
-| virtual_patients | 虚拟患者资料、病例配置、难度和 case_id |
-| consultations | 医生与虚拟患者的一次问诊会话 |
-| consultation_messages | 会话消息和会话内唯一序号 |
-| evaluations | 五维评分、总分、建议、证据、状态和风险数据 |
-| evaluation_runs | 一次评估运行的状态、耗时和 token 等运行信息 |
-| evaluation_node_results | 各评估节点结果和审计信息 |
-| evaluation_checkpoints | LangGraph checkpoint 关联数据 |
-| evaluation_locks | 防止重复评估及锁状态 |
-| review_records | 人工复核结果和状态迁移 |
-| model_versions | 模型版本注册、激活、弃用和回滚 |
-| audit_logs | 登录、评估、导出和管理操作审计 |
-
-涉及结构变化时同时更新 ORM 模型、Pydantic schema、Alembic migration 和 database/init.sql， 并为并发、唯一性和权限补充回归测试。
-
-## 13. 监控、日志与运维
-
-- /health 检查 MySQL、Redis 和 LangGraph checkpointer 状态；容器健康检查依赖该接口。
-- /metrics 暴露 HTTP 请求量和耗时等 Prometheus 指标。生产环境应设置 METRICS_TOKEN，避免公开暴露指标。
-- 每个 HTTP 请求生成或复用 X-Request-ID，日志中记录方法、路径、状态和耗时。
-- 生产环境追加安全响应头，/docs、/redoc 和 /openapi.json 为文档资源例外路径。
-- LANGFUSE_ENABLED 可选；启用前必须配置对应公钥、私钥和地址。
-- Celery Worker、Beat、backend、MySQL 和 Redis 分别查看日志，不要只看前端浏览器日志。
-- Beat 每 24 小时触发 cleanup_expired_records：审计日志默认保留 90 天，评估运行和节点结果默认保留 180 天。
-
-监控 profile 的默认地址为：Prometheus http://localhost:9090，Grafana http://localhost:3000。Grafana dashboard 和数据源配置位于 monitoring/grafana/。
-
-## 14. 测试与质量检查
-
-后端在 backend 目录执行：
-
-~~~powershell
-cd backend
-venv\Scripts\python.exe -m ruff check .
-venv\Scripts\python.exe -m compileall -q .
-venv\Scripts\python.exe -m pytest tests/ -q
-~~~
-
-前端在 frontend 目录执行：
-
-~~~powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy app
+.\.venv\Scripts\python.exe -m compileall -q app
+.\.venv\Scripts\python.exe -m pytest tests -q
+
+cd ..\frontend
 npm run lint
 npm test
 npm run build
-~~~
+```
 
-测试范围包括认证与权限、API、WebSocket、评估服务、LangGraph 编排、Tool Use、RAG 检索、缓存、数据治理和 E2E。涉及评估流程的改动至少应运行对应 tests/services、tests/orchestration、tests/evaluation 或 tests/tasks 子集，并记录真实结果。测试模式由配置中的 TESTING 控制；测试模式可同步执行评估，生产模式默认通过 Celery 异步执行。
+CI 在 push/PR 到 `main/master` 时执行：
 
-提交前建议额外执行：
+- MySQL/Redis service 下的 mypy、pytest + app coverage（最低 40%）、RAG mock gate、Task 8 合约测试和全部 RAG 测试；
+- 数据库初始化/迁移脚本检查；
+- 前端 lint/build；
+- Ruff、compileall、`git diff --check`；
+- 告警模式依赖/文件系统安全扫描；
+- master 上构建并推送 GHCR 镜像。
 
-~~~powershell
-git diff --check
-docker compose config
-~~~
+`npm test` 存在但 CI 的 frontend job 当前只执行 lint/build。文档变更至少执行链接/路径审计、Markdown fence 配对和 `git diff --check`。
 
-docker compose config 需要根目录 .env 中的必填变量已经提供；它只校验 Compose 展开结果，不会替代容器健康检查。
+## 18. 故障排查
 
-## 15. 故障排查
+### 后端启动失败
 
-### API 启动失败
+- production 报 SECRET_KEY：替换默认值。
+- LangGraph/checkpointer 初始化失败：确认 `REDIS_CHECKPOINT_URL` 可达；若明确接受旧路径再设 `LANGGRAPH_ENABLED=false`。
+- MySQL unknown column/table：检查是否误用了不完整 `database/init.sql`；在备份副本对照 Alembic schema，不要盲目 stamp。
+- ModuleNotFound：从 `backend/` 使用 `app.main:app`；容器命令和本地模块路径不同。
 
-先检查 Python 解释器是否来自 backend\venv，再检查 MySQL/Redis 是否可连通、backend/.env 是否存在、SECRET_KEY 和 API Key 是否填写。使用 python -m uvicorn app.main:app 时必须位于 backend 目录；在仓库根目录使用该命令会因模块路径不同而失败。
+### 评估提交失败或一直 pending
 
-### 评估一直 pending 或没有结果
+- 检查 `POST /evaluations/` 的当前 response-model 不一致限制。
+- 确认 FastAPI 与 Worker 的 broker/result backend 完全一致，Redis db=4/5 可达。
+- 查看 `celery -A app.celery_app inspect registered/active/reserved`、锁状态、task status、Worker 日志和取消标志。
+- 任务超时按 run/node trace 判断是 LLM、Tool、RAG 还是 checkpoint；不要只增加超时。
 
-确认 Celery Worker 已启动且使用同一 CELERY_BROKER_URL/CELERY_RESULT_BACKEND，Redis DB 4/5 可写；再查看 /evaluations/{consultation_id}/lock-status、Celery 日志和 /health。不要重复点击创建评估，系统会用评估锁返回 409。
+### WebSocket 立即关闭
 
-### WebSocket 立即断开
+- 连接后 5 秒内发送 auth 首消息；确认 access token 类型、用户存在且拥有问诊访问权。
+- 反向代理必须传 Upgrade/Connection；Nginx Dockerfile 已配置 `/api/` WebSocket。
 
-客户端必须在连接后的 5 秒内发送 JSON 鉴权消息；检查 access token 是否有效、当前用户是否有该问诊访问权，以及反向代理是否转发 WebSocket Upgrade 头。
+### RAG 无结果或 generation mismatch
 
-### RAG 没有结果
+- 无 active pointer：检查 Redis `rag:active_generation` 和 status API。
+- Compose 中先修正 `/app/data` 源文件挂载。
+- 检查 `<generation>/manifest.json`、BM25/Sparse `READY`、hash、Chroma count 和 BGE 开关一致性。
+- 事件加载失败时 Worker 会保留旧引用；查看 `rag:index-switched` listener 日志。
+- 切换后 stale 结果：检查 cache key generation、回填过滤和每个 Worker trace，不要全局手工伪造 cache 命中计数。
 
-先用知识库统计接口确认 PDF 是否成功解析和入索引，再确认 ACTIVE_INDEX_VERSION、Chroma 数据卷、Embedding 缓存和 Qwen 配置。扫描版 PDF 默认不会自动 OCR，必要时显式启用 OCR 并评估成本和延迟。
+### BM25 门禁失败
 
-### Alembic 迁移失败
+- “unavailable measurement” 不是性能回归等同于 0，而是缺少真实测量。
+- 先准备同 schema baseline/candidate 和真实一致性遥测；确认 active generation 真正加载。
+- cold load 过慢时检查 mmap、Chroma WAL 冷重建、磁盘和 Worker 冷启动；p95 过慢时检查候选规模和并发。
 
-先备份数据库，查看 alembic current 和 alembic history。当前新增唯一约束要求历史数据无重复 case_id 和消息序号；清理重复数据后再重试。不要通过删除生产表或重建数据卷绕过迁移。
+### 前端 API 异常
 
-### Docker 前端空白或 API 访问失败
+- 本地 Vite 只代理 `/api` 到 localhost:8000；`VITE_API_BASE_URL` 当前无效。
+- 401 会清 sessionStorage 并跳登录；检查 token 过期/黑名单。
+- `AdminReviews` 无路由；请用 OpenAPI，而不是寻找菜单。
 
-检查 backend 健康状态和前端 Nginx 日志；开发模式使用 docker-compose.override.yml 时前端地址是 5173，基础生产栈前端地址是 80。修改宿主机端口后，应同步检查浏览器访问地址和 CORS 配置。
+## 19. 生产发布检查清单
 
-## 16. 相关文档与维护规则
+- [ ] 医疗用途边界、人工责任、应急转交流程已批准。
+- [ ] 数据已合法授权、去标识化；日志/导出/备份/评测目录纳入敏感数据管理。
+- [ ] 默认管理员和所有示例凭据已移除；SECRET_KEY/API Key/数据库密码来自密钥系统。
+- [ ] 新库使用 Alembic 完成，或已有库经结构 diff 和迁移演练；没有把 init.sql 与 baseline 盲目串联。
+- [ ] FastAPI 与所有 Celery Worker 的 broker/result/checkpoint Redis 一致且网络可达。
+- [ ] Compose 的 `/app/data` 和共享 RAG artifact/Chroma 存储已修正。
+- [ ] Beat 单实例；Worker 并发、超时、内存和 LLM 配额已压测。
+- [ ] HTTPS、最小 CORS、metrics token、最小 DB/RBAC、网络访问控制已启用。
+- [ ] 真实 RAG baseline/candidate、dev/test 独立性、一致性遥测和 Task 8 所有门禁有可审计报告；没有用 mock 结果冒充。
+- [ ] active/previous generation 均完整可加载，回滚脚本和恢复演练已通过。
+- [ ] 后端 lint/type/test、前端 lint/test/build、迁移和安全扫描已审阅。
+- [ ] `/health`、`/metrics`、run trace、failure summary、告警与备份恢复已验证。
 
-- [平台说明](./platform-documentation.md)：平台背景和功能说明。
-- [技术文档](./technical-document.md)：更细的技术设计记录。
-- [评估基线](./evaluation-baseline.md)：评估、回归和基线相关说明。
-- [患者评估与知识库重建](./patient-eval-and-kb-rebuild.md)：患者评估及知识库操作专题。
-- [Prompt 与 Provider 适配](./prompt-and-provider-adapter.md)：提示词和模型提供方适配专题。
-- [贡献指南](../CONTRIBUTING.md)：分支、提交和质量要求。
-- [变更记录](../CHANGELOG.md)：版本变更历史。
+## 20. 已知限制
 
-当源码、Compose、配置、迁移或 API 发生变化时，应在同一变更中更新本手册或相关专题文档，并通过运行中的 OpenAPI 和实际命令校验文档，不记录未验证的测试数字、服务能力或生产结论。
+1. `POST /api/v1/evaluations/` 的生产异步返回体与 `EvaluationOut` 响应模型不一致。
+2. 基础 Compose 未给 FastAPI backend 注入容器内 Celery broker/result URL。
+3. Compose RAG source 挂载路径与代码 `PDF_DIR=/app/data` 不一致。
+4. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；Compose 首次初始化不可视为迁移完成。
+5. Task 8 候选真实性能尚未以完整一致性遥测实测通过；当前不得宣称门禁已通过。
+6. `evaluate_bm25.py` CLI 当前不能传入真实一致性计数，完整 gate 会把它们判为 unavailable。
+7. RAG generation 没有受支持的回滚 REST/CLI；旧 `switch_index_version` 不是集群 immutable generation 回滚。
+8. `VITE_API_BASE_URL` 未被 Axios 使用；部署依赖同源 `/api/v1` 和反向代理。
+9. `AdminReviews` 页面未接路由；知识库、模型版本、监控也缺少完整 UI。
+10. 模型版本 GET 路由当前公开；review status 和 evaluation task status 只要求登录，未做对象归属校验。
+11. JWT 黑名单 Redis 不可用时 fail open；登出不保证立刻吊销。
+12. Compose 固定 `container_name`，不适合直接水平 scale Worker。
+13. ChromaDB 1.5.7 使用极大 `hnsw:sync_threshold` 规避已知跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
+14. BGE-M3 依赖默认未安装，Sparse/OCR/多项增强默认关闭；启用前必须做资源和质量验证。
+15. CI 安全扫描为告警模式，前端单元测试未在 CI frontend job 中执行。
 
-## 17. 版本与许可
+## 21. 文档维护规则
 
-后端配置中的项目版本默认是 1.0.0；实际发布版本以 CHANGELOG.md 和 Git 标签为准。本项目的版权和使用限制以仓库中的项目声明为准，未经授权不得复制、修改、分发或商用。
+改变路由、schema、默认值、Compose、迁移、Agent 图、RAG generation、评测门禁或前端操作时，必须同步本手册。数字只允许来自代码常量、配置或当次可追溯实测；测试合约通过不等于真实性能通过。专题文档：[技术架构说明](technical-document.md)、[平台操作说明](platform-documentation.md)、[Prompt 与 Provider](prompt-and-provider-adapter.md)。

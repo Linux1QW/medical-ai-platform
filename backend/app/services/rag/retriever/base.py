@@ -53,7 +53,10 @@ def build_disease_where_document(query: str) -> Dict | None:
 
 
 async def retrieve_medical_evidence(
-    diagnosis: str, top_k: int = 5
+    diagnosis: str,
+    top_k: int = 5,
+    *,
+    generation: str | None = None,
 ) -> List[Dict]:
     """基于诊断结果检索医学指南证据
 
@@ -64,15 +67,15 @@ async def retrieve_medical_evidence(
         医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
     """
     store = get_medical_store()
-    if store.collection is None or store.collection.count() == 0:
-        logger.debug("医学知识库索引不可用，跳过医学证据检索")
-        return []
     try:
         where_document = None
         if settings.ENABLE_METADATA_FILTER:
             where_document = build_disease_where_document(diagnosis)
         return await store.search(
-            diagnosis, top_k=top_k, where_document=where_document
+            diagnosis,
+            top_k=top_k,
+            where_document=where_document,
+            generation=generation,
         )
     except Exception as e:
         logger.warning(f"医学证据检索失败，降级为无证据模式: {e}")
@@ -112,7 +115,19 @@ def expand_context(
         if seq is None or seq < 0:
             continue
         try:
-            neighbors = store.fetch_neighbors(item.source, seq, window=window)
+            if item.generation is None:
+                neighbors = store.fetch_neighbors(
+                    item.source,
+                    seq,
+                    window=window,
+                )
+            else:
+                neighbors = store.fetch_neighbors(
+                    item.source,
+                    seq,
+                    window=window,
+                    generation=item.generation,
+                )
         except Exception as e:
             logger.warning(f"上下文扩展失败（{item.source}#{seq}）: {e}")
             continue

@@ -309,6 +309,8 @@ class MedicalKnowledgeStore:
         query_text: str,
         top_k: int = 5,
         where_document: Optional[Dict] = None,
+        *,
+        generation: Optional[str] = None,
     ) -> List[Dict]:
         """检索相关医学证据
 
@@ -323,7 +325,11 @@ class MedicalKnowledgeStore:
         Returns:
             医学证据列表 [{"text": ..., "source": ..., "page": ..., "score": ...}, ...]
         """
-        collection = self._ensure_collection()
+        collection = (
+            self.get_collection_for_generation(generation)
+            if generation is not None
+            else self._ensure_collection()
+        )
 
         if collection.count() == 0:
             logger.debug("医学知识库为空，无检索结果")
@@ -337,22 +343,27 @@ class MedicalKnowledgeStore:
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None,
-            lambda: self._query_with_fallback(query_embedding, top_k, where_document),
+            lambda: self._query_with_fallback(
+                collection,
+                query_embedding,
+                top_k,
+                where_document,
+            ),
         )
 
         # 3. 格式化结果
-        evidences = self._format_results(results)
+        evidences = self._format_results(results, generation=generation)
         logger.debug(f"医学知识库检索返回 {len(evidences)} 条证据")
         return evidences
 
     def _query_with_fallback(
         self,
+        collection: chromadb.Collection,
         query_embedding: List[float],
         top_k: int,
         where_document: Optional[Dict],
     ) -> Any:
         """执行 ChromaDB 查询；带过滤时命中不足则回退无过滤查询"""
-        collection = self._ensure_collection()
         include: Any = ["documents", "metadatas", "distances"]
         if where_document:
             try:
@@ -385,7 +396,12 @@ class MedicalKnowledgeStore:
             include=include,
         )
 
-    def _format_results(self, results: Dict) -> List[Dict]:
+    def _format_results(
+        self,
+        results: Dict,
+        *,
+        generation: Optional[str] = None,
+    ) -> List[Dict]:
         """将 ChromaDB 查询结果格式化为证据列表"""
         evidences = []
         if results["ids"] and len(results["ids"]) > 0:
@@ -410,6 +426,9 @@ class MedicalKnowledgeStore:
                 evidences.append(
                     {
                         "doc_id": doc_id,
+                        "generation": generation or metadata.get(
+                            "index_generation"
+                        ),
                         "text": doc_text,
                         "source": metadata.get("source", "未知"),
                         "page": metadata.get("page", 0),
@@ -430,6 +449,28 @@ class MedicalKnowledgeStore:
                     }
                 )
         return evidences
+
+    async def search_by_embedding(
+        self,
+        query_embedding: List[float],
+        *,
+        top_k: int,
+        generation: str,
+    ) -> List[Dict]:
+        """Search the exact generation with a caller-provided embedding."""
+        collection = self.get_collection_for_generation(generation)
+        if collection.count() == 0:
+            return []
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: collection.query(
+                query_embeddings=cast(Any, [query_embedding]),
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"],
+            ),
+        )
+        return self._format_results(results, generation=generation)
 
     def count(self) -> int:
         """返回知识库中文档总数"""
@@ -460,7 +501,12 @@ class MedicalKnowledgeStore:
         return len(result.get("ids") or [])
 
     def fetch_neighbors(
-        self, source: str, chunk_seq: int, window: int = 1
+        self,
+        source: str,
+        chunk_seq: int,
+        window: int = 1,
+        *,
+        generation: Optional[str] = None,
     ) -> Dict[int, Dict]:
         """按 source + chunk_seq 拉取相邻文本块（Small-to-Big 上下文扩展）
 
@@ -473,7 +519,11 @@ class MedicalKnowledgeStore:
             {chunk_seq: {"text": ..., "page": ...}} 映射（仅邻居，不含中心块）。
             无邻居或查询失败时返回空 dict。
         """
-        collection = self._ensure_collection()
+        collection = (
+            self.get_collection_for_generation(generation)
+            if generation is not None
+            else self._ensure_collection()
+        )
         if window <= 0 or chunk_seq is None or chunk_seq < 0:
             return {}
         wanted = [

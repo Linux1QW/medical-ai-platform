@@ -30,6 +30,7 @@ from app.services.rag.types import (
     Citation,
     EvidenceItem,
     RetrievalConfidence,
+    build_evidence_citation_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ async def run_knowledge_check(
         # ── Step 6: 构建引用列表 ──
         citations: list[Citation] = []
         for i, evidence in enumerate(reranked):
-            citation_id = f"rag-v2:{evidence.source}:{evidence.page or 0}:{i}"
+            citation_id = build_evidence_citation_id(evidence, i)
             citations.append(Citation(
                 citation_id=citation_id,
                 claim=evidence.text[:200],

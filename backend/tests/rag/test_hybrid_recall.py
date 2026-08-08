@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.services.rag.indexing.manifest import IndexGenerationMismatch
 from app.services.rag.retriever import fusion, hybrid
 from app.services.rag.sparse_search import LearnedSparseSearch
 
@@ -26,8 +27,21 @@ async def test_sparse_only_hit_survives_fusion(monkeypatch):
     sparse.search.return_value = [hit("s1", sparse_score=8.0)]
 
     monkeypatch.setattr(fusion, "retrieve_medical_evidence", AsyncMock(return_value=[]))
-    monkeypatch.setattr(fusion, "get_bm25_index", lambda: Mock(search=Mock(return_value=[])))
-    monkeypatch.setattr(fusion, "get_sparse_search", lambda: sparse)
+    monkeypatch.setattr(
+        fusion,
+        "get_active_index_generation",
+        AsyncMock(return_value="rag-test"),
+    )
+    monkeypatch.setattr(
+        fusion,
+        "get_bm25_index",
+        lambda _generation: Mock(search=Mock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        fusion,
+        "get_sparse_search",
+        lambda _generation: sparse,
+    )
     monkeypatch.setattr(fusion.settings, "BGE_M3_ENABLED", True)
 
     fused, _ = await fusion.hybrid_recall("lung cancer", top_k=5)
@@ -118,12 +132,11 @@ async def test_three_way_fusion_accepts_unified_tuple_entries():
 
 
 def test_three_way_fusion_preserves_channel_scores_and_generation(monkeypatch):
-    monkeypatch.setattr(fusion.settings, "ACTIVE_INDEX_VERSION", "rag-test")
-
     fused, meta = fusion.run_three_way_fusion(
         bm25=[hit("shared", bm25_score=9.0)],
         dense=[hit("shared", score=0.75)],
         sparse=[hit("shared", sparse_score=4.0)],
+        generation="rag-test",
     )
 
     assert fused == [
@@ -140,6 +153,21 @@ def test_three_way_fusion_preserves_channel_scores_and_generation(monkeypatch):
         }
     ]
     assert meta["weights"] == [0.30, 0.45, 0.25]
+
+
+def test_fusion_rejects_channel_result_from_another_generation():
+    with pytest.raises(IndexGenerationMismatch, match="dense"):
+        fusion.run_three_way_fusion(
+            bm25=[],
+            dense=[
+                {
+                    **hit("d1", score=0.8),
+                    "generation": "rag-stale",
+                }
+            ],
+            sparse=[],
+            generation="rag-active",
+        )
 
 
 @pytest.mark.asyncio

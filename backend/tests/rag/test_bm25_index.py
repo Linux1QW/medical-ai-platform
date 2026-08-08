@@ -171,6 +171,25 @@ def test_get_failed_legacy_build_keeps_serving_active_index(tmp_path, monkeypatc
     assert "g-new" not in bm25_search._bm25_indexes
 
 
+def test_explicit_generation_never_returns_a_different_active_index(
+    tmp_path, monkeypatch
+):
+    active = BM25Index()
+    active.build([{"id": "old", "text": "EGFR肺癌"}])
+    bm25_search._bm25_index = active
+    bm25_search._bm25_index_generation = "g-old"
+    bm25_search._bm25_indexes["g-old"] = active
+    monkeypatch.setattr(
+        "app.services.rag.lexical.artifacts.load_bm25_artifact",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            BM25ArtifactNotFound("missing")
+        ),
+    )
+
+    with pytest.raises(BM25ArtifactNotFound):
+        bm25_search.get_bm25_index("g-new", tmp_path)
+
+
 def test_rebuild_atomically_swaps_in_valid_generation(tmp_path, monkeypatch):
     from app.services.rag.lexical.artifacts import build_bm25_artifact
 

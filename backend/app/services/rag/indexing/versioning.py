@@ -9,10 +9,13 @@ import redis.asyncio as aioredis
 
 from app.core.config import settings
 from app.services.rag.indexing.manifest import (
+    IndexGenerationMismatch,
     RAGIndexManifest,
     validate_candidate_manifest,
 )
+from app.services.rag.lexical.artifacts import load_bm25_artifact
 from app.services.rag.medical_store import get_medical_store
+from app.services.rag.sparse_search import load_sparse_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -81,20 +84,23 @@ async def activate_candidate_generation(
     *,
     expected_generation: str,
     redis: Any = None,
+    artifact_root: Any = None,
 ) -> dict:
     """Validate one candidate and atomically publish its shared pointer."""
     validate_candidate_manifest(manifest)
     store = get_medical_store()
     collection = store.get_collection_for_generation(manifest.index_generation)
     if collection.count() != manifest.chunk_count:
-        from app.services.rag.indexing.manifest import IndexGenerationMismatch
-
         raise IndexGenerationMismatch(
             "chroma document count does not match candidate manifest"
         )
-    from app.services.rag.lexical.artifacts import load_bm25_artifact
-
-    load_bm25_artifact(manifest.index_generation)
+    load_bm25_artifact(manifest.index_generation, artifact_root)
+    if settings.BGE_M3_ENABLED:
+        load_sparse_artifact(
+            manifest.index_generation,
+            artifact_root,
+            install=True,
+        )
     await compare_and_set_active_generation(
         expected_generation=expected_generation,
         candidate_generation=manifest.index_generation,

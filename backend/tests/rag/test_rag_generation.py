@@ -5,9 +5,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.services.rag.indexing import builder, versioning
 from app.services.rag.indexing.builder import build_candidate_snapshot
 from app.services.rag.indexing.manifest import (
     IndexGenerationMismatch,
+    RAGComponentManifest,
     RAGIndexManifest,
     build_index_generation,
     validate_candidate_manifest,
@@ -60,6 +62,25 @@ def test_switch_rejects_collection_for_another_generation(candidate_manifest):
     candidate_manifest.chroma_collection = "medical_guidelines_g-old"
 
     with pytest.raises(IndexGenerationMismatch, match="chroma"):
+        validate_candidate_manifest(candidate_manifest)
+
+
+def test_manifest_rejects_prefixed_bm25_artifact_path(candidate_manifest):
+    candidate_manifest.bm25_artifact = (
+        f"unexpected/{candidate_manifest.index_generation}/bm25"
+    )
+
+    with pytest.raises(IndexGenerationMismatch, match="bm25"):
+        validate_candidate_manifest(candidate_manifest)
+
+
+def test_manifest_requires_exact_sparse_artifact_path(candidate_manifest, monkeypatch):
+    generation = candidate_manifest.index_generation
+    monkeypatch.setattr(builder.settings, "BGE_M3_ENABLED", True)
+    candidate_manifest.sparse_artifact = f"unexpected/{generation}/sparse"
+    candidate_manifest.sparse = RAGComponentManifest(index_generation=generation)
+
+    with pytest.raises(IndexGenerationMismatch, match="sparse"):
         validate_candidate_manifest(candidate_manifest)
 
 
@@ -155,3 +176,70 @@ def test_incremental_replacement_builds_snapshot_without_mutating_active():
 
     assert [document["id"] for document in candidate] == ["keep-b", "new-a"]
     assert [document["id"] for document in active_documents] == ["old-a", "keep-b"]
+
+
+def test_candidate_builder_publishes_sparse_artifact_when_enabled(
+    tmp_path, monkeypatch
+):
+    generation_time = datetime(2026, 8, 8, 11, 22, 33, tzinfo=timezone.utc)
+    records = [
+        {
+            "id": "d1",
+            "text": "evidence",
+            "metadata": {"source": "guide.pdf"},
+            "embedding": [0.1],
+        }
+    ]
+    build_sparse = Mock()
+    monkeypatch.setattr(builder.settings, "BGE_M3_ENABLED", True)
+    monkeypatch.setattr(builder, "build_bm25_artifact", Mock())
+    monkeypatch.setattr(builder, "build_sparse_artifact", build_sparse)
+    monkeypatch.setattr(
+        builder,
+        "_publish_chroma_candidate",
+        lambda generation, records: f"medical_guidelines_{generation}",
+    )
+    monkeypatch.setattr(builder, "write_rag_index_manifest", Mock())
+
+    manifest = builder._publish_candidate_generation(
+        records,
+        artifact_root=tmp_path,
+        created_at=generation_time,
+    )
+
+    build_sparse.assert_called_once_with(
+        manifest.index_generation,
+        builder._bm25_documents(records),
+        tmp_path,
+    )
+    assert manifest.sparse_artifact == f"{manifest.index_generation}/sparse"
+
+
+@pytest.mark.asyncio
+async def test_activation_validates_and_loads_enabled_sparse_artifact(
+    candidate_manifest, tmp_path, monkeypatch
+):
+    generation = candidate_manifest.index_generation
+    candidate_manifest.sparse_artifact = f"{generation}/sparse"
+    candidate_manifest.sparse = RAGComponentManifest(index_generation=generation)
+    collection = Mock()
+    collection.count.return_value = candidate_manifest.chunk_count
+    store = Mock()
+    store.get_collection_for_generation.return_value = collection
+    load_bm25 = Mock()
+    load_sparse = Mock()
+    cas = AsyncMock(return_value=True)
+    monkeypatch.setattr(versioning.settings, "BGE_M3_ENABLED", True)
+    monkeypatch.setattr(versioning, "get_medical_store", lambda: store)
+    monkeypatch.setattr(versioning, "load_bm25_artifact", load_bm25)
+    monkeypatch.setattr(versioning, "load_sparse_artifact", load_sparse)
+    monkeypatch.setattr(versioning, "compare_and_set_active_generation", cas)
+
+    await versioning.activate_candidate_generation(
+        candidate_manifest,
+        expected_generation="g-old",
+        artifact_root=tmp_path,
+    )
+
+    load_bm25.assert_called_once_with(generation, tmp_path)
+    load_sparse.assert_called_once_with(generation, tmp_path, install=True)

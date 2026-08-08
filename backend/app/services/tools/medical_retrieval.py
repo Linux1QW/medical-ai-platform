@@ -29,7 +29,12 @@ from app.services.rag.retriever import (
     expand_queries,
     tiered_retrieve,
 )
-from app.services.rag.types import EvidenceItem, RetrievalBundle, RetrievalQuery
+from app.services.rag.types import (
+    EvidenceItem,
+    RetrievalBundle,
+    RetrievalQuery,
+    build_evidence_citation_id,
+)
 from app.services.tools.base import BaseTool, ToolContext
 from app.services.tools.registry import ToolRegistry
 
@@ -402,11 +407,7 @@ def _build_citation_id(doc: dict, index: int) -> str:
 
 def _build_citation_id_from_evidence(item: EvidenceItem, index: int) -> str:
     """为 EvidenceItem 构建稳定的 citation_id"""
-    source = item.source or "未知"
-    page = item.page or 0
-    if item.doc_id:
-        return f"rag:{source}:{page}:{item.doc_id[-8:]}"
-    return f"rag:{source}:{page}:{index}"
+    return build_evidence_citation_id(item, index)
 
 
 def _infer_source_type_from_evidence(item: EvidenceItem) -> str:
@@ -438,6 +439,7 @@ def _doc_to_evidence_item(doc: dict, index: int) -> EvidenceItem:
     """将检索结果 dict 转为 EvidenceItem"""
     return EvidenceItem(
         doc_id=doc.get("doc_id", f"tmp-{index}"),
+        generation=doc.get("generation"),
         text=doc.get("text", ""),
         source=doc.get("source", "未知"),
         page=doc.get("page"),

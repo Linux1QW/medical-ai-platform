@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.core.config import settings
 from app.services.rag.embeddings import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
@@ -39,6 +40,7 @@ from app.services.rag.lexical.tokenizer import TOKENIZER_VERSION
 from app.services.rag.medical_store import get_medical_store
 from app.services.rag.metadata_config import get_enriched_metadata
 from app.services.rag.ocr import apply_ocr_to_pages
+from app.services.rag.sparse_search import build_sparse_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +214,10 @@ def _publish_candidate_generation(
     generation = build_index_generation(corpus_sha256, timestamp)
 
     build_bm25_artifact(generation, bm25_documents, artifact_root)
+    sparse_artifact = None
+    if settings.BGE_M3_ENABLED:
+        build_sparse_artifact(generation, bm25_documents, artifact_root)
+        sparse_artifact = f"{generation}/sparse"
     collection_name = _publish_chroma_candidate(generation, records)
     manifest = RAGIndexManifest(
         index_generation=generation,
@@ -225,7 +231,7 @@ def _publish_candidate_generation(
         embedding_dimension=EMBEDDING_DIM,
         chroma_collection=collection_name,
         bm25_artifact=f"{generation}/bm25",
-        sparse_artifact=None,
+        sparse_artifact=sparse_artifact,
         created_at=timestamp,
     )
     write_rag_index_manifest(manifest, artifact_root)

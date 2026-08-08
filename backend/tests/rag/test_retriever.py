@@ -46,12 +46,19 @@ async def test_dense_and_bm25_receive_exact_raw_query(monkeypatch):
     bm25_index = Mock()
     bm25_index.search.return_value = []
     monkeypatch.setattr(fusion, "retrieve_medical_evidence", dense)
-    monkeypatch.setattr(fusion, "get_bm25_index", lambda: bm25_index)
+    monkeypatch.setattr(fusion, "get_bm25_index", lambda _generation: bm25_index)
+    monkeypatch.setattr(
+        fusion,
+        "get_active_index_generation",
+        AsyncMock(return_value="rag-redis"),
+    )
     monkeypatch.setattr(fusion.settings, "BGE_M3_ENABLED", False)
 
     await fusion.hybrid_recall("心梗治疗", top_k=5)
 
-    dense.assert_awaited_once_with("心梗治疗", top_k=15)
+    dense.assert_awaited_once_with(
+        "心梗治疗", top_k=15, generation="rag-redis"
+    )
     bm25_index.search.assert_called_once_with("心梗治疗", top_k=15)
 
 
@@ -71,8 +78,15 @@ async def test_tiered_retrieve_passes_original_query_text_to_hybrid_recall(monke
             {"channels": ["bm25"]},
         )
     )
-    monkeypatch.setattr(tiered, "get_cached_bundle", AsyncMock(return_value=None))
-    monkeypatch.setattr(tiered, "set_cached_bundle", AsyncMock())
+    get_cached = AsyncMock(return_value=None)
+    set_cached = AsyncMock()
+    monkeypatch.setattr(tiered, "get_cached_bundle", get_cached)
+    monkeypatch.setattr(tiered, "set_cached_bundle", set_cached)
+    monkeypatch.setattr(
+        tiered,
+        "get_active_index_generation",
+        AsyncMock(return_value="rag-redis"),
+    )
     monkeypatch.setattr(tiered, "hybrid_recall", hybrid_recall)
     monkeypatch.setattr(
         tiered,
@@ -80,12 +94,62 @@ async def test_tiered_retrieve_passes_original_query_text_to_hybrid_recall(monke
         lambda **kwargs: RetrievalConfidence.HIGH,
     )
 
+    queries = [RetrievalQuery(query_type="case", text=original_text)]
     await tiered.tiered_retrieve(
-        [RetrievalQuery(query_type="case", text=original_text)],
+        queries,
         top_k_per_query=5,
     )
 
-    hybrid_recall.assert_awaited_once_with(original_text, top_k=5)
+    get_cached.assert_awaited_once_with(
+        queries,
+        "rag-redis",
+        top_k=5,
+    )
+    hybrid_recall.assert_awaited_once_with(
+        original_text,
+        top_k=5,
+        generation="rag-redis",
+    )
+    cached_payload = set_cached.await_args.args[2]
+    assert cached_payload["candidates"][0]["generation"] == "rag-redis"
+    assert set_cached.await_args.kwargs == {"top_k": 5}
+
+
+@pytest.mark.asyncio
+async def test_hybrid_channels_share_one_redis_generation(monkeypatch):
+    dense = AsyncMock(
+        return_value=[
+            {
+                "doc_id": "d1",
+                "text": "dense",
+                "source": "a.pdf",
+                "score": 0.8,
+                "generation": "rag-redis",
+            }
+        ]
+    )
+    bm25_index = Mock()
+    bm25_index.search.return_value = []
+    sparse = Mock(is_indexed=True)
+    sparse.search.return_value = []
+    bm25_get = Mock(return_value=bm25_index)
+    sparse_get = Mock(return_value=sparse)
+    monkeypatch.setattr(
+        fusion,
+        "get_active_index_generation",
+        AsyncMock(return_value="rag-redis"),
+    )
+    monkeypatch.setattr(fusion, "retrieve_medical_evidence", dense)
+    monkeypatch.setattr(fusion, "get_bm25_index", bm25_get)
+    monkeypatch.setattr(fusion, "get_sparse_search", sparse_get)
+    monkeypatch.setattr(fusion.settings, "BGE_M3_ENABLED", True)
+
+    fused, _ = await fusion.hybrid_recall("query", top_k=3)
+
+    dense.assert_awaited_once_with("query", top_k=9, generation="rag-redis")
+    bm25_get.assert_called_once_with("rag-redis")
+    sparse_get.assert_called_once_with("rag-redis")
+    assert fused[0]["generation"] == "rag-redis"
 
 
 def test_merge_evidence_converts_each_channel_rank_to_rrf():

@@ -8,6 +8,9 @@ from typing import Any
 from app.core.config import settings
 from app.services.rag.bm25_search import get_bm25_index
 from app.services.rag.hybrid_fusion import weighted_rrf
+from app.services.rag.indexing.manifest import IndexGenerationMismatch
+from app.services.rag.indexing.versioning import get_active_index_generation
+from app.services.rag.medical_store import IndexGenerationUnavailable
 from app.services.rag.retriever.base import retrieve_medical_evidence
 from app.services.rag.sparse_search import get_sparse_search
 
@@ -39,11 +42,26 @@ def _document_id(document: dict[str, Any]) -> str:
     return str(document_id)
 
 
-def _normalized_document(document: dict[str, Any], channel: str) -> dict[str, Any]:
+def _normalized_document(
+    document: dict[str, Any],
+    channel: str,
+    generation: str | None,
+) -> dict[str, Any]:
     """Keep channel scores separate while normalizing document identity."""
     normalized = dict(document)
     normalized["doc_id"] = _document_id(document)
-    normalized.setdefault("generation", str(settings.ACTIVE_INDEX_VERSION))
+    document_generation = normalized.get("generation")
+    if (
+        generation is not None
+        and document_generation is not None
+        and document_generation != generation
+    ):
+        raise IndexGenerationMismatch(
+            f"{channel} result generation {document_generation!r} does not match "
+            f"runtime generation {generation!r}"
+        )
+    if generation is not None:
+        normalized["generation"] = generation
     if channel == "bm25":
         normalized["bm25_score"] = float(document.get("bm25_score", 0.0))
     elif channel == "dense":
@@ -59,6 +77,7 @@ def _channel_entry_to_document(
     entry: Any,
     channel: str,
     score_field: str,
+    generation: str | None,
 ) -> dict[str, Any]:
     """Normalize either a document dict or (doc_id, score, document) channel entry."""
     if isinstance(entry, (tuple, list)) and len(entry) == 3:
@@ -66,10 +85,10 @@ def _channel_entry_to_document(
         normalized = dict(document) if isinstance(document, dict) else {}
         normalized["doc_id"] = "" if doc_id is None else str(doc_id)
         normalized[score_field] = float(score)
-        return _normalized_document(normalized, channel)
+        return _normalized_document(normalized, channel, generation)
 
     if isinstance(entry, dict):
-        return _normalized_document(entry, channel)
+        return _normalized_document(entry, channel, generation)
 
     return {}
 
@@ -79,6 +98,7 @@ def run_three_way_fusion(
     dense: list[Any],
     sparse: list[Any],
     top_k: int | None = None,
+    generation: str | None = None,
 ) -> FusionResult:
     """Fuse ranked channel results by stable string document identity."""
     channels = (
@@ -93,7 +113,9 @@ def run_three_way_fusion(
         normalized = [
             document
             for document in (
-                _channel_entry_to_document(entry, channel, score_field)
+                _channel_entry_to_document(
+                    entry, channel, score_field, generation
+                )
                 for entry in raw_documents
             )
             if _document_id(document)
@@ -149,6 +171,7 @@ def run_three_way_fusion(
             "sources": {"bm25": len(bm25), "dense": len(dense), "sparse": len(sparse)},
             "weights": weights,
             "fused_count": len(fused_results),
+            "generation": generation,
         },
     )
 
@@ -168,28 +191,42 @@ def reciprocal_rank_fusion(
     return fused
 
 
-async def hybrid_recall(query: str, top_k: int = 10) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+async def hybrid_recall(
+    query: str,
+    top_k: int = 10,
+    *,
+    generation: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run all enabled retrieval channels and fuse them with one RRF implementation."""
+    selected_generation = generation or await get_active_index_generation()
+    if not selected_generation:
+        raise IndexGenerationUnavailable("no active RAG generation in Redis")
     recall_k = top_k * 3
     loop = asyncio.get_running_loop()
 
     async def dense_search() -> list[dict[str, Any]]:
         try:
-            return await retrieve_medical_evidence(query, top_k=recall_k)
+            return await retrieve_medical_evidence(
+                query,
+                top_k=recall_k,
+                generation=selected_generation,
+            )
         except Exception as error:
             logger.warning("hybrid_recall dense channel failed: %s", error)
             return []
 
     def bm25_search() -> list[dict[str, Any]]:
         try:
-            return get_bm25_index().search(query, top_k=recall_k)
+            return get_bm25_index(selected_generation).search(
+                query, top_k=recall_k
+            )
         except Exception as error:
             logger.warning("hybrid_recall BM25 channel failed: %s", error)
             return []
 
     def sparse_search() -> list[dict[str, Any]]:
         try:
-            search = get_sparse_search()
+            search = get_sparse_search(selected_generation)
             return search.search(query, top_k=recall_k) if search and search.is_indexed else []
         except Exception as error:
             logger.warning("hybrid_recall sparse channel failed: %s", error)
@@ -207,4 +244,10 @@ async def hybrid_recall(query: str, top_k: int = 10) -> tuple[list[dict[str, Any
         )
         sparse = []
 
-    return run_three_way_fusion(bm25=bm25, dense=dense, sparse=sparse, top_k=top_k)
+    return run_three_way_fusion(
+        bm25=bm25,
+        dense=dense,
+        sparse=sparse,
+        top_k=top_k,
+        generation=selected_generation,
+    )

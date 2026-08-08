@@ -8,6 +8,8 @@ from typing import Any, Literal
 from app.core.config import settings
 from app.services.observability.langfuse_client import get_tracer
 from app.services.observability.metrics import RAG_RETRIEVAL_DURATION
+from app.services.rag.indexing.manifest import IndexGenerationMismatch
+from app.services.rag.indexing.versioning import get_active_index_generation
 from app.services.rag.retrieval_cache import get_cached_bundle, set_cached_bundle
 from app.services.rag.retriever.fusion import hybrid_recall
 from app.services.rag.retriever.hyde import hyde_retrieve
@@ -32,16 +34,24 @@ def _dict_to_evidence(
     dicts: list,
     query_type: str,
     retrieved_via: str = "base",
+    *,
+    generation: str | None = None,
 ) -> list:
     """将 dict 格式的检索结果转为 EvidenceItem"""
     items = []
     for d in dicts:
+        item_generation = d.get("generation") or generation
+        if generation is not None and item_generation != generation:
+            raise IndexGenerationMismatch(
+                f"candidate generation {item_generation!r} does not match "
+                f"runtime generation {generation!r}"
+            )
         vector_score = d.get("vector_score")
         if vector_score is None and d.get("rrf_score") is None:
             vector_score = d.get("score")
         item = EvidenceItem(
             doc_id=str(d.get("doc_id", d.get("id", ""))),
-            generation=d.get("generation", str(settings.ACTIVE_INDEX_VERSION)),
+            generation=item_generation,
             text=d.get("text", ""),
             source=d.get("source", "未知"),
             page=d.get("page"),
@@ -203,16 +213,31 @@ async def tiered_retrieve(  # noqa: C901
         )
 
     # ── 缓存检查 ──
-    queries_text = "|".join(sorted(q.text for q in queries))
-    index_version = settings.ACTIVE_INDEX_VERSION
-    cached = await get_cached_bundle(queries_text, index_version)
+    try:
+        index_generation = await get_active_index_generation()
+    except Exception as exc:
+        logger.error("active RAG generation unavailable: %s", exc)
+        index_generation = None
+    if not index_generation:
+        return RetrievalBundle(
+            status="unavailable",
+            level_used="base",
+            queries=queries,
+            candidates=[],
+            trace={"error": "active_generation_unavailable"},
+        )
+    cached = await get_cached_bundle(
+        queries,
+        index_generation,
+        top_k=top_k_per_query,
+    )
     if cached is not None:
-        logger.info(f"tiered_retrieve 缓存命中: {index_version}")
+        logger.info(f"tiered_retrieve 缓存命中: {index_generation}")
         return RetrievalBundle.model_validate(cached)
 
     start = time.monotonic()
     trace: dict[str, Any] = {
-        "index_version": settings.ACTIVE_INDEX_VERSION,
+        "index_generation": index_generation,
         "queries": [{"type": q.query_type, "text": q.text[:100], "source": q.source} for q in queries],
         "levels_attempted": [],
         "retrieval_level": "base",
@@ -278,7 +303,11 @@ async def tiered_retrieve(  # noqa: C901
     trace["levels_attempted"].append("base")
     fusion_info = None  # 记录融合元信息
     for query in queries:
-        fused, fusion_meta = await hybrid_recall(query.text, top_k=top_k_per_query)
+        fused, fusion_meta = await hybrid_recall(
+            query.text,
+            top_k=top_k_per_query,
+            generation=index_generation,
+        )
         fusion_info = fusion_meta
 
         if not fused:
@@ -288,7 +317,12 @@ async def tiered_retrieve(  # noqa: C901
             query_types_with_hits.add(query.query_type)
 
         # 转换并合并
-        evidence_items = _dict_to_evidence(fused, query.query_type, retrieved_via="base")
+        evidence_items = _dict_to_evidence(
+            fused,
+            query.query_type,
+            retrieved_via="base",
+            generation=index_generation,
+        )
         # 为融合结果设置 rrf_score
         for item in evidence_items:
             if item.rrf_score is None:
@@ -318,7 +352,12 @@ async def tiered_retrieve(  # noqa: C901
             confidence=confidence.value,
             trace=trace,
         )
-        await set_cached_bundle(queries_text, index_version, result.model_dump())
+        await set_cached_bundle(
+            queries,
+            index_generation,
+            result.model_dump(),
+            top_k=top_k_per_query,
+        )
         return result
     # MEDIUM / LOW → 继续 L2 MQE
 
@@ -340,7 +379,11 @@ async def tiered_retrieve(  # noqa: C901
 
         for eq in expanded:
             mqe_expansion_count += 1
-            fused, fusion_meta = await hybrid_recall(eq, top_k=top_k_per_query)
+            fused, fusion_meta = await hybrid_recall(
+                eq,
+                top_k=top_k_per_query,
+                generation=index_generation,
+            )
             fusion_info = fusion_meta
 
             if not fused:
@@ -349,7 +392,12 @@ async def tiered_retrieve(  # noqa: C901
             if fused:
                 query_types_with_hits.add(query.query_type)
 
-            evidence_items = _dict_to_evidence(fused, query.query_type, retrieved_via="mqe")
+            evidence_items = _dict_to_evidence(
+                fused,
+                query.query_type,
+                retrieved_via="mqe",
+                generation=index_generation,
+            )
             all_candidates = _merge_evidence(all_candidates, evidence_items)
 
             if len(all_candidates) >= candidate_limit:
@@ -376,7 +424,12 @@ async def tiered_retrieve(  # noqa: C901
             confidence=confidence.value,
             trace=trace,
         )
-        await set_cached_bundle(queries_text, index_version, result.model_dump())
+        await set_cached_bundle(
+            queries,
+            index_generation,
+            result.model_dump(),
+            top_k=top_k_per_query,
+        )
         return result
     # LOW → 继续 L3 HyDE
 
@@ -388,10 +441,19 @@ async def tiered_retrieve(  # noqa: C901
     hyde_query = next((q for q in queries if q.query_type == "case"), queries[0])
     hyde_success = False
     try:
-        hyde_results = await hyde_retrieve(hyde_query.text, top_k=top_k_per_query)
+        hyde_results = await hyde_retrieve(
+            hyde_query.text,
+            top_k=top_k_per_query,
+            generation=index_generation,
+        )
         if hyde_results:
             query_types_with_hits.add(hyde_query.query_type)
-            evidence_items = _dict_to_evidence(hyde_results, hyde_query.query_type, retrieved_via="hyde")
+            evidence_items = _dict_to_evidence(
+                hyde_results,
+                hyde_query.query_type,
+                retrieved_via="hyde",
+                generation=index_generation,
+            )
             all_candidates = _merge_evidence(all_candidates, evidence_items)
         hyde_success = True
     except Exception as e:
@@ -425,7 +487,12 @@ async def tiered_retrieve(  # noqa: C901
     )
 
     # ── 写入缓存 ──
-    await set_cached_bundle(queries_text, index_version, result.model_dump())
+    await set_cached_bundle(
+        queries,
+        index_generation,
+        result.model_dump(),
+        top_k=top_k_per_query,
+    )
 
     # ── Langfuse trace + Prometheus 指标 ──
     _elapsed_ms = (time.monotonic() - start) * 1000

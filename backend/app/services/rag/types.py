@@ -129,6 +129,16 @@ class Citation(BaseModel):
     rerank_score: Optional[float] = None
 
 
+def build_evidence_citation_id(item: EvidenceItem, index: int) -> str:
+    """Build a citation identity anchored to the evidence generation."""
+    if not item.generation:
+        raise ValueError("evidence generation is required for citation identity")
+    source = item.source or "未知"
+    page = item.page or 0
+    suffix = item.doc_id[-8:] if item.doc_id else str(index)
+    return f"{item.generation}:{source}:{page}:{suffix}"
+
+
 # ── 知识评估结果 ────────────────────────────────────────────────────────────────
 
 class KnowledgeAssessment(BaseModel):

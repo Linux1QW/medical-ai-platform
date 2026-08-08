@@ -39,6 +39,42 @@ _cache_errors: int = 0
 
 CACHE_KEY_PREFIX = "retrieval_cache"
 
+_BUNDLE_CACHE_FIELDS = {
+    "status",
+    "level_used",
+    "queries",
+    "degraded",
+    "confidence",
+    "trace",
+}
+_CANDIDATE_CACHE_FIELDS = {
+    "doc_id",
+    "generation",
+    "source",
+    "page",
+    "heading_path",
+    "chunk_seq",
+    "query_types",
+    "vector_score",
+    "bm25_score",
+    "sparse_score",
+    "rrf_score",
+    "rerank_score",
+    "organization",
+    "year",
+    "version",
+    "document_type",
+    "departments",
+    "disease_tags",
+    "population",
+    "content_type",
+    "recommendation_level",
+    "evidence_level",
+    "authority_score",
+    "freshness_score",
+    "retrieved_via",
+}
+
 
 async def _incr_counter(key: str) -> None:
     """原子递增 Redis 计数器（best-effort，失败静默）"""
@@ -133,10 +169,20 @@ def _build_cache_key(queries_text: str, index_version: str) -> str:
 
 
 def compact_cached_bundle(bundle_dict: dict) -> dict:
-    """Remove document bodies while preserving IDs, scores, and metadata."""
-    compact = deepcopy(bundle_dict)
-    for candidate in compact.get("candidates") or []:
-        candidate.pop("text", None)
+    """Persist only an explicit bundle/candidate allowlist, never document bodies."""
+    compact = {
+        key: deepcopy(value)
+        for key, value in bundle_dict.items()
+        if key in _BUNDLE_CACHE_FIELDS
+    }
+    compact["candidates"] = [
+        {
+            key: deepcopy(value)
+            for key, value in candidate.items()
+            if key in _CANDIDATE_CACHE_FIELDS
+        }
+        for candidate in bundle_dict.get("candidates") or []
+    ]
     return compact
 
 

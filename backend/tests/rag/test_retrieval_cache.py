@@ -45,6 +45,7 @@ def test_cached_bundle_excludes_document_text():
                     "text": "large medical document body",
                     "source": "guide.pdf",
                     "rrf_score": 0.03,
+                    "private_debug_payload": {"prompt": "must not persist"},
                 }
             ],
         }
@@ -53,6 +54,13 @@ def test_cached_bundle_excludes_document_text():
     assert "text" not in compact["candidates"][0]
     assert compact["candidates"][0]["doc_id"] == "d1"
     assert compact["candidates"][0]["rrf_score"] == 0.03
+    assert "private_debug_payload" not in compact["candidates"][0]
+    assert set(compact["candidates"][0]) == {
+        "doc_id",
+        "generation",
+        "source",
+        "rrf_score",
+    }
 
 
 def test_cache_hydration_reads_text_from_requested_generation():

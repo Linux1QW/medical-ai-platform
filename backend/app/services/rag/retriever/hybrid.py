@@ -124,6 +124,7 @@ async def retrieve_with_mqe(
     for item in bundle.candidates[:top_k]:
         doc_dict = {
             "doc_id": item.doc_id,
+            "generation": item.generation,
             "text": item.text,
             "source": item.source,
             "page": item.page,

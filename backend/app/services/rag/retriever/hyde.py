@@ -2,7 +2,7 @@
 """HyDE（Hypothetical Document Embeddings）— 假设性文档增强检索"""
 
 import logging
-from typing import Any, Dict, List, cast
+from typing import Dict, List
 
 from app.services.qwen_client import call_qwen_chat
 from app.services.rag.embeddings import get_embedding
@@ -59,7 +59,12 @@ async def _generate_hypothetical_document(query: str) -> str:
         return query
 
 
-async def hyde_retrieve(query: str, top_k: int = 5) -> List[Dict]:
+async def hyde_retrieve(
+    query: str,
+    top_k: int = 5,
+    *,
+    generation: str | None = None,
+) -> List[Dict]:
     """HyDE 检索：生成假设性文档 → 用其 embedding 检索真实文档
 
     流程：
@@ -82,49 +87,22 @@ async def hyde_retrieve(query: str, top_k: int = 5) -> List[Dict]:
         hyde_embedding = await get_embedding(hyde_doc)
     except Exception as e:
         logger.warning(f"HyDE embedding 获取失败，降级为普通向量检索: {e}")
-        return await retrieve_medical_evidence(query, top_k=top_k)
+        return await retrieve_medical_evidence(
+            query,
+            top_k=top_k,
+            generation=generation,
+        )
 
     # Step 3: 用假设文档的 embedding 在 ChromaDB 中检索
     try:
         store = get_medical_store()
-        if store.collection is None or store.collection.count() == 0:
-            logger.debug("医学知识库为空，HyDE 检索无结果")
+        if not generation:
             return []
-
-        results = store.collection.query(
-            query_embeddings=cast(Any, [hyde_embedding]),
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
+        evidences = await store.search_by_embedding(
+            hyde_embedding,
+            top_k=top_k,
+            generation=generation,
         )
-
-        evidences = []
-        if results["ids"] and len(results["ids"]) > 0:
-            for i, doc_id in enumerate(results["ids"][0]):
-                doc_text = results["documents"][0][i] if results["documents"] else ""
-                metadata = results["metadatas"][0][i] if results["metadatas"] else {}
-                distance = results["distances"][0][i] if results["distances"] else 0.0
-                score = max(0.0, 1.0 - float(distance))
-
-                evidences.append({
-                    "doc_id": doc_id,
-                    "text": doc_text,
-                    "source": metadata.get("source", "未知"),
-                    "page": metadata.get("page", 0),
-                    "score": round(score, 4),
-                    "heading_path": metadata.get("heading_path", ""),
-                    "chunk_seq": metadata.get("chunk_seq", -1),
-                    "content_type": metadata.get("content_type", ""),
-                    "organization": metadata.get("organization"),
-                    "year": metadata.get("year"),
-                    "version": metadata.get("version"),
-                    "document_type": metadata.get("document_type"),
-                    "departments": metadata.get("departments"),
-                    "disease_tags": metadata.get("disease_tags"),
-                    "population": metadata.get("population"),
-                    "recommendation_level": metadata.get("recommendation_level"),
-                    "evidence_level": metadata.get("evidence_level"),
-                    "metadata_source": metadata.get("metadata_source"),
-                })
 
         logger.info(f"HyDE 检索完成：返回 {len(evidences)} 条结果")
         return evidences

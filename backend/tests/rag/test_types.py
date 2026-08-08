@@ -9,6 +9,7 @@ from app.services.rag.types import (
     EvidenceItem,
     RetrievalBundle,
     RetrievalQuery,
+    build_evidence_citation_id,
 )
 
 
@@ -91,3 +92,16 @@ class TestCitation:
             rerank_score=0.92,
         )
         assert c.citation_id == "rag-v2:test:p42:0"
+
+    def test_citation_id_uses_evidence_generation(self):
+        evidence = EvidenceItem(
+            doc_id="document-abcdef12",
+            generation="rag-20260808112233-01234567",
+            text="evidence",
+            source="guide.pdf",
+            page=7,
+        )
+
+        assert build_evidence_citation_id(evidence, 0) == (
+            "rag-20260808112233-01234567:guide.pdf:7:abcdef12"
+        )

@@ -253,6 +253,8 @@ def _load_generation_candidate(
             mmap=True,
         )
     except BM25ArtifactNotFound:
+        if not settings.RAG_LEGACY_COLLECTION_FALLBACK:
+            raise
         logger.warning(
             "BM25 artifact for generation %s is absent; using explicit legacy "
             "Chroma fallback",
@@ -283,7 +285,12 @@ def get_bm25_index(
     global _bm25_index, _bm25_index_generation
 
     selected_generation = generation or _active_generation()
-    cached = _cached_index(selected_generation)
+    explicit_generation = generation is not None
+    cached = (
+        _bm25_indexes.get(selected_generation)
+        if explicit_generation
+        else _cached_index(selected_generation)
+    )
     if cached is not None:
         if generation is None:
             with _registry_lock:
@@ -299,6 +306,8 @@ def get_bm25_index(
             "was not changed",
             selected_generation,
         )
+        if explicit_generation:
+            raise
         with _registry_lock:
             return _bm25_index if _bm25_index is not None else BM25Index()
 
@@ -308,6 +317,10 @@ def get_bm25_index(
             "not changed",
             selected_generation,
         )
+        if explicit_generation:
+            raise RuntimeError(
+                f"BM25 generation {selected_generation!r} is uninitialized"
+            )
         with _registry_lock:
             return _bm25_index if _bm25_index is not None else candidate
 

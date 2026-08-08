@@ -106,9 +106,25 @@ def validate_candidate_manifest(manifest: RAGIndexManifest) -> None:
 
     expected_bm25 = f"{generation}/bm25"
     normalized_bm25 = manifest.bm25_artifact.replace("\\", "/").strip("/")
-    if not normalized_bm25.endswith(expected_bm25):
+    if normalized_bm25 != expected_bm25:
         raise IndexGenerationMismatch(
             "bm25 artifact does not match candidate generation"
+        )
+
+    expected_sparse = f"{generation}/sparse"
+    normalized_sparse = (
+        manifest.sparse_artifact.replace("\\", "/").strip("/")
+        if manifest.sparse_artifact is not None
+        else None
+    )
+    if settings.BGE_M3_ENABLED:
+        if normalized_sparse != expected_sparse:
+            raise IndexGenerationMismatch(
+                "sparse artifact does not match candidate generation"
+            )
+    elif normalized_sparse is not None:
+        raise IndexGenerationMismatch(
+            "sparse artifact must be absent when learned sparse retrieval is disabled"
         )
 
     components = {
@@ -125,6 +141,10 @@ def validate_candidate_manifest(manifest: RAGIndexManifest) -> None:
     if manifest.sparse_artifact is None and manifest.sparse is not None:
         raise IndexGenerationMismatch(
             "sparse component identity exists without a sparse artifact"
+        )
+    if manifest.sparse_artifact is not None and manifest.sparse is None:
+        raise IndexGenerationMismatch(
+            "sparse artifact exists without a sparse component identity"
         )
 
 

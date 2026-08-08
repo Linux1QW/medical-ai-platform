@@ -12,6 +12,7 @@ import redis
 import redis.asyncio as aioredis
 
 from app.core.config import settings
+from app.services.rag import bm25_search, sparse_search
 from app.services.rag.bm25_search import install_bm25_index
 from app.services.rag.indexing.manifest import (
     IndexGenerationMismatch,
@@ -38,7 +39,7 @@ return 0
 """
 _generation_redis: Optional[aioredis.Redis] = None
 _generation_redis_loop: Optional[asyncio.AbstractEventLoop] = None
-_worker_reload_lock = threading.RLock()
+_worker_reload_lock = bm25_search._registry_lock
 _worker_listener_stop: Optional[threading.Event] = None
 _worker_listener_thread: Optional[threading.Thread] = None
 
@@ -114,15 +115,33 @@ def load_generation_for_worker(
         )
 
     with _worker_reload_lock:
-        install_bm25_index(generation, bm25_candidate)
-        if sparse_candidate is not None:
-            # The public loader is the supported installation point for the
-            # sparse registry; all expensive validation already happened above.
-            load_sparse_artifact(generation, artifact_root, install=True)
-        store.collection = collection
-        # Keep legacy no-argument callers aligned with the Redis-published
-        # generation. This is process-local runtime state, never .env storage.
-        settings.ACTIVE_INDEX_VERSION = generation
+        old_bm25_index = bm25_search._bm25_index
+        old_bm25_generation = bm25_search._bm25_index_generation
+        old_bm25_indexes = dict(bm25_search._bm25_indexes)
+        old_sparse = sparse_search._sparse_search
+        old_sparse_searches = dict(sparse_search._sparse_searches)
+        old_collection = store.collection
+        old_active_generation = settings.ACTIVE_INDEX_VERSION
+        try:
+            install_bm25_index(generation, bm25_candidate)
+            sparse_search._sparse_search = sparse_candidate
+            if sparse_candidate is not None:
+                sparse_search._sparse_searches[generation] = sparse_candidate
+            store.collection = collection
+            # Keep legacy no-argument callers aligned with the Redis-published
+            # generation. This is process-local runtime state, never .env storage.
+            settings.ACTIVE_INDEX_VERSION = generation
+        except Exception:
+            bm25_search._bm25_index = old_bm25_index
+            bm25_search._bm25_index_generation = old_bm25_generation
+            bm25_search._bm25_indexes.clear()
+            bm25_search._bm25_indexes.update(old_bm25_indexes)
+            sparse_search._sparse_search = old_sparse
+            sparse_search._sparse_searches.clear()
+            sparse_search._sparse_searches.update(old_sparse_searches)
+            store.collection = old_collection
+            settings.ACTIVE_INDEX_VERSION = old_active_generation
+            raise
     return generation
 
 
@@ -243,7 +262,7 @@ async def activate_candidate_generation(
         load_sparse_artifact(
             manifest.index_generation,
             artifact_root,
-            install=True,
+            install=False,
         )
     await compare_and_set_active_generation(
         expected_generation=expected_generation,

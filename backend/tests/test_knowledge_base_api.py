@@ -137,3 +137,17 @@ def test_rebuild_status_reads_celery_result_backend(client, admin_headers, monke
 def test_api_has_no_process_local_rebuild_state():
     assert not hasattr(knowledge_base, "_rebuild_lock")
     assert not hasattr(knowledge_base, "_rebuild_status")
+
+
+def test_worker_revalidates_pdf_path_against_pdf_dir(monkeypatch, tmp_path):
+    from app.services.rag.indexing import builder
+    from app.tasks import rag_index_task
+
+    pdf_root = tmp_path / "pdfs"
+    pdf_root.mkdir()
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(b"%PDF-1.7")
+    monkeypatch.setattr(builder, "PDF_DIR", pdf_root)
+
+    with pytest.raises(ValueError, match="PDF_DIR"):
+        rag_index_task._resolve_worker_pdf_path(str(outside), builder.PDF_DIR)

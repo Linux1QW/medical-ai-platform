@@ -71,6 +71,9 @@ class RedisIndexBuildLock:
             )
         )
 
+    def is_owned_by(self, task_id: str) -> bool:
+        return self.redis.get(RAG_INDEX_BUILD_LOCK) == task_id
+
     def release(self, task_id: str) -> bool:
         return bool(
             self.redis.eval(
@@ -80,6 +83,10 @@ class RedisIndexBuildLock:
                 task_id,
             )
         )
+
+
+class LostIndexBuildLock(RuntimeError):
+    """Raised when a task no longer owns the distributed build lock."""
 
 
 def _get_redis() -> Any:
@@ -95,11 +102,19 @@ def _heartbeat(
     lock: RedisIndexBuildLock,
     task_id: str,
     stop_event: threading.Event,
+    lost_lock_event: threading.Event,
 ) -> None:
     interval = max(1.0, lock.ttl / 3)
     while not stop_event.wait(interval):
-        if not lock.renew(task_id):
+        try:
+            renewed = lock.renew(task_id)
+        except Exception:
+            logger.exception("RAG index lock renewal failed: task_id=%s", task_id)
+            lost_lock_event.set()
+            return
+        if not renewed:
             logger.warning("RAG index lock renewal failed: task_id=%s", task_id)
+            lost_lock_event.set()
             return
 
 
@@ -123,6 +138,30 @@ def _server_source_id(pdf_path: Path, root: Path) -> str:
     return f"source-{hashlib.sha256(relative.encode('utf-8')).hexdigest()[:24]}"
 
 
+def _resolve_worker_pdf_path(pdf_path: str, pdf_dir: Path) -> Path:
+    root = pdf_dir.resolve()
+    resolved = Path(pdf_path).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError("RAG source file must remain inside PDF_DIR")
+    if not resolved.is_file():
+        raise FileNotFoundError(f"RAG source file does not exist: {resolved}")
+    return resolved
+
+
+def _raise_if_lock_lost(
+    lock: RedisIndexBuildLock,
+    task_id: str,
+    lost_lock_event: threading.Event,
+    *,
+    verify_owner: bool = False,
+) -> None:
+    if lost_lock_event.is_set() or (verify_owner and not lock.is_owned_by(task_id)):
+        lost_lock_event.set()
+        raise LostIndexBuildLock(
+            f"RAG index task {task_id!r} lost the distributed build lock"
+        )
+
+
 async def _build_candidate(
     task: Any,
     *,
@@ -131,6 +170,9 @@ async def _build_candidate(
     force_replace: bool = False,
     source_name: Optional[str] = None,
     redis_client: Any,
+    lock: RedisIndexBuildLock,
+    task_id: str,
+    lost_lock_event: threading.Event,
 ) -> dict[str, Any]:
     from app.services.rag.indexing import builder
     from app.services.rag.indexing.manifest import validate_candidate_manifest
@@ -142,18 +184,19 @@ async def _build_candidate(
     )
     from app.services.rag.medical_store import get_medical_store
 
+    resolved_path = (
+        _resolve_worker_pdf_path(pdf_path, builder.PDF_DIR) if pdf_path else None
+    )
     artifact_root = Path(settings.BM25_ARTIFACT_ROOT)
+    _raise_if_lock_lost(lock, task_id, lost_lock_event)
     _set_phase(task, "snapshot", operation=operation)
     generation_redis = await _get_generation_redis()
     active_generation = await get_active_index_generation(redis=generation_redis)
     if not active_generation:
         active_generation = str(getattr(settings, "ACTIVE_INDEX_VERSION", "rag-v1"))
 
-    resolved_path = Path(pdf_path).resolve() if pdf_path else None
-    if resolved_path is not None and not resolved_path.is_file():
-        raise FileNotFoundError(f"RAG source file does not exist: {resolved_path}")
-
-    for phase in INDEX_BUILD_PHASES[1:8]:
+    def report_phase(phase: str) -> None:
+        _raise_if_lock_lost(lock, task_id, lost_lock_event)
         _set_phase(task, phase, operation=operation)
 
     if operation == "rebuild":
@@ -169,6 +212,7 @@ async def _build_candidate(
                 path: _server_source_id(path, pdf_root) for path in document_paths
             },
             artifact_root=artifact_root,
+            phase_callback=report_phase,
         )
     elif operation in {"add", "replace"}:
         if resolved_path is None:
@@ -179,6 +223,7 @@ async def _build_candidate(
             force_replace=force_replace,
             source_name=source_name,
             artifact_root=artifact_root,
+            phase_callback=report_phase,
         )
     elif operation == "delete":
         if not source_name:
@@ -200,12 +245,20 @@ async def _build_candidate(
         manifest = builder._publish_candidate_generation(
             records,
             artifact_root=artifact_root,
+            phase_callback=report_phase,
         )
     else:
         raise ValueError(f"unsupported RAG index operation: {operation}")
 
-    _set_phase(task, "validate", generation=manifest.index_generation)
+    _raise_if_lock_lost(lock, task_id, lost_lock_event)
+    _set_phase(
+        task,
+        "validate",
+        operation=operation,
+        generation=manifest.index_generation,
+    )
     validate_candidate_manifest(manifest)
+    _raise_if_lock_lost(lock, task_id, lost_lock_event, verify_owner=True)
     _set_phase(task, "switch", generation=manifest.index_generation)
     switched = await activate_candidate_generation(
         manifest,
@@ -214,6 +267,7 @@ async def _build_candidate(
         artifact_root=artifact_root,
     )
     digest = _manifest_sha256(manifest, artifact_root)
+    _raise_if_lock_lost(lock, task_id, lost_lock_event, verify_owner=True)
     _set_phase(task, "publish", generation=manifest.index_generation)
     publish_index_switched(
         manifest.index_generation,
@@ -248,9 +302,10 @@ def _run_index_task(
     if not lock.acquire(task_id):
         raise RuntimeError("another RAG index build is already running")
     stop_event = threading.Event()
+    lost_lock_event = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat,
-        args=(lock, task_id, stop_event),
+        args=(lock, task_id, stop_event, lost_lock_event),
         name="rag-index-lock-heartbeat",
         daemon=True,
     )
@@ -264,6 +319,9 @@ def _run_index_task(
                 force_replace=force_replace,
                 source_name=source_name,
                 redis_client=redis_client,
+                lock=lock,
+                task_id=task_id,
+                lost_lock_event=lost_lock_event,
             )
         )
     except Exception as exc:

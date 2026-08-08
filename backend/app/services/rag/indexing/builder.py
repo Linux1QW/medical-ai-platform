@@ -6,7 +6,7 @@ import logging
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.core.config import settings
 from app.services.rag.embeddings import (
@@ -50,6 +50,12 @@ PDF_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent.parent / "
 
 PARSER_VERSION = "document-extractors-v1"
 CHUNKER_VERSION = "medical-chunker-v1"
+PhaseCallback = Optional[Callable[[str], None]]
+
+
+def _report_phase(callback: PhaseCallback, phase: str) -> None:
+    if callback is not None:
+        callback(phase)
 
 
 def _record_source(document: dict[str, Any]) -> str:
@@ -85,12 +91,19 @@ async def _extract_candidate_records(
     document_paths: List[Path],
     *,
     source_names: Optional[Dict[Path, str]] = None,
+    phase_callback: PhaseCallback = None,
 ) -> List[dict[str, Any]]:
     chunks: List[dict[str, Any]] = []
     source_seq_counter: Dict[str, int] = {}
+    parsed_documents = []
+    _report_phase(phase_callback, "parse")
     for document_path in document_paths:
         pages = extract_document(document_path)
         await apply_ocr_to_pages(pages)
+        parsed_documents.append((document_path, pages))
+
+    _report_phase(phase_callback, "chunk")
+    for document_path, pages in parsed_documents:
         for page_info in pages:
             for position, item in enumerate(_extract_chunks_from_page(page_info)):
                 text = item["text"]
@@ -156,6 +169,7 @@ async def _extract_candidate_records(
                 evidence_level=evidence_level,
             )
         )
+    _report_phase(phase_callback, "embed")
     embeddings = await get_embeddings(embedding_texts)
     if len(embeddings) != len(records):
         raise ValueError("embedding count does not match candidate chunk count")
@@ -209,18 +223,22 @@ def _publish_candidate_generation(
     *,
     artifact_root: Optional[Path] = None,
     created_at: Optional[datetime] = None,
+    phase_callback: PhaseCallback = None,
 ) -> RAGIndexManifest:
     bm25_documents = _bm25_documents(records)
     corpus_sha256 = compute_corpus_sha256(bm25_documents)
     timestamp = created_at or datetime.now(timezone.utc)
     generation = build_index_generation(corpus_sha256, timestamp)
 
+    _report_phase(phase_callback, "chroma")
+    collection_name = _publish_chroma_candidate(generation, records)
+    _report_phase(phase_callback, "bm25")
     build_bm25_artifact(generation, bm25_documents, artifact_root)
     sparse_artifact = None
+    _report_phase(phase_callback, "sparse")
     if settings.BGE_M3_ENABLED:
         build_sparse_artifact(generation, bm25_documents, artifact_root)
         sparse_artifact = f"{generation}/sparse"
-    collection_name = _publish_chroma_candidate(generation, records)
     manifest = RAGIndexManifest(
         index_generation=generation,
         corpus_sha256=corpus_sha256,
@@ -246,6 +264,7 @@ async def build_full_index_candidate(
     source_names: Optional[Dict[Path, str]] = None,
     artifact_root: Optional[Path] = None,
     created_at: Optional[datetime] = None,
+    phase_callback: PhaseCallback = None,
 ) -> RAGIndexManifest:
     """Build full dense and BM25 candidates without changing active state."""
     paths = document_paths
@@ -257,11 +276,16 @@ async def build_full_index_candidate(
         )
     if not paths:
         raise ValueError("no supported source documents found")
-    records = await _extract_candidate_records(paths, source_names=source_names)
+    records = await _extract_candidate_records(
+        paths,
+        source_names=source_names,
+        phase_callback=phase_callback,
+    )
     return _publish_candidate_generation(
         records,
         artifact_root=artifact_root,
         created_at=created_at,
+        phase_callback=phase_callback,
     )
 
 
@@ -273,6 +297,7 @@ async def build_incremental_index_candidate(
     source_name: Optional[str] = None,
     artifact_root: Optional[Path] = None,
     created_at: Optional[datetime] = None,
+    phase_callback: PhaseCallback = None,
 ) -> RAGIndexManifest:
     """Build a copy-on-write candidate snapshot for one source update."""
     if active_generation is None:
@@ -288,6 +313,7 @@ async def build_incremental_index_candidate(
     incoming = await _extract_candidate_records(
         [document_path],
         source_names={document_path: source_name} if source_name else None,
+        phase_callback=phase_callback,
     )
     snapshot = build_candidate_snapshot(
         active_documents,
@@ -299,6 +325,7 @@ async def build_incremental_index_candidate(
         snapshot,
         artifact_root=artifact_root,
         created_at=created_at,
+        phase_callback=phase_callback,
     )
 
 

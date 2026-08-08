@@ -1,5 +1,6 @@
 """Task 8 BM25 report and regression gate contracts."""
 
+import sys
 from pathlib import Path
 
 from scripts.eval import evaluate_bm25
@@ -90,3 +91,26 @@ def test_parser_accepts_compare_and_fail_on_regression():
 
     assert args.compare == Path("baseline.json")
     assert args.fail_on_regression is True
+
+
+def test_fail_on_regression_rejects_missing_active_generation(monkeypatch):
+    class MissingIndex:
+        initialized = False
+        doc_count = 0
+
+    monkeypatch.setattr(
+        "app.services.rag.bm25_search.get_bm25_index",
+        lambda: MissingIndex(),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate_bm25.py",
+            "--compare",
+            "missing-baseline.json",
+            "--fail-on-regression",
+        ],
+    )
+
+    assert evaluate_bm25.main() == 1

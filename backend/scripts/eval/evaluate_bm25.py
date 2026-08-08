@@ -307,7 +307,11 @@ def main() -> int:
 
     active_index = get_bm25_index()
     if not getattr(active_index, "initialized", False) or getattr(active_index, "doc_count", 0) == 0:
-        print("BM25 evaluation skipped: no initialized active generation (offline verification only).")
+        message = "BM25 evaluation unavailable: no initialized active generation."
+        if args.fail_on_regression:
+            print(message + " Regression gates cannot be skipped.", file=sys.stderr)
+            return 1
+        print(message + " Offline verification only; measured gates were not run.")
         return 0
 
     report = evaluate(golden_path, args.top_k, index=active_index)

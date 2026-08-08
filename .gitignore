@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 dist/
 .venv/
 venv/
@@ -42,6 +45,11 @@ backend/data/medical_kb/
 backend/backend/
 backend/evaluation/reports/*
 !backend/evaluation/reports/.gitkeep
+backend/evaluation_reports/
+
+# Agent 开发过程材料与内部实施计划
+.superpowers/
+docs/superpowers/plans/
 
 # OS
 .DS_Store

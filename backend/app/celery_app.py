@@ -60,7 +60,7 @@ except ModuleNotFoundError:  # pragma: no cover - only used by dependency-light 
         def AsyncResult(self, task_id):
             return AsyncResult(task_id, app=self)
 
-    class AsyncResult:  # type: ignore[no-redef]
+    class AsyncResult:
         def __init__(self, task_id, app=None):
             self.id = task_id
             self.state = "PENDING"

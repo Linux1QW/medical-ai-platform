@@ -213,7 +213,7 @@ async def _get_generation_redis() -> aioredis.Redis:
 
 async def get_active_index_generation(redis: Any = None) -> Optional[str]:
     """Read the cluster-wide active generation pointer."""
-    client = redis or await _get_generation_redis()
+    client: Any = redis if redis is not None else await _get_generation_redis()
     value = await client.get(ACTIVE_GENERATION_KEY)
     return str(value) if value is not None else None
 
@@ -225,7 +225,7 @@ async def compare_and_set_active_generation(
     redis: Any = None,
 ) -> bool:
     """Atomically activate a candidate only if the expected pointer still wins."""
-    client = redis or await _get_generation_redis()
+    client: Any = redis if redis is not None else await _get_generation_redis()
     switched = await client.eval(
         _CAS_ACTIVE_GENERATION,
         1,

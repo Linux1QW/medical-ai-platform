@@ -260,23 +260,20 @@ def _normalized_documents(
     generation: str,
     documents: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    normalized = []
+    normalized: list[dict[str, Any]] = []
     for document in documents:
         document_id = document.get("doc_id", document.get("id"))
         if document_id in (None, ""):
             continue
-        normalized.append(
-            {
-                "doc_id": str(document_id),
-                "text": str(document.get("text", "")),
-                **{
-                    key: document[key]
-                    for key in ("source", "page", "heading_path")
-                    if key in document
-                },
-                "generation": generation,
-            }
-        )
+        normalized_document: dict[str, Any] = {
+            "doc_id": str(document_id),
+            "text": str(document.get("text", "")),
+            "generation": generation,
+        }
+        for key in ("source", "page", "heading_path"):
+            if key in document:
+                normalized_document[key] = document[key]
+        normalized.append(normalized_document)
     return normalized
 
 
@@ -515,15 +512,18 @@ def rebuild_sparse_index(
                 include=["documents", "metadatas"],
             )
             if result["documents"]:
-                for document_id, text, metadata in zip(
-                    result["ids"],
-                    result["documents"],
-                    result.get("metadatas") or [None] * len(result["ids"]),
-                    strict=False,
+                metadata_items = result.get("metadatas") or []
+                for index, (document_id, text) in enumerate(
+                    zip(result["ids"], result["documents"], strict=False)
                 ):
+                    metadata = (
+                        metadata_items[index]
+                        if index < len(metadata_items)
+                        else {}
+                    )
                     all_documents.append(
                         {
-                            **(metadata or {}),
+                            **dict(metadata or {}),
                             "doc_id": str(document_id),
                             "text": text,
                             "generation": str(settings.ACTIVE_INDEX_VERSION),

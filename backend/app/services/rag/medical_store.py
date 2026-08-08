@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import chromadb
 from chromadb.api import ClientAPI
@@ -398,7 +398,7 @@ class MedicalKnowledgeStore:
 
     def _format_results(
         self,
-        results: Dict,
+        results: Mapping[str, Any],
         *,
         generation: Optional[str] = None,
     ) -> List[Dict]:

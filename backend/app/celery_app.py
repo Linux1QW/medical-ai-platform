@@ -107,6 +107,10 @@ celery_app.conf.beat_schedule = {
         "task": "cleanup_expired_records",
         "schedule": 86400.0,  # 每天执行一次
     },
+    "evaluation-reconciliation": {
+        "task": "evaluation_reconciliation",
+        "schedule": 60.0,  # 每 60 秒执行一次
+    },
 }
 
 # 自动发现 tasks 模块
@@ -116,6 +120,7 @@ celery_app.autodiscover_tasks(["app"])
 celery_app.conf.include = [
     "app.tasks.data_cleanup",
     "app.tasks.evaluation_task",
+    "app.tasks.evaluation_reconciliation",
     "app.tasks.rag_index_task",
 ]
 

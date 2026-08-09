@@ -1,33 +1,47 @@
 import asyncio
 import json
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import require_consultation_access, require_evaluation_run_access
 from app.core.audit import record_audit_log
 from app.core.authentication import AuthenticationError, authenticate_access_token
-from app.core.config import settings
 from app.core.deps import get_current_user
-from app.core.limiter import limiter
 from app.core.permissions import require_permission
 from app.core.websocket import get_manager
 from app.db.session import AsyncSessionLocal, get_db
+from app.models.evaluation import Evaluation
+from app.models.evaluation_lock import EvaluationLock
+from app.models.evaluation_run import EvaluationRun
 from app.models.user import User
-from app.schemas.evaluation import EvaluationOut, EvaluationRequest
-from app.services.evaluation_cancel import (
-    clear_cancel_flag,
-    get_task_id,
-    request_cancel,
-    store_task_id,
+from app.schemas.evaluation import (
+    EvaluationCancelOut,
+    EvaluationOut,
+    EvaluationRequest,
+    EvaluationRunStatusOut,
+    EvaluationSubmitOut,
 )
+from app.services.evaluation_cancel import publish_cancel_nudge
+from app.services.evaluation_dispatch_service import cancel_dispatch, enqueue_dispatch
 from app.services.evaluation_lock_service import (
     get_lock_status,
-    try_acquire_lock,
     update_lock_status,
 )
-from app.services.evaluation_service import get_evaluation_by_consultation, run_evaluation
-from app.services.user_service import get_user_by_id
+from app.services.evaluation_run_service import (
+    CancelDisposition,
+    create_queued_run,
+    get_run,
+    request_run_cancel,
+)
+from app.services.evaluation_service import get_evaluation_by_consultation
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,12 +50,15 @@ router = APIRouter()
 WS_AUTH_TIMEOUT = 5
 
 
+# ── WebSocket (deprecated consultation-scoped + run-scoped) ──────────────────
+
+
 @router.websocket("/ws/{consultation_id}")
 async def evaluation_progress_ws(
     websocket: WebSocket,
     consultation_id: int,
 ):
-    """评估进度推送 WebSocket（需 JWT 鉴权）— 已废弃，请使用 /ws/runs/{run_id}"""
+    """评估进度推 WebSocket（需 JWT 鉴权）— 已废弃，请使用 /ws/runs/{run_id}"""
     await websocket.close(code=1008, reason="请使用 /evaluations/ws/runs/{run_id}")
 
 
@@ -102,162 +119,350 @@ async def evaluation_run_progress_ws(
         mgr.disconnect(websocket, run_id)
 
 
-@router.post("/", response_model=EvaluationOut)
-@limiter.limit("5/hour")
+# ── Submission Transaction ────────────────────────────────────────────────────
+
+
+async def _submit_evaluation_transaction(
+    db: AsyncSession,
+    *,
+    consultation_id: int,
+    current_user: User,
+    request: Request,
+) -> EvaluationRun:
+    """在同一事务内创建 run、lock、audit、outbox，然后 commit
+
+    全部成功或全部 rollback。
+    """
+    # 1. 校验已有评估报告
+    existing = await get_evaluation_by_consultation(db, consultation_id)
+    if existing and existing.evaluation_status in ("completed", "needs_review", "reviewed"):
+        raise HTTPException(status_code=409, detail={"error_code": "EVALUATION_EXISTS", "message": "该问诊已有评估记录"})
+
+    # 2. 检查是否有活跃的 run（queued/running/retrying）
+    active_run_stmt = (
+        select(EvaluationRun)
+        .where(
+            EvaluationRun.consultation_id == consultation_id,
+            EvaluationRun.status.in_(["queued", "running", "retrying"]),
+        )
+        .limit(1)
+    )
+    active_result = await db.execute(active_run_stmt)
+    active_run = active_result.scalar_one_or_none()
+    if active_run:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "EVALUATION_IN_PROGRESS",
+                "message": "评估正在进行中，请勿重复提交",
+                "run_id": active_run.id,
+                "status": active_run.status,
+            },
+        )
+
+    # 3. 生成 run UUID
+    run_id = str(uuid.uuid4())
+
+    # 4. 创建 EvaluationRun(status="queued")
+    run = await create_queued_run(db, run_id=run_id, consultation_id=consultation_id)
+
+    # 5. 创建/更新 EvaluationLock
+    lock_stmt = (
+        select(EvaluationLock)
+        .where(EvaluationLock.consultation_id == consultation_id)
+        .with_for_update()
+    )
+    lock_result = await db.execute(lock_stmt)
+    existing_lock = lock_result.scalar_one_or_none()
+
+    now = datetime.utcnow()
+    if existing_lock:
+        existing_lock.status = "pending"
+        existing_lock.run_id = run_id
+        existing_lock.locked_at = now
+        existing_lock.heartbeat_at = now
+        existing_lock.expires_at = now + timedelta(seconds=300)
+        existing_lock.error_message = None
+    else:
+        lock = EvaluationLock(
+            consultation_id=consultation_id,
+            status="pending",
+            run_id=run_id,
+            locked_at=now,
+            heartbeat_at=now,
+            expires_at=now + timedelta(seconds=300),
+        )
+        db.add(lock)
+
+    # 6. 写审计记录（strict=True）
+    await record_audit_log(
+        db,
+        user_id=current_user.id,
+        action="trigger_evaluation",
+        request=request,
+        resource_id=run_id,
+        detail=f"consultation_id={consultation_id}, status=queued",
+        strict=True,
+    )
+
+    # 7. 创建 TraceContext + enqueue_dispatch（只 flush，不 commit）
+    trace_context = {
+        "trace_id": str(uuid.uuid4()),
+        "run_id": run_id,
+        "consultation_id": consultation_id,
+    }
+    await enqueue_dispatch(
+        db,
+        run_id=run_id,
+        consultation_id=consultation_id,
+        trace_context=trace_context,
+    )
+
+    # 8. 一次 commit — run/lock/audit/outbox 全部成功或全部 rollback
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"评估提交事务失败: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error_code": "SUBMISSION_FAILED", "message": "评估提交失败，请重试"},
+        ) from e
+
+    return run
+
+
+# ── Cancel Transaction ────────────────────────────────────────────────────────
+
+
+async def _cancel_evaluation_transaction(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    current_user: User,
+    request: Request,
+) -> tuple[str, EvaluationRun]:
+    """在一个事务内调用 request_run_cancel、cancel_dispatch、同步 EvaluationLock
+
+    返回 (disposition_str, run)。
+    """
+    # 1. SELECT FOR UPDATE 获取 run
+    run = await get_run(db, run_id, for_update=True)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "NOT_FOUND", "message": "评估运行记录不存在"},
+        )
+
+    # 2. 调用 request_run_cancel
+    disposition, run = await request_run_cancel(
+        db,
+        run_id=run_id,
+        requested_by=current_user.id,
+        now=datetime.utcnow(),
+    )
+
+    # 3. 取消 outbox
+    await cancel_dispatch(db, run_id=run_id)
+
+    # 4. 同步 EvaluationLock
+    if disposition in (CancelDisposition.CANCELLED_BEFORE_START, CancelDisposition.ALREADY_TERMINAL):
+        await update_lock_status(db, run.consultation_id, "cancelled")
+    elif disposition == CancelDisposition.REQUESTED_RUNNING:
+        # running 状态不抢先写 cancelled，只记录取消意图
+        pass
+
+    # 5. 写审计记录（strict=True）
+    await record_audit_log(
+        db,
+        user_id=current_user.id,
+        action="trigger_evaluation",
+        request=request,
+        resource_id=run_id,
+        detail=f"event=cancel_requested, disposition={disposition.value}",
+        strict=True,
+    )
+
+    # 6. commit
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"评估取消事务失败: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error_code": "CANCEL_FAILED", "message": "取消操作失败，请重试"},
+        ) from e
+
+    return disposition.value, run
+
+
+# ── Best-effort cancel nudge (post-commit) ────────────────────────────────────
+
+
+async def _best_effort_cancel_nudge(run_id: str, execution_task_id: str | None = None) -> None:
+    """commit 后 best-effort publish cancel nudge + revoke(terminate=False)"""
+    # 1. Redis nudge
+    try:
+        await publish_cancel_nudge(run_id)
+    except Exception as e:
+        logger.warning(f"cancel nudge 失败 (non-fatal): {e}")
+
+    # 2. Celery revoke
+    if execution_task_id:
+        try:
+            from app.celery_app import celery_app
+            celery_app.control.revoke(execution_task_id, terminate=False)
+        except Exception as e:
+            logger.warning(f"Celery revoke 失败 (non-fatal): {e}")
+
+
+# ── Progress helper ───────────────────────────────────────────────────────────
+
+
+async def _get_progress_latest(run_id: str) -> dict | None:
+    """从 ProgressBus 获取最新进度（best-effort）"""
+    try:
+        mgr = get_manager()
+        if mgr and mgr._bus:
+            event = await mgr._bus.get_latest(run_id)
+            if event:
+                return {"progress": event.progress, "message": event.message}
+    except Exception as e:
+        logger.debug(f"获取进度失败 (non-fatal): {e}")
+    return None
+
+
+# ── API Routes ────────────────────────────────────────────────────────────────
+
+
+@router.post("/", response_model=EvaluationSubmitOut, status_code=202)
 async def create_evaluation(
     request: Request,
     data: EvaluationRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = require_permission("evaluation:create"),
 ):
+    """提交评估 — 统一 202 异步契约
+
+    在同一事务内创建 run、lock、audit、outbox，然后返回 202。
+    API 不导入或调用 run_evaluation_task.apply_async()。
+    """
     await require_consultation_access(db, data.consultation_id, current_user)
 
-    # 1. 快速检查已有评估
-    existing = await get_evaluation_by_consultation(db, data.consultation_id)
-    if existing and existing.evaluation_status in ("completed", "needs_review", "reviewed"):
-        raise HTTPException(status_code=400, detail="该问诊已有评估记录")
+    run = await _submit_evaluation_transaction(
+        db,
+        consultation_id=data.consultation_id,
+        current_user=current_user,
+        request=request,
+    )
 
-    # 2. 获取评估锁（防并发竞态）
-    acquired, lock = await try_acquire_lock(db, data.consultation_id)
-    if not acquired:
-        if lock and lock.status in ("pending", "running"):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error_code": "EVALUATION_IN_PROGRESS",
-                    "message": "评估正在进行中，请勿重复提交",
-                    "status": lock.status,
-                    "locked_at": lock.locked_at.isoformat() if lock.locked_at else None,
-                },
-            )
-
-    # 3. 执行评估（根据配置选择同步或 Celery 异步）
-    try:
-        # 清除残留取消标志，避免上一轮取消误杀本次评估
-        await clear_cancel_flag(data.consultation_id)
-        await update_lock_status(db, data.consultation_id, "running")
-        await db.commit()
-
-        if settings.TESTING:
-            # 测试模式：同步执行，不经过 Celery
-            result = await run_evaluation(db, data.consultation_id)
-
-            final_status = result.evaluation_status
-            if final_status == "needs_review":
-                await update_lock_status(db, data.consultation_id, "needs_review")
-            else:
-                await update_lock_status(db, data.consultation_id, "completed")
-            await db.commit()
-
-            await record_audit_log(
-                db, user_id=current_user.id, action="trigger_evaluation",
-                request=request, resource_id=str(data.consultation_id),
-                detail=f"触发评估: consultation_id={data.consultation_id}",
-            )
-            await db.commit()
-            return result
-        else:
-            # 生产模式：通过 Celery 异步提交
-            from app.tasks.evaluation_task import run_evaluation_task
-
-            assert lock is not None
-            task = run_evaluation_task.delay(
-                consultation_id=data.consultation_id,
-                run_id=lock.run_id,
-            )
-            # 记录 task_id 映射，供取消时 revoke 排队中的任务
-            await store_task_id(data.consultation_id, task.id)
-
-            await record_audit_log(
-                db, user_id=current_user.id, action="trigger_evaluation",
-                request=request, resource_id=str(data.consultation_id),
-                detail=f"异步提交评估任务: task_id={task.id}",
-            )
-            await db.commit()
-
-            return {"task_id": task.id, "status": "submitted"}
-
-    except Exception as e:
-        try:
-            await update_lock_status(
-                db, data.consultation_id, "failed",
-                error_message=str(e)[:500],
-            )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-        raise
+    return EvaluationSubmitOut(
+        run_id=run.id,
+        consultation_id=data.consultation_id,
+        status="queued",
+        status_url=f"/api/v1/evaluations/runs/{run.id}/status",
+        websocket_url=f"/api/v1/evaluations/ws/runs/{run.id}",
+    )
 
 
-@router.post("/{consultation_id}/cancel")
+@router.get("/runs/{run_id}/status", response_model=EvaluationRunStatusOut)
+async def get_run_status(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询评估 run 状态
+
+    status/evaluation_id/cancel_requested 来自 DB，progress 只补充。
+    Redis 不可用时仍返回 200 且 progress=None。
+    """
+    run = await require_evaluation_run_access(db, run_id, current_user)
+
+    # 获取 progress（best-effort）
+    progress_data = await _get_progress_latest(run_id)
+
+    # DB 终态优先 — progress 不能把终态改回 running
+    db_status = run.status
+    progress = None
+    message = None
+    if progress_data and db_status not in ("completed", "needs_review", "reviewed", "failed", "cancelled"):
+        progress = progress_data.get("progress")
+        message = progress_data.get("message")
+
+    return EvaluationRunStatusOut(
+        run_id=run.id,
+        consultation_id=run.consultation_id,
+        status=db_status,
+        progress=progress,
+        message=message,
+        evaluation_id=run.evaluation_id,
+        error_code=run.error_type,
+        attempt=run.attempt,
+        cancel_requested=run.cancel_requested_at is not None,
+        cancel_requested_at=run.cancel_requested_at,
+        submitted_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=EvaluationCancelOut)
 async def cancel_evaluation(
-    consultation_id: int,
+    run_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = require_permission("evaluation:create"),
 ):
-    """取消进行中的评估任务（协作式双通道）
+    """取消评估 run
 
-    - 排队未执行：Celery revoke，任务不再启动，pending 锁直接翻 failed
-    - 执行中：置 Redis 取消标志，由评估侧取消看守感知并中断图执行，
-      走既有失败路径落库 error_type="cancelled"（不重试，可断点续跑）
+    - queued/retrying → 200 cancelled
+    - running → 202 cancel_requested=true
+    - 终态 → 200 幂等
+    - needs_review → 409
     """
-    await require_consultation_access(db, consultation_id, current_user)
+    run = await require_evaluation_run_access(db, run_id, current_user)
 
-    lock_status = await get_lock_status(db, consultation_id)
-    if not lock_status or not lock_status.get("is_active"):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error_code": "NO_ACTIVE_EVALUATION",
-                "message": "当前没有进行中的评估任务",
-            },
-        )
-
-    # 1. 置取消标志（写路径：Redis 不可用时明确报错，不假装取消成功）
-    try:
-        await request_cancel(consultation_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error_code": "CANCEL_UNAVAILABLE",
-                "message": "取消服务暂不可用，请稍后重试",
-            },
-        ) from e
-
-    # 2. revoke 排队中的 Celery 任务（best-effort；已在执行的由看守中断）
-    task_id = await get_task_id(consultation_id)
-    if task_id:
-        try:
-            from app.celery_app import celery_app
-
-            celery_app.control.revoke(task_id, terminate=False)
-        except Exception as e:
-            import logging
-
-            logging.warning(f"Celery revoke 失败（不影响取消标志通道）: {e}")
-
-    # 3. pending 锁（任务尚未开始执行）直接翻 failed；
-    #    running 锁由评估侧失败路径落库后翻 failed
-    if lock_status.get("status") == "pending":
-        await update_lock_status(
-            db, consultation_id, "failed", error_message="评估被用户取消"
-        )
-        await db.commit()
-
-    await record_audit_log(
-        db, user_id=current_user.id, action="cancel_evaluation",
-        request=request, resource_id=str(consultation_id),
-        detail=f"请求取消评估: consultation_id={consultation_id}, 锁状态={lock_status.get('status')}",
+    disposition_str, run = await _cancel_evaluation_transaction(
+        db,
+        run_id=run_id,
+        current_user=current_user,
+        request=request,
     )
-    await db.commit()
 
-    return {
-        "consultation_id": consultation_id,
-        "status": "cancel_requested",
-        "previous_lock_status": lock_status.get("status"),
-    }
+    # commit 后 best-effort nudge + revoke
+    if disposition_str == "requested_running":
+        await _best_effort_cancel_nudge(run_id, run.execution_task_id)
+        return JSONResponse(
+            status_code=202,
+            content=EvaluationCancelOut(
+                run_id=run.id,
+                status="running",
+                cancel_requested=True,
+                requested_at=run.cancel_requested_at,
+            ).model_dump(mode="json"),
+        )
+
+    if disposition_str == "not_cancellable":
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": "NOT_CANCELLABLE", "message": "该评估状态不可取消"},
+        )
+
+    if disposition_str == "already_terminal":
+        return EvaluationCancelOut(
+            run_id=run.id,
+            status=run.status,
+            cancel_requested=False,
+        )
+
+    # cancelled_before_start
+    return EvaluationCancelOut(
+        run_id=run.id,
+        status="cancelled",
+        cancel_requested=True,
+        requested_at=run.cancel_requested_at,
+    )
 
 
 @router.get("/{consultation_id}/lock-status")
@@ -266,11 +471,14 @@ async def get_evaluation_lock_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """查询评估任务状态（前端轮询用）"""
+    """查询评估任务状态（前端轮询用）— 兼容映射 pending→queued"""
     await require_consultation_access(db, consultation_id, current_user)
     status = await get_lock_status(db, consultation_id)
     if not status:
         return {"is_active": False, "status": None}
+    # 对外映射 pending → queued
+    if status.get("status") == "pending":
+        status["status"] = "queued"
     return status
 
 
@@ -285,25 +493,3 @@ async def get_evaluation(
     if not evaluation:
         raise HTTPException(status_code=404, detail="评估记录不存在")
     return evaluation
-
-
-@router.get("/task/{task_id}/status")
-async def get_task_status(
-    task_id: str,
-    current_user: User = Depends(get_current_user),
-):
-    """查询 Celery 异步评估任务状态"""
-    from celery.result import AsyncResult
-
-    from app.celery_app import celery_app
-
-    result = AsyncResult(task_id, app=celery_app)
-    response = {
-        "task_id": task_id,
-        "status": result.status,
-    }
-    if result.status == "SUCCESS":
-        response["result"] = result.result
-    elif result.status == "FAILURE":
-        response["error"] = str(result.result)
-    return response

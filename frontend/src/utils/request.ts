@@ -1,24 +1,17 @@
 import axios from 'axios';
 import { message } from 'antd';
+import { API_BASE_URL } from './apiUrl';
 
 const request = axios.create({
-  baseURL: '/api/v1',
-  timeout: 300000,
+  baseURL: API_BASE_URL,
+  timeout: 60000,
 });
-
-// 评估类接口路径前缀或关键字
-const EVALUATION_API_KEYWORDS = ['/evaluation', '/evaluate', '/reports'];
 
 request.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-
-  // 分级超时策略：评估类接口300000ms，普通查询类接口60000ms
-  const isEvaluationApi = EVALUATION_API_KEYWORDS.some(keyword => config.url?.includes(keyword));
-  config.timeout = isEvaluationApi ? 300000 : 60000;
-
   return config;
 });
 
@@ -31,8 +24,12 @@ request.interceptors.response.use(
       message.warning('后端仍在处理，请勿刷新，请耐心等待');
     } else {
       const data = error.response?.data;
-      const msg = data?.message || data?.detail || '请求失败';
-      message.error(msg);
+      // 带 error_code 的错误由调用方（hook/组件）自行处理，全局拦截器不重复弹
+      const hasErrorCode = !!data?.error_code;
+      if (!hasErrorCode) {
+        const msg = data?.message || data?.detail || '请求失败';
+        message.error(msg);
+      }
     }
 
     const isLoginRequest = error.config?.url?.includes('/auth/login');

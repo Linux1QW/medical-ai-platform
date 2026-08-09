@@ -126,6 +126,64 @@ export interface StatsSummary {
   user_stats?: UserStatItem[];
 }
 
+// ── Task 9: 异步评估任务状态机 ─────────────────────────────────────
+
+/** 评估任务运行状态 */
+export type EvaluationJobStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'reviewed'
+  | 'needs_review'
+  | 'failed'
+  | 'cancelled';
+
+/** POST 创建评估后的响应（仅排队，不等待完成） */
+export interface EvaluationSubmit {
+  run_id: string;
+  websocket_url: string;
+  status: EvaluationJobStatus;
+  consultation_id: number;
+}
+
+/** 评估 run 轮询状态 */
+export interface EvaluationRunStatus {
+  run_id: string;
+  status: EvaluationJobStatus;
+  progress: number;
+  message: string;
+  cancel_requested?: boolean;
+  error_code?: string | null;
+}
+
+/** 评估锁状态 */
+export interface EvaluationLockStatus {
+  consultation_id: number;
+  status: string | null;
+  run_id: string | null;
+  is_active: boolean;
+  locked_at: string | null;
+  expires_at: string | null;
+}
+
+/** 评估取消响应 */
+export interface EvaluationCancelResponse {
+  consultation_id: number;
+  status: string;
+  cancel_requested?: boolean;
+  previous_lock_status: string | null;
+}
+
+/** WS 进度事件 */
+export interface EvaluationProgressEvent {
+  type: 'auth_ok' | 'progress' | 'latest' | 'error' | 'done';
+  run_id?: string;
+  sequence?: number;
+  progress: number;
+  message: string;
+  error_code?: string;
+}
+
 // ── Task 12: 评估报告前端升级 ─ 新增类型 ──────────────────────────────────
 
 /** Rubric 判定结果 */

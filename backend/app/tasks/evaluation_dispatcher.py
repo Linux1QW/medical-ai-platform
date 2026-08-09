@@ -11,9 +11,15 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
+
+from app.services.observability.metrics import (
+    EVALUATION_DISPATCH_BREAKER_OPEN,
+    EVALUATION_DISPATCH_DURATION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +153,17 @@ class DispatcherLoop:
     async def tick(self) -> None:
         """执行一次 claim → publish → acknowledge 循环"""
         now = datetime.utcnow()
+        t0 = time.monotonic()
 
         # Breaker open 时跳过 claim
         if self._breaker.is_open(now):
+            EVALUATION_DISPATCH_BREAKER_OPEN.set(1)
+            EVALUATION_DISPATCH_DURATION.labels(result="breaker_open").observe(
+                time.monotonic() - t0
+            )
             logger.debug("Circuit breaker open, skipping claim")
             return
+        EVALUATION_DISPATCH_BREAKER_OPEN.set(0)
 
         leases = await self._claim_fn()
 
@@ -172,6 +184,9 @@ class DispatcherLoop:
                         published_at=datetime.utcnow(),
                     )
                     self._breaker.record_success(datetime.utcnow())
+                    EVALUATION_DISPATCH_DURATION.labels(result="success").observe(
+                        time.monotonic() - t0
+                    )
                     logger.info(
                         f"Dispatched event={lease.event_id} "
                         f"run={lease.run_id} {sanitize_for_log(lease.payload)}"
@@ -186,6 +201,9 @@ class DispatcherLoop:
                             now=datetime.utcnow(),
                         )
                     self._breaker.record_failure(datetime.utcnow())
+                    EVALUATION_DISPATCH_DURATION.labels(result="publish_failed").observe(
+                        time.monotonic() - t0
+                    )
             except Exception as e:
                 logger.warning(
                     f"Dispatch tick error for event={lease.event_id}: "

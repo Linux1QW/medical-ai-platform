@@ -18,6 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evaluation_run import EvaluationRun
+from app.services.observability.metrics import (
+    EVALUATION_ACTIVE_RUNS,
+    EVALUATION_CANCELLATIONS_TOTAL,
+    EVALUATION_RETRIES_TOTAL,
+    EVALUATION_RUN_DURATION,
+    EVALUATION_RUNS_TOTAL,
+)
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -251,6 +258,12 @@ async def mark_run_retrying(
     # retrying 不写 finished_at
     await db.flush()
 
+    # ── metrics ──
+    error_code = type(error).__name__
+    EVALUATION_RETRIES_TOTAL.labels(error_code=error_code).inc()
+    EVALUATION_ACTIVE_RUNS.labels(status="running").dec()
+    EVALUATION_ACTIVE_RUNS.labels(status="retrying").inc()
+
 
 async def mark_run_terminal(
     db: AsyncSession,
@@ -291,6 +304,14 @@ async def mark_run_terminal(
     )
     await db.flush()
 
+    # ── metrics ──
+    _ec = error_code or ""
+    EVALUATION_RUNS_TOTAL.labels(status=status, error_code=_ec).inc()
+    EVALUATION_ACTIVE_RUNS.labels(status="running").dec()
+    if run.started_at is not None:
+        dur = ((now or datetime.utcnow()) - run.started_at).total_seconds()
+        EVALUATION_RUN_DURATION.labels(status=status).observe(max(dur, 0))
+
 
 async def mark_unowned_run_terminal(
     db: AsyncSession,
@@ -322,6 +343,11 @@ async def mark_unowned_run_terminal(
     if error_code:
         run.error_type = error_code
     await db.flush()
+
+    # ── metrics ──
+    _ec = error_code or ""
+    EVALUATION_RUNS_TOTAL.labels(status=status, error_code=_ec).inc()
+    EVALUATION_ACTIVE_RUNS.labels(status=expected_status).dec()
     return True
 
 
@@ -353,11 +379,15 @@ async def request_run_cancel(
 
     # queued/retrying → 直接 cancelled
     if run.status in _CLAIMABLE_STATUSES:
+        old_status = run.status
         run.status = "cancelled"
         run.cancel_requested_at = now
         run.cancel_requested_by = requested_by
         run.finished_at = now
         await db.flush()
+        EVALUATION_CANCELLATIONS_TOTAL.labels(phase=old_status).inc()
+        EVALUATION_RUNS_TOTAL.labels(status="cancelled", error_code="").inc()
+        EVALUATION_ACTIVE_RUNS.labels(status=old_status).dec()
         return CancelDisposition.CANCELLED_BEFORE_START, run
 
     # running → 只设置取消标志
@@ -365,6 +395,7 @@ async def request_run_cancel(
         run.cancel_requested_at = now
         run.cancel_requested_by = requested_by
         await db.flush()
+        EVALUATION_CANCELLATIONS_TOTAL.labels(phase="running").inc()
         return CancelDisposition.REQUESTED_RUNNING, run
 
     raise InvalidRunTransition(

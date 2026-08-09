@@ -5,6 +5,9 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - "alert_rules.yml"
+
 scrape_configs:
   # 后端 FastAPI /metrics（prometheus_client 导出）
   - job_name: backend

@@ -291,6 +291,114 @@ Re-run `rclone config` as `medical-backup` user and update remote credentials.
 | Off-host storage | Daily | Unreachable |
 | age recipient in `.env` | Every deploy | Missing/invalid |
 
+### 9.1 V1.1 Prometheus Metrics
+
+所有指标通过后端 `/metrics` 端点暴露，低基数标签（不含 run_id / consultation_id / user_id）。
+
+| 指标 | 类型 | 标签 | 说明 |
+|---|---|---|---|
+| `evaluation_runs_total` | Counter | status, error_code | Run 终态计数 |
+| `evaluation_run_duration_seconds` | Histogram | status | Run 执行时长 |
+| `evaluation_queue_wait_seconds` | Histogram | — | Run 排队等待时长 |
+| `evaluation_active_runs` | Gauge | status | 当前活跃 run 数 |
+| `evaluation_retries_total` | Counter | error_code | 重试计数 |
+| `evaluation_cancellations_total` | Counter | phase | 取消计数（按阶段） |
+| `evaluation_progress_publish_total` | Counter | result | 进度投递计数 (success/failed) |
+| `evaluation_progress_delivery_seconds` | Histogram | — | 进度投递延迟 |
+| `evaluation_stale_runs_total` | Counter | reason | Stale run 检测计数 |
+| `evaluation_run_lease_lost_total` | Counter | phase | Lease lost 事件计数 |
+| `evaluation_outbox_events_total` | Counter | result | Outbox 事件处理计数 |
+| `evaluation_outbox_pending` | Gauge | — | 当前 pending outbox 数 |
+| `evaluation_outbox_oldest_seconds` | Gauge | — | 最老 pending 事件年龄 |
+| `evaluation_dispatch_duration_seconds` | Histogram | result | Dispatch tick 时长 |
+| `evaluation_dispatch_dead_letter_total` | Counter | reason | Dead letter 计数 |
+| `evaluation_dispatch_breaker_open` | Gauge | — | Circuit breaker 状态 (0/1) |
+| `redis_dependency_status` | Gauge | role | Redis 健康状态 (1=ok, 0=degraded) |
+| `backup_last_success_timestamp_seconds` | Gauge | — | 上次成功备份时间戳 |
+| `review_queue_depth` | Gauge | — | 人工复核队列深度 |
+| `review_completion_seconds` | Histogram | — | 复核完成时长 |
+
+### 9.2 V1.1 Alert Response Procedures
+
+#### EvaluationOutboxBacklog (warning)
+
+**症状:** pending outbox > 10 持续 5 分钟
+
+**响应步骤:**
+1. 检查 dispatcher 进程是否存活: `docker compose ps dispatcher`
+2. 检查 broker 连接: 查看 dispatcher 日志 `docker compose logs dispatcher --tail 50`
+3. 若 dispatcher 崩溃，重启: `docker compose restart dispatcher`
+4. 若 broker 不可达，检查 RabbitMQ/Redis: `docker compose ps`
+
+#### EvaluationDeadLetter (critical)
+
+**症状:** dispatch 进入 dead letter
+
+**响应步骤:**
+1. 查询 dead letter 行: `SELECT * FROM evaluation_dispatch_outbox WHERE status='dead_letter'`
+2. 检查 `last_error_code` 确定失败原因
+3. 若 run 仍需要执行，手动重新 enqueue
+4. 检查 broker 配额和连接限制
+
+#### EvaluationDispatchBreakerOpen (critical)
+
+**症状:** circuit breaker 持续 open 超过 2 分钟
+
+**响应步骤:**
+1. 确认 broker 可达
+2. 检查 dispatcher 日志中的连续失败
+3. breaker 会在冷却期后自动 half-open，无需手动干预
+4. 若持续 open，重启 dispatcher: `docker compose restart dispatcher`
+
+#### EvaluationStaleRun / EvaluationLeaseLost (warning)
+
+**症状:** worker 心跳停滞或 lease lost
+
+**响应步骤:**
+1. 检查 worker 进程: `docker compose ps worker`
+2. 查看 worker 日志中是否有 OOM 或异常
+3. 系统会自动通过 outbox rescue 恢复，等待 5 分钟
+4. 若 5 分钟内未恢复，手动检查 run 状态并重新派发
+
+#### EvaluationProgressPublishFailures (warning)
+
+**症状:** 进度投递失败率 > 5%
+
+**响应步骤:**
+1. 检查 redis-state 连接: `docker compose ps redis-state`
+2. 查看 progress_bus 日志中的错误
+3. Redis 重启后自动恢复，进度事件会重新投递
+
+#### RedisStateDegraded (critical)
+
+**症状:** redis-state 不可达
+
+**响应步骤:**
+1. 检查 Redis 进程: `docker compose ps redis-state`
+2. 检查 Redis 内存使用: `docker compose exec redis-state redis-cli INFO memory`
+3. 若 OOM，检查 `maxmemory-policy` 是否为 `noeviction`
+4. 重启: `docker compose restart redis-state`
+5. 重启后 outbox/WS/Worker 自动继续
+
+#### BackupStale (critical)
+
+**症状:** 备份超过 15 小时未成功
+
+**响应步骤:**
+1. 检查 timer: `systemctl status medical-ai-backup.timer`
+2. 手动触发: `sudo systemctl start medical-ai-backup.service`
+3. 检查日志: `sudo journalctl -u medical-ai-backup.service --since today`
+4. 检查 rclone 配置和 age recipient 是否有效
+
+#### ReviewQueueBacklog (warning)
+
+**症状:** 人工复核队列积压 > 20
+
+**响应步骤:**
+1. 通知管理员登录复核面板
+2. 检查是否有批量评估导致队列激增
+3. 考虑临时增加复核人员
+
 ---
 
 ## 10. Troubleshooting

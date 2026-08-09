@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
 from uuid import UUID, uuid4
@@ -16,6 +17,10 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from app.schemas.evaluation import EvaluationJobStatus
+from app.services.observability.metrics import (
+    EVALUATION_PROGRESS_DELIVERY,
+    EVALUATION_PROGRESS_PUBLISH_TOTAL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +145,7 @@ class RedisProgressBus:
                 sha, 2, seq_key, latest_key,
                 self._ttl, event_json, _CHANNEL,
             )
+            EVALUATION_PROGRESS_PUBLISH_TOTAL.labels(result="success").inc()
         except Exception:
             # Script cache miss → reload and retry once
             try:
@@ -148,8 +154,10 @@ class RedisProgressBus:
                     self._script_sha, 2, seq_key, latest_key,
                     self._ttl, event_json, _CHANNEL,
                 )
+                EVALUATION_PROGRESS_PUBLISH_TOTAL.labels(result="success").inc()
             except Exception as e:
                 logger.error(f"ProgressBus publish failed: {e}")
+                EVALUATION_PROGRESS_PUBLISH_TOTAL.labels(result="failed").inc()
                 # 返回一个本地构造的事件，不让评估失败
                 seq = 1
 

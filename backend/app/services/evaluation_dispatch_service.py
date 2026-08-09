@@ -20,6 +20,11 @@ from app.models.evaluation_dispatch_outbox import (
     validate_payload,
 )
 from app.models.evaluation_run import EvaluationRun
+from app.services.observability.metrics import (
+    EVALUATION_DISPATCH_DEAD_LETTER_TOTAL,
+    EVALUATION_OUTBOX_EVENTS_TOTAL,
+    EVALUATION_OUTBOX_PENDING,
+)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
@@ -108,6 +113,7 @@ async def enqueue_dispatch(
     )
     db.add(outbox)
     await db.flush()
+    EVALUATION_OUTBOX_PENDING.inc()
     return outbox
 
 
@@ -172,6 +178,7 @@ async def claim_dispatch_batch(
 
     if leases:
         await db.flush()
+        EVALUATION_OUTBOX_PENDING.dec(len(leases))
 
     return leases
 
@@ -212,6 +219,7 @@ async def acknowledge_dispatch(
             f"Dispatch {event_id}: lease lost (owner={lease_owner}, status != leased)"
         )
     await db.flush()
+    EVALUATION_OUTBOX_EVENTS_TOTAL.labels(result="published").inc()
 
 
 async def reject_dispatch(
@@ -258,12 +266,16 @@ async def reject_dispatch(
 
     if exhausted:
         row.status = "dead_letter"
+        EVALUATION_DISPATCH_DEAD_LETTER_TOTAL.labels(reason=error_code).inc()
+        EVALUATION_OUTBOX_EVENTS_TOTAL.labels(result="dead_letter").inc()
         # 若 run 仍 queued/retrying，标记为 failed
         await _maybe_fail_run(db, run_id=row.run_id, now=now)
     else:
         row.status = "pending"
         backoff = compute_backoff(row.attempt)
         row.next_attempt_at = now + timedelta(seconds=backoff)
+        EVALUATION_OUTBOX_PENDING.inc()
+        EVALUATION_OUTBOX_EVENTS_TOTAL.labels(result="rejected").inc()
 
     await db.flush()
     return row.status
@@ -296,6 +308,9 @@ async def cancel_dispatch(
     )
     result = await db.execute(stmt)
     await db.flush()
+    if result.rowcount > 0:
+        EVALUATION_OUTBOX_EVENTS_TOTAL.labels(result="cancelled").inc()
+        EVALUATION_OUTBOX_PENDING.dec(result.rowcount)
     return result.rowcount > 0
 
 
@@ -349,6 +364,9 @@ async def requeue_stale_dispatch(
     )
     result = await db.execute(stmt)
     await db.flush()
+    if result.rowcount > 0:
+        EVALUATION_OUTBOX_EVENTS_TOTAL.labels(result="requeued").inc()
+        EVALUATION_OUTBOX_PENDING.inc(result.rowcount)
     return result.rowcount > 0
 
 

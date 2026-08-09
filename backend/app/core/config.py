@@ -4,6 +4,7 @@ import os
 import warnings
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,7 +16,7 @@ _DEFAULT_SECRET_KEY = "change-this-to-a-secure-random-string"
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "医学问诊评估平台"
-    VERSION: str = "1.0.0"
+    VERSION: str = "1.1.0"
     API_V1_PREFIX: str = "/api/v1"
     ENVIRONMENT: str = "development"  # development | test | staging | production
 
@@ -50,16 +51,18 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
+        """Async DATABASE_URL — 使用 quote_plus 保证密码特殊字符被正确 percent-encode"""
         return (
-            f"mysql+aiomysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
+            f"mysql+aiomysql://{quote_plus(self.MYSQL_USER)}:{quote_plus(self.MYSQL_PASSWORD)}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{quote_plus(self.MYSQL_DATABASE)}"
         )
 
     @property
     def DATABASE_URL_SYNC(self) -> str:
+        """Sync DATABASE_URL — 使用 quote_plus 保证密码特殊字符被正确 percent-encode"""
         return (
-            f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
+            f"mysql+pymysql://{quote_plus(self.MYSQL_USER)}:{quote_plus(self.MYSQL_PASSWORD)}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{quote_plus(self.MYSQL_DATABASE)}"
         )
 
     # 阿里云百炼平台 Qwen API — 优先从系统环境变量 DASHSCOPE_API_KEY 读取
@@ -345,9 +348,9 @@ class Settings(BaseSettings):
         if self.TESTING:
             return
         if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
-            if self.ENVIRONMENT == "production":
+            if self.ENVIRONMENT in ("production", "staging"):
                 raise RuntimeError(
-                    "SECRET_KEY 未设置！生产环境必须通过环境变量 SECRET_KEY 配置安全密钥。"
+                    f"SECRET_KEY 未设置！{self.ENVIRONMENT} 环境必须通过环境变量 SECRET_KEY 配置安全密钥。"
                 )
             logger.warning(
                 "SECURITY WARNING: SECRET_KEY 仍为默认值！"

@@ -34,7 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app/backend
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # 仅安装运行时依赖（不含 build-essential）
 RUN apt-get update && \
@@ -47,22 +47,23 @@ COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # 复制应用代码
-COPY backend/ ./backend/
-COPY database/ ./database/
+COPY backend/ ./
+COPY database/ /app/database/
 
-# 创建非 root 用户
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
-    chown -R appuser:appuser /app
+# 创建数据目录和非 root 用户
+RUN mkdir -p /app/backend/data && \
+    groupadd -r appuser && useradd -r -g appuser -d /app/backend -s /sbin/nologin appuser && \
+    chown -R appuser:appuser /app/backend
 
 # ── Stage 3: Development ──
 FROM base AS development
 RUN pip install --no-cache-dir pytest pytest-asyncio
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # ── Stage 4: Production ──
 FROM base AS production
 USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    CMD curl -f http://localhost:8000/health/ready || exit 1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

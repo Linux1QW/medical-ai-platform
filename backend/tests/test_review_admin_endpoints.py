@@ -5,7 +5,7 @@ Task 8: 更新为适配新的原子复核 API（evaluation_id 为 int，新 sche
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -243,14 +243,7 @@ def _health_patches(engine, redis_client):
     return (
         patch("app.main.engine", engine),
         patch("app.main._get_cache_redis", new=AsyncMock(return_value=redis_client)),
-        patch(
-            "app.main.LLMResponseCache.get_stats",
-            new=AsyncMock(return_value={"hit_rate": 0}),
-        ),
-        patch(
-            "app.main.get_retrieval_cache_stats",
-            new=AsyncMock(return_value={"hit_rate": 0}),
-        ),
+        patch("app.main.get_checkpointer", new=MagicMock(return_value=None)),
     )
 
 
@@ -258,8 +251,8 @@ class TestHealthCheck:
     def test_health_ok_when_dependencies_up(self, client):
         redis_client = AsyncMock()
         redis_client.ping = AsyncMock(return_value=True)
-        p1, p2, p3, p4 = _health_patches(_FakeEngineOK(), redis_client)
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _health_patches(_FakeEngineOK(), redis_client)
+        with p1, p2, p3:
             resp = client.get("/health")
         assert resp.status_code == 200
         body = resp.json()
@@ -269,8 +262,8 @@ class TestHealthCheck:
     def test_health_degraded_when_mysql_down(self, client):
         redis_client = AsyncMock()
         redis_client.ping = AsyncMock(return_value=True)
-        p1, p2, p3, p4 = _health_patches(_FakeEngineDown(), redis_client)
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _health_patches(_FakeEngineDown(), redis_client)
+        with p1, p2, p3:
             resp = client.get("/health")
         assert resp.status_code == 503
         body = resp.json()
@@ -278,8 +271,8 @@ class TestHealthCheck:
         assert body["checks"]["mysql"] == "unavailable"
 
     def test_health_degraded_when_redis_down(self, client):
-        p1, p2, p3, p4 = _health_patches(_FakeEngineOK(), None)
-        with p1, p2, p3, p4:
+        p1, p2, p3 = _health_patches(_FakeEngineOK(), None)
+        with p1, p2, p3:
             resp = client.get("/health")
         assert resp.status_code == 503
         assert resp.json()["checks"]["redis"] == "unavailable"

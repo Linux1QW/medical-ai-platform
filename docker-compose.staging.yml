@@ -4,11 +4,20 @@
 # 使用方式: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
 # ============================================
 
+x-backend-image: &backend-image
+  image: ghcr.io/${REPO}/backend:${IMAGE_TAG:-latest}
+
 services:
   backend:
-    image: ghcr.io/${REPO}/backend:latest
+    <<: *backend-image
     build: !reset null
-    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      ENVIRONMENT: staging
+      LOG_LEVEL: INFO
+      WEB_CONCURRENCY: 2
+    volumes:
+      - ./.deploy/backup-status:/var/run/medical-ai-backup:ro
     deploy:
       resources:
         limits:
@@ -19,10 +28,40 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    environment:
-      - ENVIRONMENT=staging
-      - LOG_LEVEL=INFO
+
+  evaluation-dispatcher:
+    <<: *backend-image
+    build: !reset null
+
+  celery-worker:
+    <<: *backend-image
+    build: !reset null
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  celery-beat:
+    <<: *backend-image
+    build: !reset null
+
+  migrate:
+    <<: *backend-image
+    build: !reset null
+
+  redis-state:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis-cache:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   frontend:
-    image: ghcr.io/${REPO}/frontend:latest
+    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG:-latest}
     build: !reset null

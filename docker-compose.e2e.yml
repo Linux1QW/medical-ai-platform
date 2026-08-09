@@ -1,0 +1,156 @@
+# ============================================
+# Docker Compose E2E Override - V1.1 Production Closure
+# ============================================
+# 使用方式:
+#   docker compose -p medical-ai-v11-e2e -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+#
+# 清理:
+#   docker compose -p medical-ai-v11-e2e -f docker-compose.yml -f docker-compose.e2e.yml down -v
+# ============================================
+
+name: medical-ai-v11-e2e
+
+# ──────────────────────────────────────────
+# E2E 环境覆盖
+# ──────────────────────────────────────────
+x-e2e-backend-environment: &e2e-backend-environment
+  ENVIRONMENT: test
+  # 独立数据库名
+  MYSQL_DATABASE: medical_ai_e2e
+  # JWT
+  SECRET_KEY: e2e-test-secret-key-not-for-production
+  ACCESS_TOKEN_EXPIRE_MINUTES: 60
+  JWT_TOKEN_BLACKLIST_ENABLED: "true"
+  JWT_BLACKLIST_FAIL_CLOSED: "true"
+  # Tool Use 关闭（E2E 使用确定性路径）
+  ENABLE_TOOL_USE: "false"
+  ENABLE_REACT_KNOWLEDGE: "false"
+  ENABLE_REACT_REFLECTION: "false"
+  ENABLE_LLM_SUGGESTION: "false"
+  # LangGraph 保留
+  LANGGRAPH_ENABLED: "true"
+  # Mock LLM endpoint
+  QWEN_API_BASE_URL: http://mock-openai:8080/v1
+  DASHSCOPE_API_KEY: e2e-mock-key
+  QWEN_API_KEY: e2e-mock-key
+  QWEN_MODEL: mock-chat
+  RERANK_MODEL: mock-rerank
+  # RAG 索引版本
+  ACTIVE_INDEX_VERSION: e2e-low-evidence-v1
+  # E2E 测试凭据
+  E2E_ADMIN_USER: admin_v11
+  E2E_DOCTOR_USER: doctor_v11
+  E2E_PASSWORD: e2e_test_password_2026
+  # CORS 允许 Playwright 访问
+  CORS_ORIGINS: '["http://localhost:${E2E_FRONTEND_PORT:-8080}"]'
+  LOG_LEVEL: DEBUG
+  LOG_FORMAT: text
+
+services:
+
+  # ── Mock OpenAI Server ──────────────────────
+  mock-openai:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    command: python -m tests.fixtures.mock_openai_server
+    ports:
+      - "${E2E_MOCK_OPENAI_PORT:-8080}:8080"
+    environment:
+      ENVIRONMENT: test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend-net
+
+  # ── MySQL（E2E 独立实例）────────────────────
+  mysql:
+    environment:
+      MYSQL_DATABASE: medical_ai_e2e
+    volumes:
+      - e2e_mysql_data:/var/lib/mysql
+
+  # ── Redis State（E2E 独立实例）──────────────
+  redis-state:
+    volumes:
+      - e2e_redis_state_data:/data
+
+  # ── Redis Cache（E2E 独立实例）──────────────
+  redis-cache:
+    volumes:
+      - e2e_redis_cache_data:/data
+
+  # ── Alembic 迁移 ────────────────────────────
+  migrate:
+    environment:
+      MYSQL_DATABASE: medical_ai_e2e
+
+  # ── Backend（FastAPI API）────────────────────
+  backend:
+    environment:
+      <<: *e2e-backend-environment
+    ports:
+      - "${E2E_BACKEND_PORT:-8000}:8000"
+    depends_on:
+      mock-openai:
+        condition: service_healthy
+
+  # ── Evaluation Dispatcher ────────────────────
+  evaluation-dispatcher:
+    environment:
+      <<: *e2e-backend-environment
+    depends_on:
+      mock-openai:
+        condition: service_healthy
+
+  # ── Celery Worker ────────────────────────────
+  celery-worker:
+    environment:
+      <<: *e2e-backend-environment
+    depends_on:
+      mock-openai:
+        condition: service_healthy
+
+  # ── Celery Beat ──────────────────────────────
+  celery-beat:
+    environment:
+      <<: *e2e-backend-environment
+
+  # ── Frontend（Nginx）─────────────────────────
+  frontend:
+    ports:
+      - "${E2E_FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Seed（一次性，创建测试数据）──────────────
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    command: python -m tests.fixtures.seed_production_smoke
+    environment:
+      <<: *e2e-backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend-net
+
+# ──────────────────────────────────────────
+# E2E 独立卷
+# ──────────────────────────────────────────
+volumes:
+  e2e_mysql_data:
+  e2e_redis_state_data:
+  e2e_redis_cache_data:
+  e2e_chroma_data:

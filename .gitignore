@@ -76,6 +76,14 @@ backend/_*.py
 # E2E 测试截图（临时产物）
 e2e_*.png
 
+# Playwright 测试产物
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
+# E2E docker compose 临时文件
+.e2e/
+
 # git 历史重写备份（含旧历史，确认无误后应删除）
 *.bundle
 

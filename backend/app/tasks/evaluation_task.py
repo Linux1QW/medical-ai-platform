@@ -5,6 +5,7 @@ import logging
 from contextlib import suppress
 
 from app.celery_app import celery_app
+from app.tasks.async_runtime import run_worker_coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
     """异步评估任务
 
     在 Celery worker 进程中执行完整评估流程。
-    使用 asyncio.run() 桥接同步 Celery worker 与异步评估逻辑。
+    使用 WorkerAsyncRuntime 桥接同步 Celery worker 与异步评估逻辑。
 
     Args:
         consultation_id: 问诊记录 ID
@@ -44,7 +45,7 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
     try:
         # 重试执行时尝试从上次失败 run 的 LangGraph checkpoint 断点续跑
         resume = self.request.retries > 0
-        result = asyncio.run(_execute_evaluation(consultation_id, run_id, resume=resume))
+        result = run_worker_coroutine(_execute_evaluation(consultation_id, run_id, resume=resume))
         logger.info(
             f"[Celery] 评估完成: consultation_id={consultation_id}, "
             f"status={result.get('status')}"
@@ -57,7 +58,7 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
         )
         # 更新锁状态为 failed（running → failed 合法转移）
         try:
-            asyncio.run(_mark_lock_failed(consultation_id, str(exc)))
+            run_worker_coroutine(_mark_lock_failed(consultation_id, str(exc)))
         except Exception:
             logger.exception("更新锁失败状态时出错")
 
@@ -68,7 +69,7 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
         )
         if will_retry:
             try:
-                asyncio.run(_mark_lock_pending_for_retry(consultation_id))
+                run_worker_coroutine(_mark_lock_pending_for_retry(consultation_id))
             except Exception:
                 logger.exception("重试前重置锁状态时出错")
             countdown = RETRY_BACKOFF_BASE * (2 ** self.request.retries)
@@ -80,30 +81,6 @@ def run_evaluation_task(self, consultation_id: int, run_id: str) -> dict:
         raise
 
 
-async def _ensure_worker_checkpointer() -> None:
-    """Celery worker 侧按任务重建 LangGraph Checkpointer
-
-    checkpointer 原本只在 FastAPI lifespan 中初始化，worker 进程内为 None，
-    图会以“无 checkpointer”方式编译，断点续跑无从谈起。
-    又因 asyncio.run 每个任务新建事件循环，异步 Redis 连接跨循环不可复用，
-    故每次任务先关旧建新并重置图编译缓存（索引创建幂等，开销相对评估时长可忽略）。
-    """
-    from app.core.config import settings
-
-    if not settings.LANGGRAPH_ENABLED:
-        return
-
-    from app.orchestration.checkpointer import close_checkpointer, init_checkpointer
-    from app.orchestration.graph import close_graph
-
-    await close_checkpointer()
-    await close_graph()
-    await init_checkpointer(
-        redis_url=settings.REDIS_CHECKPOINT_URL,
-        ttl=settings.REDIS_CHECKPOINT_TTL,
-    )
-
-
 async def _execute_evaluation(
     consultation_id: int, run_id: str, resume: bool = False
 ) -> dict:
@@ -111,8 +88,6 @@ async def _execute_evaluation(
     from app.db.session import AsyncSessionLocal
     from app.services.evaluation_lock_service import update_lock_status
     from app.services.evaluation_service import run_evaluation
-
-    await _ensure_worker_checkpointer()
 
     async with AsyncSessionLocal() as db:
         heartbeat_task: asyncio.Task | None = None

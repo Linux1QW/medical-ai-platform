@@ -93,15 +93,8 @@ async def _get_redis() -> Optional[aioredis.Redis]:
         return _redis_client
 
     try:
-        # 复用 REDIS_CHECKPOINT_URL 的 Redis 实例，使用 db=3 隔离
-        redis_url = settings.REDIS_CHECKPOINT_URL
-        # 替换 db 编号为 3（保留 db=1 给 checkpointer，db=2 给 LLM 缓存）
-        if "/1" in redis_url:
-            redis_url = redis_url.replace("/1", "/3")
-        elif "/2" in redis_url:
-            redis_url = redis_url.replace("/2", "/3")
-        elif redis_url.endswith("redis://localhost:6379"):
-            redis_url = redis_url + "/3"
+        # 使用独立的 RETRIEVAL_CACHE_REDIS_URL（默认 redis://localhost:6380/1）
+        redis_url = settings.RETRIEVAL_CACHE_REDIS_URL
 
         _redis_client = aioredis.from_url(
             redis_url,

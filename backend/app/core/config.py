@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     REDIS_CHECKPOINT_URL: str = "redis://localhost:6379/1"  # 使用 db=1 避免与应用缓存冲突
     REDIS_CHECKPOINT_TTL: int = 86400  # 24小时过期（秒）
 
+    # LLM Cache Redis（独立实例，6380 对应 redis-cache）
+    LLM_CACHE_REDIS_URL: str = "redis://localhost:6380/0"
+    # Retrieval Cache Redis（独立实例，6380 对应 redis-cache）
+    RETRIEVAL_CACHE_REDIS_URL: str = "redis://localhost:6380/1"
+
     # Evaluation Control Redis（取消标志和 task_id 映射）
     EVALUATION_CONTROL_REDIS_URL: str = "redis://localhost:6379/8"
 

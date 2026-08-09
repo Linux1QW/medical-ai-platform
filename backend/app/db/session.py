@@ -23,3 +23,16 @@ async def get_db():
             yield session
         finally:
             await session.close()
+
+
+async def dispose_engine() -> None:
+    """Idempotently dispose the SQLAlchemy async engine.
+
+    Called during worker shutdown to cleanly close the connection pool.
+    Safe to call even if the engine was never created.
+    """
+    global engine
+    try:
+        await engine.dispose()
+    except Exception:
+        pass

@@ -89,6 +89,16 @@ celery_app.conf.update(
     task_time_limit=600,        # 10 分钟硬超时
     task_soft_time_limit=300,   # 5 分钟软超时
     worker_prefetch_multiplier=1,  # 每个 worker 预取 1 个任务
+    # Late ack：任务完成后才确认，worker 崩溃时任务可重投
+    task_acks_late=True,
+    # worker 崩溃时拒绝任务，让 broker 重新分配
+    task_reject_on_worker_lost=True,
+    # Broker visibility timeout（秒）：worker 崩溃后多久重新分发
+    broker_transport_options={"visibility_timeout": 900},
+    # 结果过期时间（秒）：24小时
+    result_expires=86400,
+    # 固定使用 prefork pool
+    worker_pool="prefork",
 )
 
 # Beat 定时任务调度
@@ -111,15 +121,123 @@ celery_app.conf.include = [
 
 
 @worker_process_init.connect
-def _start_rag_generation_listener(**_: object) -> None:
-    """Subscribe each forked Worker process to generation switch events."""
-    from app.services.rag.indexing.versioning import start_index_switch_listener
+def _init_worker_runtime(**_: object) -> None:
+    """Initialize the per-prefork-child async runtime and shared resources.
 
+    Each forked Celery worker process gets its own event loop owned by the
+    main thread. Process-level async resources (checkpointer, graph, HTTP
+    clients, Redis clients, DB engine) are cleared from parent-inherited
+    references and will be lazily re-initialized inside the child runtime.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 1. Clear parent-inherited singleton references (stale across fork)
+    _clear_parent_inherited_singletons()
+
+    # 2. Start the async runtime for this child process
+    from app.tasks.async_runtime import get_worker_runtime
+    rt = get_worker_runtime()
+    rt.start()
+
+    # 3. Initialize checkpointer + graph in the child runtime's loop
+    from app.core.config import settings
+    if settings.LANGGRAPH_ENABLED:
+        from app.orchestration.checkpointer import init_checkpointer
+        from app.orchestration.graph import get_graph
+
+        async def _init_graph_resources():
+            await init_checkpointer(
+                redis_url=settings.REDIS_CHECKPOINT_URL,
+                ttl=settings.REDIS_CHECKPOINT_TTL,
+            )
+            await get_graph()
+
+        rt.run(_init_graph_resources())
+
+    # 4. Start the RAG generation switch listener
+    from app.services.rag.indexing.versioning import start_index_switch_listener
     start_index_switch_listener()
+
+    logger.info("Worker process initialized: async runtime started")
 
 
 @worker_process_shutdown.connect
-def _stop_rag_generation_listener(**_: object) -> None:
-    from app.services.rag.indexing.versioning import stop_index_switch_listener
+def _shutdown_worker_runtime(**_: object) -> None:
+    """Shut down the per-prefork-child async runtime and close all resources."""
+    import logging
+    logger = logging.getLogger(__name__)
 
+    # 1. Stop the RAG generation switch listener
+    from app.services.rag.indexing.versioning import stop_index_switch_listener
     stop_index_switch_listener()
+
+    # 2. Stop the runtime and close all resources
+    from app.tasks.async_runtime import get_worker_runtime
+    from app.tasks.worker_resources import close_worker_resources
+
+    rt = get_worker_runtime()
+    rt.stop(close_resources=close_worker_resources)
+
+    logger.info("Worker process shut down: async runtime stopped")
+
+
+def _clear_parent_inherited_singletons() -> None:
+    """Clear parent-process singleton references that are stale after fork.
+
+    After os.fork(), the child inherits module-level singletons (async clients,
+    DB engines, etc.) that are bound to the parent's event loop. These must be
+    cleared so the child can lazily re-initialize them in its own loop.
+    """
+    # Clear checkpointer / graph
+    try:
+        from app.orchestration import checkpointer as cp_mod
+        cp_mod._checkpointer = None
+        cp_mod._exit_stack = None
+    except Exception:
+        pass
+
+    try:
+        from app.orchestration import graph as graph_mod
+        graph_mod._compiled_graph = None
+    except Exception:
+        pass
+
+    # Clear LLM cache Redis
+    try:
+        from app.services import llm_cache as lc_mod
+        lc_mod._redis_client = None
+    except Exception:
+        pass
+
+    # Clear retrieval cache Redis
+    try:
+        from app.services.rag import retrieval_cache as rc_mod
+        rc_mod._redis_client = None
+    except Exception:
+        pass
+
+    # Clear evaluation control Redis
+    try:
+        from app.services import evaluation_cancel as ec_mod
+        ec_mod._control_redis = None
+    except Exception:
+        pass
+
+    # Clear Qwen client
+    try:
+        from app.services import qwen_client as qc_mod
+        qc_mod.client = None
+        qc_mod._active_adapter = None
+        qc_mod._active_model = None
+        qc_mod._semaphore = None
+    except Exception:
+        pass
+
+    # Clear DB engine
+    try:
+        from app.db import session as sess_mod
+        if hasattr(sess_mod, '_engine'):
+            sess_mod._engine = None
+    except Exception:
+        pass

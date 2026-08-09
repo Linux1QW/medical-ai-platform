@@ -5,12 +5,12 @@
 - Audit: 仅在 auto_delete=true 且 policy_id 非空时清理
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 
 from app.celery_app import celery_app
 from app.core.config import settings
+from app.tasks.async_runtime import run_worker_coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def cleanup_expired_records() -> dict:
     """
     logger.info("[Cleanup] 开始清理过期数据")
     try:
-        result = asyncio.run(_do_cleanup())
+        result = run_worker_coroutine(_do_cleanup())
         logger.info(f"[Cleanup] 清理完成: {result}")
         return result
     except Exception as exc:

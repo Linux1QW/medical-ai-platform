@@ -5,7 +5,7 @@
 # ============================================
 
 x-backend-image: &backend-image
-  image: ghcr.io/${REPO}/backend:${IMAGE_TAG:-latest}
+  image: ghcr.io/${REPO}/backend:${IMAGE_TAG}
 
 services:
   # ── MySQL（生产仅绑定 127.0.0.1 供受控备份）──
@@ -104,7 +104,7 @@ services:
 
   # ── Frontend ─────────────────────────────────
   frontend:
-    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG}
     build: !reset null
     ports:
       - "${FRONTEND_PORT:-80}:80"

@@ -5,7 +5,7 @@
 # ============================================
 
 x-backend-image: &backend-image
-  image: ghcr.io/${REPO}/backend:${IMAGE_TAG:-latest}
+  image: ghcr.io/${REPO}/backend:${IMAGE_TAG}
 
 services:
   backend:
@@ -63,5 +63,5 @@ services:
           memory: 256M
 
   frontend:
-    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG}
     build: !reset null

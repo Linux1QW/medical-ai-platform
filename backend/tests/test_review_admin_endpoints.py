@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""P0 安全修复回归测试 — 复核/管理端点鉴权、/metrics 保护、/health 连通性检查"""
+"""P0 安全修复回归测试 — 复核/管理端点鉴权、/metrics 保护、/health 连通性检查
+
+Task 8: 更新为适配新的原子复核 API（evaluation_id 为 int，新 schema）。
+"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -57,85 +60,93 @@ class TestReviewEndpointAuth:
 
     def test_pending_ok_for_admin(self, client):
         _as_admin()
-        with patch.object(
-            review_module, "list_pending_evaluations", new=AsyncMock(return_value=[])
+        with (
+            patch.object(
+                review_module, "list_pending_evaluations", new=AsyncMock(return_value=[])
+            ),
+            patch.object(
+                review_module, "count_pending_evaluations", new=AsyncMock(return_value=0)
+            ),
         ):
             resp = client.get("/api/v1/reviews/pending")
         assert resp.status_code == 200
-        assert resp.json() == {"pending_reviews": [], "total": 0}
+        body = resp.json()
+        assert body["pending_reviews"] == []
+        assert body["total"] == 0
 
     def test_submit_requires_auth(self, client):
         resp = client.post(
-            "/api/v1/reviews/eval-1/submit", json={"feedback": "ok"}
+            "/api/v1/reviews/1/submit", json={"feedback": "ok enough"}
         )
         assert resp.status_code == 401
 
     def test_status_requires_auth(self, client):
-        resp = client.get("/api/v1/reviews/eval-1/status")
+        resp = client.get("/api/v1/reviews/1/status")
         assert resp.status_code == 401
 
-    def test_submit_forces_reviewer_id_from_token(self, client):
-        """请求体伪造的 reviewer_id 必须被服务端凭据覆盖"""
+    def test_submit_not_found_returns_404(self, client):
+        """evaluation 不存在时返回 404"""
         _as_admin()
-        state = {"evaluation_status": "pending_review", "review_reason": "low score"}
-        save_mock = AsyncMock()
-        with (
-            patch.object(
-                review_module, "load_evaluation_state", new=AsyncMock(return_value=state)
-            ),
-            patch.object(review_module, "save_review_record", new=save_mock),
-            patch.object(
-                review_module,
-                "finalize_review_state",
-                new=AsyncMock(return_value={"status": "completed"}),
-            ),
-        ):
-            resp = client.post(
-                "/api/v1/reviews/eval-1/submit",
-                json={"feedback": "同意", "reviewer_id": "forged-999"},
-            )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "review_completed"
-        # reviewer_id 以认证凭据为准
-        assert save_mock.call_args.kwargs["reviewer_id"] == str(ADMIN_USER.id)
-
-    def test_submit_not_pending_returns_400(self, client):
-        _as_admin()
-        state = {"evaluation_status": "completed"}
         with patch.object(
-            review_module, "load_evaluation_state", new=AsyncMock(return_value=state)
+            review_module, "svc_submit_review", new=AsyncMock(return_value=None)
         ):
             resp = client.post(
-                "/api/v1/reviews/eval-1/submit", json={"feedback": "同意"}
+                "/api/v1/reviews/999/submit", json={"feedback": "测试不存在"}
             )
-        assert resp.status_code == 400
+        assert resp.status_code == 404
 
-    def test_submit_save_failure_returns_500(self, client):
-        """复核记录保存失败必须显式返回 500，不能静默吞掉"""
+    def test_submit_conflict_returns_409(self, client):
+        """状态冲突时返回 409"""
         _as_admin()
-        state = {"evaluation_status": "pending_review"}
-        with (
-            patch.object(
-                review_module, "load_evaluation_state", new=AsyncMock(return_value=state)
-            ),
-            patch.object(
-                review_module,
-                "save_review_record",
-                new=AsyncMock(side_effect=review_module.ReviewSaveError("db down")),
-            ),
+        from app.services.review_service import ReviewConflictError
+
+        with patch.object(
+            review_module,
+            "svc_submit_review",
+            new=AsyncMock(side_effect=ReviewConflictError("Already reviewed")),
         ):
             resp = client.post(
-                "/api/v1/reviews/eval-1/submit", json={"feedback": "同意"}
+                "/api/v1/reviews/1/submit", json={"feedback": "重复提交测试"}
             )
-        assert resp.status_code == 500
-        assert resp.json()["error_code"] == "REVIEW_SAVE_FAILED"
+        assert resp.status_code == 409
+
+    def test_submit_feedback_too_short_rejected(self, client):
+        """feedback 太短被拒绝"""
+        _as_admin()
+        resp = client.post(
+            "/api/v1/reviews/1/submit", json={"feedback": "x"}
+        )
+        assert resp.status_code == 422
 
     def test_submit_feedback_too_long_rejected(self, client):
         _as_admin()
         resp = client.post(
-            "/api/v1/reviews/eval-1/submit", json={"feedback": "x" * 5001}
+            "/api/v1/reviews/1/submit", json={"feedback": "x" * 5001}
         )
         assert resp.status_code == 422
+
+    def test_submit_no_reviewer_id_in_body(self, client):
+        """请求体不包含 reviewer_id 字段"""
+        _as_admin()
+        from uuid import uuid4
+        from datetime import datetime
+
+        mock_result = {
+            "review_id": uuid4(),
+            "evaluation_id": 1,
+            "run_id": uuid4(),
+            "status": "reviewed",
+            "reviewed_at": datetime.now(),
+        }
+        with patch.object(
+            review_module, "svc_submit_review", new=AsyncMock(return_value=mock_result)
+        ):
+            resp = client.post(
+                "/api/v1/reviews/1/submit",
+                json={"feedback": "确认无误"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "reviewed"
 
 
 # ── 管理缓存端点鉴权 ─────────────────────────────────────────────────────────

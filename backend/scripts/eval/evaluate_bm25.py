@@ -30,6 +30,11 @@ REQUIRED_CATEGORIES = tuple(RAG_STRATA)
 REQUIRED_K_VALUES = tuple(RAG_K_VALUES)
 
 
+def _simple_tokenize(text: str) -> List[str]:
+    """Simple whitespace + lowercase tokenizer for golden validation."""
+    return text.lower().split()
+
+
 def _match_group(source: str, groups: Iterable[str]) -> str:
     for group in groups:
         if group and group in source:
@@ -286,7 +291,82 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit non-zero when any Task 8 candidate-generation gate fails",
     )
+    parser.add_argument(
+        "--validate-golden-only",
+        action="store_true",
+        help="Only validate golden set structure without initializing BM25/Chroma",
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        help="Path to bm25_release_policy.json",
+    )
+    parser.add_argument(
+        "--baseline-provenance",
+        type=Path,
+        help="Path to baseline provenance sidecar JSON",
+    )
+    parser.add_argument(
+        "--consistency-report",
+        type=Path,
+        help="Path to consistency probe report JSON",
+    )
     return parser
+
+
+def validate_golden_only(golden_path: Path) -> Dict[str, Any]:
+    """Validate the golden set structure without initializing BM25/Chroma.
+
+    Returns a dict with 'passed' (bool) and optional 'error' message.
+    """
+    try:
+        with golden_path.open(encoding="utf-8") as f:
+            golden = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return {"passed": False, "error": str(exc)}
+
+    cases = golden.get("cases", [])
+
+    # Check minimum case count
+    if len(cases) < 40:
+        return {"passed": False, "error": f"BM25 golden set must contain at least 40 cases (found {len(cases)})"}
+
+    # Check unique IDs
+    ids = [case.get("id") for case in cases]
+    if len(ids) != len(set(ids)):
+        return {"passed": False, "error": "Golden set contains duplicate case IDs; all IDs must be unique"}
+
+    # Check required fields and non-empty values
+    required_fields = {"id", "category", "query", "relevant_source_contains", "must_preserve_tokens"}
+    for case in cases:
+        missing = required_fields - case.keys()
+        if missing:
+            return {"passed": False, "error": f"Case {case.get('id', '?')} missing fields: {sorted(missing)}"}
+        if not case.get("query"):
+            return {"passed": False, "error": f"Case {case['id']} has empty query"}
+        if not case.get("relevant_source_contains"):
+            return {"passed": False, "error": f"Case {case['id']} has empty relevant_source_contains"}
+        if not case.get("must_preserve_tokens"):
+            return {"passed": False, "error": f"Case {case['id']} has empty must_preserve_tokens"}
+
+    # Check all 6 required categories present
+    present_categories = {case.get("category") for case in cases}
+    missing_categories = set(REQUIRED_CATEGORIES) - present_categories
+    if missing_categories:
+        return {"passed": False, "error": f"Missing required categories: {sorted(missing_categories)}"}
+
+    # Check token preservation: each must_preserve_token must be derivable from query
+    for case in cases:
+        query_tokens = set(_simple_tokenize(case["query"]))
+        for token in case["must_preserve_tokens"]:
+            token_tokens = set(_simple_tokenize(token))
+            if not token_tokens or not token_tokens <= query_tokens:
+                return {
+                    "passed": False,
+                    "error": f"Case {case['id']}: token '{token}' not preservable from query tokens",
+                }
+
+    return {"passed": True, "case_count": len(cases), "categories": sorted(present_categories)}
 
 
 def main() -> int:
@@ -299,6 +379,16 @@ def main() -> int:
     golden_path = args.golden.resolve()
     if not golden_path.is_file():
         parser.error(f"golden set does not exist: {golden_path}")
+
+    # --validate-golden-only: structure check without BM25/Chroma init
+    if args.validate_golden_only:
+        result = validate_golden_only(golden_path)
+        if result["passed"]:
+            print(f"Golden set valid: {result['case_count']} cases, categories: {result['categories']}")
+            return 0
+        else:
+            print(f"Golden set validation failed: {result['error']}", file=sys.stderr)
+            return 1
 
     # A missing/empty active index is an honest offline skip.  It is not a
     # fabricated green candidate and leaves the real-gate decision to CI once

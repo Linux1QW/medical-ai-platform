@@ -23,11 +23,15 @@ class EvaluationLock(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     VALID_TRANSITIONS = {
-        "pending": {"running", "failed"},
-        "running": {"completed", "needs_review", "failed"},
-        "failed": {"pending"},
-        "completed": set(),
+        # 对外映射：pending → queued
+        "pending": {"running", "cancelled", "failed"},
+        "running": {"retrying", "completed", "needs_review", "failed", "cancelled"},
+        "retrying": {"running", "failed", "cancelled"},
         "needs_review": {"reviewed"},
+        # 终态无出边
+        "completed": set(),
+        "cancelled": set(),
+        "failed": set(),
         "reviewed": set(),
     }
 

@@ -44,7 +44,7 @@ def fake_redis(monkeypatch):
     async def _get(*args, **kwargs):
         return redis
 
-    monkeypatch.setattr(evaluation_cancel, "_get_redis", _get)
+    monkeypatch.setattr(evaluation_cancel, "_get_control_redis", _get)
     return redis
 
 
@@ -71,10 +71,13 @@ async def test_clear_cancel_flag(fake_redis):
 async def test_request_cancel_raises_when_redis_unavailable(monkeypatch):
     """写路径：Redis 不可用时明确报错，不假装取消成功"""
 
-    async def _get(*args, **kwargs):
+    async def _get_none(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(evaluation_cancel, "_get_redis", _get)
+    monkeypatch.setattr(evaluation_cancel, "_get_control_redis", _get_none)
+    # 同时 mock 掉 llm_cache 回退路径
+    import app.services.llm_cache as llm_cache_module
+    monkeypatch.setattr(llm_cache_module, "_get_redis", _get_none)
 
     with pytest.raises(RuntimeError):
         await evaluation_cancel.request_cancel(1)
@@ -87,7 +90,7 @@ async def test_read_paths_are_best_effort(monkeypatch):
     async def _get(*args, **kwargs):
         return _BrokenRedis()
 
-    monkeypatch.setattr(evaluation_cancel, "_get_redis", _get)
+    monkeypatch.setattr(evaluation_cancel, "_get_control_redis", _get)
 
     assert await evaluation_cancel.is_cancel_requested(1) is False
     assert await evaluation_cancel.get_task_id(1) is None

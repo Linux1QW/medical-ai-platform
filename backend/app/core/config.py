@@ -202,7 +202,22 @@ class Settings(BaseSettings):
 
     # 数据留存策略
     AUDIT_LOG_RETENTION_DAYS: int = 90        # 审计日志保留天数
-    EVALUATION_RUN_RETENTION_DAYS: int = 180  # 评估运行记录保留天数
+    EVALUATION_RUN_RETENTION_DAYS: int = 180  # 评估运行记录保留天数（deprecated alias）
+
+    # Dispatch Outbox 配置
+    DISPATCH_POLL_INTERVAL_SECONDS: int = Field(default=1, ge=1, le=60)
+    DISPATCH_BATCH_SIZE: int = Field(default=20, ge=1, le=100)
+    DISPATCH_LEASE_SECONDS: int = Field(default=30, ge=10, le=300)
+    DISPATCH_MAX_ATTEMPTS: int = Field(default=1500, ge=1, le=10000)
+    DISPATCH_MAX_AGE_SECONDS: int = Field(default=86400, ge=3600, le=604800)  # 24h
+    DISPATCH_BREAKER_FAILURE_THRESHOLD: int = Field(default=5, ge=1, le=50)
+    DISPATCH_BREAKER_COOLDOWN_SECONDS: int = Field(default=30, ge=5, le=300)
+    DISPATCH_RETENTION_DAYS: int = Field(default=7, ge=1, le=90)
+    UNREPORTED_RUN_RETENTION_DAYS: int = Field(default=180, ge=30, le=365)
+
+    # 审计自动删除（默认关闭）
+    AUDIT_LOG_AUTO_DELETE_ENABLED: bool = False
+    DATA_RETENTION_POLICY_ID: str = ""
 
     # Token 用量管控
     TOKEN_DAILY_LIMIT: int = 1_000_000       # 每日 Token 上限

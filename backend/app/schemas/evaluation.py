@@ -1,7 +1,8 @@
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CitationOut(BaseModel):
@@ -74,3 +75,52 @@ class StatsSummary(BaseModel):
     avg_total_score: Optional[float] = 0
     score_distribution: List[dict] = []
     user_stats: Optional[List[UserStatItem]] = None
+
+
+# === V1.1 Evaluation Job Contracts ===
+
+EvaluationJobStatus = Literal[
+    "queued", "running", "retrying", "completed",
+    "needs_review", "reviewed", "failed", "cancelled",
+]
+
+
+class EvaluationSubmitOut(BaseModel):
+    """202 response for evaluation submission."""
+    run_id: UUID
+    consultation_id: int
+    status: Literal["queued"]
+    status_url: str
+    websocket_url: str
+
+
+class EvaluationRunStatusOut(BaseModel):
+    """200 response for run status polling."""
+    run_id: UUID
+    consultation_id: int
+    status: EvaluationJobStatus
+    progress: int | None = Field(default=None, ge=0, le=100)
+    message: str | None = None
+    evaluation_id: int | None = None
+    error_code: str | None = None
+    attempt: int = Field(ge=0)
+    cancel_requested: bool = False
+    cancel_requested_at: datetime | None = None
+    submitted_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    @field_validator("submitted_at", "started_at", "finished_at", "cancel_requested_at", mode="before")
+    @classmethod
+    def _normalize_datetime_to_utc(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class EvaluationCancelOut(BaseModel):
+    """Response for cancel request."""
+    run_id: UUID
+    status: EvaluationJobStatus
+    cancel_requested: bool
+    requested_at: datetime | None = None

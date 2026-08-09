@@ -123,16 +123,19 @@ def _error_response(
     error_code: str,
     message: str,
     error_type: str | None = None,
+    context: dict | None = None,
+    detail: str | None = None,
 ) -> JSONResponse:
     request_id = _get_request_id(request)
     content: dict = {
         "error_code": error_code,
         "message": message,
-        "detail": message,
+        "detail": detail if detail is not None else message,
         "request_id": request_id,
     }
     if error_type:
         content["error_type"] = error_type
+    content["context"] = context
     return JSONResponse(
         status_code=status_code,
         content=content,
@@ -205,11 +208,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         error_code = detail.get("error_code", f"HTTP_{exc.status_code}")
         message = detail.get("message", "请求失败")
         error_type = detail.get("error_type")
+        context = detail.get("context")
     else:
         error_code = f"HTTP_{exc.status_code}"
         message = str(detail)
         error_type = None
-    return _error_response(request, exc.status_code, error_code, message, error_type=error_type)
+        context = None
+    return _error_response(
+        request, exc.status_code, error_code, message,
+        error_type=error_type, context=context,
+    )
 
 
 @app.exception_handler(RequestValidationError)

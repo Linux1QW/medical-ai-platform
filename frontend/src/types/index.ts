@@ -239,6 +239,56 @@ export interface RiskFinding {
   needs_review: boolean;
 }
 
+// ── Task 10: 管理员复核工作台类型 ─────────────────────────────────────
+
+/** 待复核列表项 */
+export interface PendingReviewItem {
+  evaluation_id: number;
+  consultation_id: number;
+  doctor_username: string;
+  patient_name: string;
+  review_reason: string;
+  human_review_needed: boolean;
+  created_at: string;
+}
+
+/** 待复核列表响应 */
+export interface PendingReviewList {
+  items: PendingReviewItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** 复核状态 */
+export interface ReviewStatus {
+  evaluation_id: number;
+  status: 'pending' | 'in_review' | 'completed';
+  reviewer_id: number | null;
+  reviewed_at: string | null;
+}
+
+/** 五维分数调整 */
+export interface ScoreAdjustments {
+  inquiry_score?: number | null;
+  knowledge_score?: number | null;
+  humanistic_score?: number | null;
+  diagnosis_score?: number | null;
+  treatment_score?: number | null;
+}
+
+/** 复核提交请求体 */
+export interface ReviewSubmission {
+  feedback: string;
+  score_adjustments?: ScoreAdjustments;
+}
+
+/** 复核提交响应 */
+export interface ReviewSubmitResult {
+  success: boolean;
+  evaluation_id: number;
+}
+
 /** 报告类型 */
 export type ReportKind = 'smoke' | 'regression' | 'benchmark' | 'legacy_unknown';
 

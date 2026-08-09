@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     # Evaluation Control Redis（取消标志和 task_id 映射）
     EVALUATION_CONTROL_REDIS_URL: str = "redis://localhost:6379/8"
 
+    # Progress Bus Redis（跨进程进度广播）
+    PROGRESS_REDIS_URL: str = "redis://localhost:6379/6"
+    PROGRESS_EVENT_TTL_SECONDS: int = 3600
+
     # Function Call / Tool Use
     ENABLE_TOOL_USE: bool = True
     TOOL_USE_MODEL: str = "qwen-max"

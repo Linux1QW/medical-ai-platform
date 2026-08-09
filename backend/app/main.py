@@ -31,6 +31,7 @@ from app.services.observability.metrics import (
     HTTP_REQUEST_DURATION,
     HTTP_REQUESTS_TOTAL,
 )
+from app.services.progress_bus import RedisProgressBus
 from app.services.qwen_client import get_llm_metrics
 from app.services.rag.retrieval_cache import close_retrieval_cache_redis, get_retrieval_cache_stats
 from app.services.token_tracker import token_tracker
@@ -66,10 +67,24 @@ async def lifespan(app: FastAPI):
     from app.services.tools.runtime import start_tool_health_checks, stop_tool_health_checks
     await start_tool_health_checks()
 
+    # 初始化 Progress Bus（Redis Pub/Sub 跨进程进度广播）
+    from app.core.websocket import init_manager
+    import redis.asyncio as aioredis
+    progress_redis = aioredis.from_url(settings.PROGRESS_REDIS_URL, decode_responses=True)
+    progress_bus = RedisProgressBus(progress_redis, ttl=settings.PROGRESS_EVENT_TTL_SECONDS)
+    mgr = init_manager(bus=progress_bus)
+    await mgr.start()
+
     yield
 
     # 停止工具健康探测
     await stop_tool_health_checks()
+
+    # 关闭 Progress Bus
+    from app.core.websocket import get_manager
+    mgr = get_manager()
+    await mgr.close()
+    await progress_redis.aclose()
 
     # 关闭 checkpointer（None 时无操作）
     await close_checkpointer()

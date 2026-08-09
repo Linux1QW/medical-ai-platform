@@ -4,14 +4,14 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access import require_consultation_access
+from app.core.access import require_consultation_access, require_evaluation_run_access
 from app.core.audit import record_audit_log
 from app.core.authentication import AuthenticationError, authenticate_access_token
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.limiter import limiter
 from app.core.permissions import require_permission
-from app.core.websocket import manager
+from app.core.websocket import get_manager
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.user import User
 from app.schemas.evaluation import EvaluationOut, EvaluationRequest
@@ -41,11 +41,20 @@ async def evaluation_progress_ws(
     websocket: WebSocket,
     consultation_id: int,
 ):
-    """评估进度推送 WebSocket（需 JWT 鉴权）
+    """评估进度推送 WebSocket（需 JWT 鉴权）— 已废弃，请使用 /ws/runs/{run_id}"""
+    await websocket.close(code=1008, reason="请使用 /evaluations/ws/runs/{run_id}")
+
+
+@router.websocket("/ws/runs/{run_id}")
+async def evaluation_run_progress_ws(
+    websocket: WebSocket,
+    run_id: str,
+):
+    """评估 Run 进度推送 WebSocket（需 JWT 鉴权）
 
     鉴权方式：连接建立后客户端须在 WS_AUTH_TIMEOUT 秒内发送首条消息
     {"type": "auth", "token": "<JWT>"}，避免 token 暴露在 URL / 访问日志中。
-    鉴权成功后服务端回复 {"type": "auth_ok"}。
+    鉴权成功后服务端回复 {"type": "auth_ok"} 并重放最新进度。
     """
     await websocket.accept()
 
@@ -71,24 +80,26 @@ async def evaluation_progress_ws(
         try:
             user = await authenticate_access_token(db, token)
         except AuthenticationError as e:
-            # 吊销存储不可用 → 1013（临时故障）；其他认证失败 → 1008
             close_code = 1013 if e.status_code == 503 else 1008
             await websocket.close(code=close_code, reason=e.message)
             return
 
         try:
-            await require_consultation_access(db, consultation_id, user)
+            await require_evaluation_run_access(db, run_id, user)
         except HTTPException:
-            await websocket.close(code=1008, reason="无权访问该问诊记录")
+            await websocket.close(code=1008, reason="无权访问该评估运行记录")
             return
 
+    mgr = get_manager()
     await websocket.send_json({"type": "auth_ok"})
-    manager.register(websocket, consultation_id)
+    mgr.register(websocket, run_id)
+    # 重放最新进度
+    await mgr.replay_latest(websocket, run_id)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket, consultation_id)
+        mgr.disconnect(websocket, run_id)
 
 
 @router.post("/", response_model=EvaluationOut)

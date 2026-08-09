@@ -47,6 +47,9 @@ backend/evaluation/reports/*
 !backend/evaluation/reports/.gitkeep
 backend/evaluation_reports/
 
+# 复核反馈私有目录（含完整问诊内容，禁止提交）
+backend/evaluation/private_feedback/
+
 # Agent 开发过程材料与内部实施计划
 .superpowers/
 docs/superpowers/plans/*

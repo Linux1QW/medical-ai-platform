@@ -297,6 +297,10 @@ class Settings(BaseSettings):
     OBSERVABILITY_CONTENT_MAX_CHARS: int = Field(default=500, ge=0, le=2000)
     OBSERVABILITY_HMAC_KEY: Optional[SecretStr] = None
 
+    # 复核反馈导出 HMAC 密钥（Task 13）
+    # 用于 consultation_id / user_id 的 HMAC-SHA256 脱敏，不得复用 JWT SECRET_KEY
+    FEEDBACK_EXPORT_HMAC_KEY: Optional[SecretStr] = None
+
     # BGE-M3 双表示配置
     BGE_M3_ENABLED: bool = False          # 默认关闭，需要时通过环境变量开启
     BGE_M3_MODEL_PATH: str = "BAAI/bge-m3"  # 模型路径或 HuggingFace ID

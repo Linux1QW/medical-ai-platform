@@ -35,6 +35,62 @@ def _export_dataset_cases(args) -> int:
     return 0
 
 
+def _report_candidate_manifest(args) -> int:
+    """加载 candidate manifest 并输出覆盖统计（不直接当 gold case）"""
+    import json
+
+    manifest_path = Path(args.candidate_manifest)
+    if not manifest_path.exists():
+        print(f"Candidate manifest not found: {manifest_path}")
+        return 1
+
+    candidates = []
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                candidates.append(json.loads(line))
+
+    if not candidates:
+        print("Candidate manifest is empty")
+        return 0
+
+    # 统计归因分布
+    attribution_counts: dict[str, int] = {}
+    retrieval_counts: dict[str, int] = {}
+    stance_counts: dict[str, int] = {}
+    sensitive_count = 0
+
+    for c in candidates:
+        reason = c.get("review_reason") or "unknown"
+        attribution_counts[reason] = attribution_counts.get(reason, 0) + 1
+
+        retrieval = c.get("retrieval_status", "unknown")
+        retrieval_counts[retrieval] = retrieval_counts.get(retrieval, 0) + 1
+
+        stance = c.get("evidence_stance", "unknown")
+        stance_counts[stance] = stance_counts.get(stance, 0) + 1
+
+        if c.get("contains_sensitive_content"):
+            sensitive_count += 1
+
+    print(f"Candidate manifest: {manifest_path}")
+    print(f"Total candidates: {len(candidates)}")
+    print(f"Contains sensitive content: {sensitive_count}/{len(candidates)}")
+    print(f"\nReview reason distribution:")
+    for reason, count in sorted(attribution_counts.items(), key=lambda x: -x[1]):
+        print(f"  {reason}: {count}")
+    print(f"\nRetrieval status distribution:")
+    for status, count in sorted(retrieval_counts.items(), key=lambda x: -x[1]):
+        print(f"  {status}: {count}")
+    print(f"\nEvidence stance distribution:")
+    for stance, count in sorted(stance_counts.items(), key=lambda x: -x[1]):
+        print(f"  {stance}: {count}")
+    print("\nNote: Candidates are NOT automatically used as gold cases.")
+    print("Human annotation required — see docs/evaluation-baseline.md § 9.")
+    return 0
+
+
 async def main():
     parser = argparse.ArgumentParser(description="RAG/Tool Use Evaluation System")
     parser.add_argument(
@@ -108,12 +164,23 @@ async def main():
         action="store_true",
         help="导出前按主诊断/主诉规则表自动生成 gold_relevant_sources 建议（notes 标记 gold=auto-suggested）"
     )
+    parser.add_argument(
+        "--candidate-manifest",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="加载复核反馈候选 manifest (JSONL)，仅做报告/覆盖统计，不直接当 gold case"
+    )
 
     args = parser.parse_args()
 
     # dataset/ 真实病例导出模式
     if args.export_cases:
         return _export_dataset_cases(args)
+
+    # candidate manifest 报告模式（仅统计，不直接当 gold case）
+    if args.candidate_manifest:
+        return _report_candidate_manifest(args)
 
     # A/B 版本对比模式
     if args.compare_versions:

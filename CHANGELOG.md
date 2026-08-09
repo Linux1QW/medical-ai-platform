@@ -7,38 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-10
+
 ### Added
-- Prompt 外置化 + 版本管理（`PromptManager`）：13 个 agent system prompt 抽离为文件，支持 `PROMPT_ACTIVE_VERSIONS` 灰度覆盖、变量渲染、缓存与热重载
-- LLM Provider 适配器抽象层（`ProviderAdapter` + `OpenAICompatibleAdapter` + 注册表），通用 `LLM_*` 配置（空回退 `QWEN_*`）
-- 单测：`test_prompt_manager.py`（18）、`test_llm_adapter.py`（17）
-- 文档：`docs/prompt-and-provider-adapter.md`
 
-### Added - 临床评估可靠性迭代（Task 0 ~ Task 16）
-
-- **统一报告协议 (ReportManifest)**：Pydantic 模型统一报告元数据，区分 smoke/regression/benchmark 报告类型
-- **回归门禁与退出码协议**：PASS=0 / FAIL=1 / SKIP=2 / INVALID=3 四级退出码
+- **Transactional Outbox + Dispatcher**：评估任务通过 `evaluation_dispatch_outbox` 表与业务事务原子写入，独立 Dispatcher 进程（`evaluation-dispatcher` 服务）轮询派发至 Celery，保证至少一次投递
+- **EvaluationRun 状态机**：`evaluation_run_service.py` 集中管理 run 生命周期（queued → running → completed/needs_review/failed/cancelled），含 retrying 重试路径、协作式取消和 lease 租约机制
+- **Reconciliation 对账**：`evaluation_reconciliation.py` 定时扫描过期 lease、stale dispatch、retrying 超时，自动释放/重投/dead letter
+- **双 Redis 物理拓扑**：`redis-state`（AOF + noeviction）承载 checkpoint/broker/result/JWT/控制/进度；`redis-cache`（allkeys-LRU）承载 LLM 缓存和检索缓存
+- **数据分级保留策略**：dispatch 终态 7 天、无报告 failed/cancelled run 180 天、cache/progress 24h/1h；审计 auto-delete 默认关闭
+- **隐私威胁模型**：文档化患者身份泄露、LLM API 泄露、日志泄露等威胁及缓解措施
+- **Alembic 迁移服务**：Compose `migrate` 服务在启动时自动执行 V1.1 迁移
+- **V1.1 数据库迁移**：`2b3c4d5e6f7a` 新增 `evaluation_dispatch_outbox` 表；`3c4d5e6f7a8b` 新增 review/audit 查询优化索引
+- **稳定 Citation ID**：基于 `(kb_version + doc_id + chunk_id + content_hash)` 的 SHA-256 确定性 ID
+- **Claim-Evidence Graph**：治疗/诊断 claim 必须附带证据链接，unsupported claim 自动标记需复核
 - **五维原子 Rubric 评估体系**：每维度独立评分（pass/partial/fail/unassessed/not_applicable），unassessed ≠ 0 分
-- **Judge 稳定性校准**：AB 对比验证评分一致性，Bootstrap 置信区间
 - **安全红旗回归集**：高危症状 fail-closed 机制，LLM 失败 + 无规则匹配 → 自动转人工复核
 - **人工复核状态机**：pending → in_review → approved/rejected/returned 合法迁移验证
-- **稳定 Citation ID**：基于 (kb_version + doc_id + chunk_id + content_hash) 的 SHA-256 确定性 ID
-- **Claim-Evidence Graph**：治疗/诊断 claim 必须附带证据链接，unsupported claim 自动标记需复核
-- **PlanStep DAG 通用校验**：依赖图环检测 + ready 步骤计算
 - **并发/Token/成本预算控制**：RunBudget 限制并发 Agent 数 / Token 总量 / 成本上限，安全路径豁免
 - **全链路 Trace 与可观测性**：TraceContext 贯穿 Celery 重试，PII 自动脱敏
 - **前端证据化报告组件**：RubricItemList + EvidenceTrace + RiskBanner
 - **人工复核工作台**：复核队列排序/筛选/详情弹窗/决策表单
 - **可版本化临床能力基准集**：BenchmarkManifest 管理 dev/test/regression/safety/benchmark 分组
-- **数据分级与生命周期管控**：P0-P3 四级分类，按级别设定保留期限，过期 trace 自动清理
 - **端到端发布验收测试**：25 个 E2E 场景覆盖全部迭代任务
+- **Prompt 外置化 + 版本管理**：13 个 agent system prompt 抽离为文件，支持灰度覆盖、变量渲染、缓存与热重载
+- **LLM Provider 适配器抽象层**：`ProviderAdapter` + `OpenAICompatibleAdapter` + 注册表
 
 ### Changed
+
+- Docker Compose 全面重构：YAML anchor 统一环境变量，新增 `redis-cache`、`evaluation-dispatcher`、`migrate` 服务
+- `backend` 服务已通过 `x-backend-environment` 注入正确的容器内 Celery broker/result URL
+- RAG 源文件挂载修正为 `./data:/app/data:ro`，与代码 `PDF_DIR` 一致
 - 后端测试从 579 用例增至 1093 用例（+100%）
 - 前端测试覆盖 64 用例（9 个测试文件）
-- 新增 `tests/e2e/` 端到端验收测试目录
+- `ACCESS_TOKEN_EXPIRE_MINUTES` 默认值调整为 60 分钟（生产不得超过 60）
+- 文档全面更新：README quickstart、PROJECT_GUIDE V1.1 组件、technical-document 状态机/Outbox/双 Redis、platform-documentation 临床使用边界
 
 ### Fixed
-- 修复 failover「半接线」缺陷：熔断切换 Provider 时真实重建底层 LLM 客户端（此前仅更新索引/计数，请求仍打向原端点）
+
+- 修复 failover「半接线」缺陷：熔断切换 Provider 时真实重建底层 LLM 客户端
+- 修复 Compose 未注入 Celery broker/result URL 的问题
+- 修复 Compose RAG 源文件挂载路径与代码 `PDF_DIR` 不一致的问题
+- 修复 `container_name` 限制 Worker 水平扩展的问题
+
+### Security
+
+- staging/production 环境下 `JWT_BLACKLIST_FAIL_CLOSED` 必须为 `true`，防止 Redis 不可用时放行已吊销 token
+- staging/production 环境下 `ACCESS_TOKEN_EXPIRE_MINUTES` 不得超过 60 分钟
+- staging/production 环境下启用 Langfuse 必须配置 `OBSERVABILITY_HMAC_KEY`（≥32 字节）且 `OBSERVABILITY_CAPTURE_CONTENT=false`
+- 可观测性隐私策略：默认 `capture_content=false`，日志/trace 脱敏
+
+### Breaking Changes
+
+- **删除 Celery task status API**：旧 `GET /api/v1/evaluations/task/{task_id}/status` 未校验 task 归属，V1.1 引入 Outbox + run 状态机后应使用 `GET /api/v1/evaluations/runs/{run_id}/status`
+- **旧 WebSocket URL 变更**：评估进度 WebSocket 从旧路径迁移到 `/api/v1/evaluations/ws/{consultation_id}`，首消息必须携带 JWT auth
+- **双 Redis 分离**：本地开发 `LLM_CACHE_REDIS_URL` 默认从 `localhost:6379` 改为 `localhost:6380`（redis-cache），已有开发环境需更新 Redis 配置
+- **Alembic 迁移链新增**：head 从 `1a2b3c4d5e6f` 推进到 `3c4d5e6f7a8b`，升级前必须备份并在副本验证
+- **报告关联数据保留策略变更**：run/Evaluation/ReviewRecord/AuditLog 不再由通用 cleanup 删除，保留周期由 `DATA_RETENTION_POLICY_ID` 与审批流程决定
 
 ## [1.0.0] - 2026-07-21
 

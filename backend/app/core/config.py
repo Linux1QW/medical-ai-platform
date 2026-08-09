@@ -3,9 +3,9 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -289,6 +289,11 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
     LANGFUSE_ENABLED: bool = False
 
+    # 可观测性隐私策略（Task 7）
+    OBSERVABILITY_CAPTURE_CONTENT: bool = False
+    OBSERVABILITY_CONTENT_MAX_CHARS: int = Field(default=500, ge=0, le=2000)
+    OBSERVABILITY_HMAC_KEY: Optional[SecretStr] = None
+
     # BGE-M3 双表示配置
     BGE_M3_ENABLED: bool = False          # 默认关闭，需要时通过环境变量开启
     BGE_M3_MODEL_PATH: str = "BAAI/bge-m3"  # 模型路径或 HuggingFace ID
@@ -370,6 +375,28 @@ class Settings(BaseSettings):
                 " 超过 60 分钟，仅建议用于本地调试，生产环境不得超过 60 分钟。",
                 stacklevel=2,
             )
+
+        # Task 7: 可观测性隐私安全检查
+        if self.ENVIRONMENT in ("staging", "production"):
+            if self.LANGFUSE_ENABLED:
+                # HMAC key 必须存在且至少 32 字节
+                if not self.OBSERVABILITY_HMAC_KEY:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] LANGFUSE_ENABLED=true 时必须配置 "
+                        "OBSERVABILITY_HMAC_KEY（至少 32 字节随机密钥）"
+                    )
+                hmac_key_bytes = self.OBSERVABILITY_HMAC_KEY.get_secret_value().encode("utf-8")
+                if len(hmac_key_bytes) < 32:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] OBSERVABILITY_HMAC_KEY 长度不足 32 字节，"
+                        "请使用更安全的随机密钥"
+                    )
+                # capture=true 在 staging/production 禁止
+                if self.OBSERVABILITY_CAPTURE_CONTENT:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] OBSERVABILITY_CAPTURE_CONTENT=true 被禁止，"
+                        "医疗数据不得上传至外部观测平台"
+                    )
 
 
 settings = Settings()

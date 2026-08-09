@@ -11,6 +11,8 @@ graph_thread_id 和 attempt，通过 contextvars 在 FastAPI → Celery → Grap
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
 import uuid
@@ -163,3 +165,17 @@ def sanitize_for_observability(data: Any) -> Any:
         return [sanitize_for_observability(item) for item in data]
     # int / float / bool 等原样返回
     return data
+
+
+# ── HMAC 摘要 ─────────────────────────────────────────────────────────────
+
+
+def summarize_sensitive_text(text: str, key: bytes) -> dict[str, int | str]:
+    """对敏感文本生成 HMAC-SHA256 摘要 + 字符数
+
+    用于 capture=false 模式下替代原文上传 Langfuse。
+    """
+    return {
+        "hmac_sha256": hmac.new(key, text.encode("utf-8"), hashlib.sha256).hexdigest(),
+        "char_count": len(text),
+    }

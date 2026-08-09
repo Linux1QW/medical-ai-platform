@@ -77,6 +77,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Task 7: 统一 shutdown flush（Langfuse tracer 幂等 flush）
+    from app.services.observability.langfuse_client import get_tracer
+    try:
+        get_tracer().flush()
+    except Exception as e:
+        logger.debug(f"Langfuse tracer flush on shutdown failed: {e}")
+
     # 停止工具健康探测
     await stop_tool_health_checks()
 

@@ -6,11 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import require_consultation_access
 from app.core.audit import record_audit_log
+from app.core.authentication import AuthenticationError, authenticate_access_token
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.limiter import limiter
 from app.core.permissions import require_permission
-from app.core.security import decode_access_token
 from app.core.websocket import manager
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.user import User
@@ -63,23 +63,19 @@ async def evaluation_progress_ws(
     except json.JSONDecodeError:
         token = None
 
-    payload = decode_access_token(token) if token else None
-    if payload is None:
-        await websocket.close(code=1008, reason="无效的认证凭据")
-        return
-
-    user_id_str = payload.get("sub")
-    try:
-        user_id = int(user_id_str or "")
-    except (TypeError, ValueError):
+    if not token:
         await websocket.close(code=1008, reason="无效的认证凭据")
         return
 
     async with AsyncSessionLocal() as db:
-        user = await get_user_by_id(db, user_id)
-        if user is None:
-            await websocket.close(code=1008, reason="用户不存在")
+        try:
+            user = await authenticate_access_token(db, token)
+        except AuthenticationError as e:
+            # 吊销存储不可用 → 1013（临时故障）；其他认证失败 → 1008
+            close_code = 1013 if e.status_code == 503 else 1008
+            await websocket.close(code=close_code, reason=e.message)
             return
+
         try:
             await require_consultation_access(db, consultation_id, user)
         except HTTPException:

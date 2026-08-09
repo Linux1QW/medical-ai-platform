@@ -1,10 +1,11 @@
 import json
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import List
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,15 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "医学问诊评估平台"
     VERSION: str = "1.0.0"
     API_V1_PREFIX: str = "/api/v1"
-    ENVIRONMENT: str = "development"  # development | production
+    ENVIRONMENT: str = "development"  # development | test | staging | production
+
+    @field_validator("ENVIRONMENT")
+    @classmethod
+    def _validate_environment(cls, v: str) -> str:
+        allowed = {"development", "test", "staging", "production"}
+        if v not in allowed:
+            raise ValueError(f"ENVIRONMENT must be one of {allowed}, got {v!r}")
+        return v
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
@@ -26,9 +35,11 @@ class Settings(BaseSettings):
     # JWT
     SECRET_KEY: str = "change-this-to-a-secure-random-string"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_TOKEN_BLACKLIST_ENABLED: bool = True
+    JWT_BLACKLIST_FAIL_CLOSED: bool = False
+    JWT_BLACKLIST_REDIS_URL: str = "redis://localhost:6379/7"
 
     # MySQL
     MYSQL_HOST: str = "localhost"
@@ -332,6 +343,28 @@ class Settings(BaseSettings):
             logger.warning(
                 "SECURITY WARNING: SECRET_KEY 仍为默认值！"
                 "请在生产环境中设置安全的随机密钥（环境变量 SECRET_KEY）。"
+            )
+
+        # JWT 吊销 fail-closed 约束
+        if self.ENVIRONMENT in ("staging", "production"):
+            if self.JWT_TOKEN_BLACKLIST_ENABLED and not self.JWT_BLACKLIST_FAIL_CLOSED:
+                raise RuntimeError(
+                    f"[{self.ENVIRONMENT}] JWT_TOKEN_BLACKLIST_ENABLED=true 时"
+                    "必须设置 JWT_BLACKLIST_FAIL_CLOSED=true 以防止吊销存储故障时放行已吊销 token"
+                )
+            if self.ACCESS_TOKEN_EXPIRE_MINUTES > 60:
+                raise RuntimeError(
+                    f"[{self.ENVIRONMENT}] ACCESS_TOKEN_EXPIRE_MINUTES 不得超过 60 分钟，"
+                    f"当前值 {self.ACCESS_TOKEN_EXPIRE_MINUTES}。"
+                    "缩短暴露窗口是 redis-state 灾难恢复时的必要安全边界。"
+                )
+
+        # development 长 TTL 警告
+        if self.ENVIRONMENT == "development" and self.ACCESS_TOKEN_EXPIRE_MINUTES > 60:
+            warnings.warn(
+                f"[development] ACCESS_TOKEN_EXPIRE_MINUTES={self.ACCESS_TOKEN_EXPIRE_MINUTES}"
+                " 超过 60 分钟，仅建议用于本地调试，生产环境不得超过 60 分钟。",
+                stacklevel=2,
             )
 
 

@@ -1,0 +1,21 @@
+name: search_teaching_rubric
+version: "1.0.0"
+description: "Search the teaching rubric for clinical interview guidelines"
+allowed_agents:
+  - "evidence_agent"
+  - "coach_agent"
+allowed_context_views:
+  - "coach"
+read_only: true
+timeout_seconds: 5.0
+budget_tokens: 2000
+parameters:
+  query:
+    type: string
+    required: true
+    max_length: 200
+  top_k:
+    type: integer
+    required: false
+    default: 3
+    max_value: 5

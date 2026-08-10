@@ -1,0 +1,16 @@
+name: check_drug_interaction
+version: "1.0.0"
+description: "Check for drug interactions (read-only lookup)"
+allowed_agents:
+  - "safety_agent"
+allowed_context_views:
+  - "coach"
+  - "evaluation"
+read_only: true
+timeout_seconds: 3.0
+budget_tokens: 500
+parameters:
+  drug_list:
+    type: array
+    required: true
+    max_items: 10

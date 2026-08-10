@@ -1,0 +1,21 @@
+name: search_medical_kb
+version: "1.0.0"
+description: "Search the medical knowledge base for clinical information"
+allowed_agents:
+  - "evidence_agent"
+  - "coach_agent"
+allowed_context_views:
+  - "coach"
+read_only: true
+timeout_seconds: 8.0
+budget_tokens: 3000
+parameters:
+  query:
+    type: string
+    required: true
+    max_length: 300
+  top_k:
+    type: integer
+    required: false
+    default: 3
+    max_value: 5

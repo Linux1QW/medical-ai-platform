@@ -25,6 +25,14 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
+# Voice profile: install LiveKit only when building with INSTALL_VOICE=true
+# Core backend startup must NOT import LiveKit when Voice is disabled
+COPY backend/requirements-voice.txt .
+ARG INSTALL_VOICE=false
+RUN if [ "$INSTALL_VOICE" = "true" ]; then \
+        pip install --no-cache-dir -r requirements-voice.txt; \
+    fi
+
 # ── Stage 2: Production（仅包含运行时依赖） ──
 FROM python:3.10-slim AS base
 

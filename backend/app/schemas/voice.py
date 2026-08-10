@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 class CreateVoiceSessionRequest(BaseModel):
     consultation_id: int
-    doctor_id: int
 
 
 class VoiceSessionResponse(BaseModel):

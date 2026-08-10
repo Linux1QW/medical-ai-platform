@@ -12,6 +12,7 @@ from app.api.v1.model_versions import router as model_versions_router
 from app.api.v1.patients import router as patients_router
 from app.api.v1.review import router as review_router
 from app.api.v1.stats import router as stats_router
+from app.api.v1.voice import router as voice_router
 
 router = APIRouter()
 
@@ -27,3 +28,4 @@ router.include_router(review_router)
 router.include_router(model_versions_router, prefix="/model-versions", tags=["模型版本"])
 router.include_router(data_export_router, prefix="/users", tags=["数据导出"])
 router.include_router(coach_router)
+router.include_router(voice_router)  # Voice Beta

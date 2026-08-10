@@ -1,20 +1,66 @@
-"""Voice session management for LiveKit integration."""
+"""Voice session management for LiveKit integration.
+
+Uses official LiveKit SDK JWT builder for access token generation.
+"""
 from __future__ import annotations
 
-import hashlib
-import hmac
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID, uuid4
 
+logger = logging.getLogger(__name__)
+
 VOICE_ROOM_TTL_SECONDS = 600  # 10 minutes
 VOICE_MAX_PARTICIPANTS = 4
+
+
+def _build_livekit_token(
+    room_name: str,
+    identity: str,
+    *,
+    api_key: str,
+    api_secret: str,
+    ttl_seconds: int = VOICE_ROOM_TTL_SECONDS,
+) -> str:
+    """Generate an official LiveKit access token using the SDK JWT builder.
+
+    Args:
+        room_name: LiveKit room name.
+        identity: Participant identity (e.g. "doctor-<id>").
+        api_key: LiveKit API key (from settings, never exposed in response).
+        api_secret: LiveKit API secret (from settings, never exposed in response/logs).
+        ttl_seconds: Token TTL, capped at 600 seconds.
+
+    Returns:
+        Signed JWT string.
+    """
+    from livekit import api as lk_api
+
+    # Cap TTL at 10 minutes
+    ttl = min(ttl_seconds, VOICE_ROOM_TTL_SECONDS)
+
+    token = (
+        lk_api.AccessToken(api_key, api_secret)
+        .with_identity(identity)
+        .with_grants(
+            lk_api.VideoGrants(
+                room_join=True,
+                room=room_name,
+                can_publish=True,
+                can_subscribe=True,
+            )
+        )
+        .with_ttl(ttl)
+    )
+    return token.to_jwt()
 
 
 @dataclass
 class VoiceSession:
     """A voice consultation session."""
+
     session_id: UUID
     room_name: str
     consultation_id: int
@@ -39,7 +85,7 @@ class VoiceSession:
 
 
 class VoiceSessionManager:
-    """Manages voice sessions."""
+    """Manages voice sessions and token generation."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, VoiceSession] = {}  # room_name → session
@@ -80,22 +126,24 @@ class VoiceSessionManager:
     def generate_room_token(
         self,
         room_name: str,
+        identity: str,
         *,
-        api_key: str = "dev-api-key",
-        api_secret: str = "dev-api-secret",
+        api_key: str,
+        api_secret: str,
+        ttl_seconds: int = VOICE_ROOM_TTL_SECONDS,
     ) -> str:
-        """Generate a room token (HMAC-based for demo).
+        """Generate a LiveKit room access token.
 
-        In production, this would use the LiveKit API to generate a proper JWT.
-        For the beta, we use HMAC-SHA256 as a placeholder.
+        Uses the official LiveKit SDK JWT builder.
+        API secret is never logged or included in responses.
         """
-        payload = f"{room_name}:{int(time.time())}:{api_key}"
-        token = hmac.new(
-            api_secret.encode("utf-8"),
-            payload.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        return f"lk_token_{token[:32]}"
+        return _build_livekit_token(
+            room_name=room_name,
+            identity=identity,
+            api_key=api_key,
+            api_secret=api_secret,
+            ttl_seconds=ttl_seconds,
+        )
 
     def list_active_sessions(self) -> list[VoiceSession]:
         """List all active (non-expired, non-ended) sessions."""

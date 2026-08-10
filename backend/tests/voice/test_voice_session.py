@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -64,7 +65,7 @@ class TestVoiceSession:
         assert session.is_expired is False
 
     def test_end_session(self) -> None:
-        """End session → status='ended'."""
+        """End session -> status='ended'."""
         manager = VoiceSessionManager()
         session = manager.create_session(consultation_id=1, doctor_id=1)
 
@@ -77,14 +78,6 @@ class TestVoiceSession:
         manager = VoiceSessionManager()
         result = manager.end_session("nonexistent-room")
         assert result is None
-
-    def test_generate_room_token(self) -> None:
-        """Token starts with 'lk_token_'."""
-        manager = VoiceSessionManager()
-        token = manager.generate_room_token("test-room")
-
-        assert token.startswith("lk_token_")
-        assert len(token) > len("lk_token_")
 
     def test_list_active_sessions(self) -> None:
         """Only active sessions returned."""
@@ -104,6 +97,77 @@ class TestVoiceSession:
         assert s1.room_name in active_rooms
         assert s2.room_name not in active_rooms
         assert s3.room_name not in active_rooms
+
+
+class TestVoiceSessionTokenGeneration:
+    """Tests for LiveKit token generation."""
+
+    def _setup_mock(self):
+        """Create mock objects for livekit module."""
+        mock_token_instance = MagicMock()
+        mock_token_instance.with_identity.return_value = mock_token_instance
+        mock_token_instance.with_grants.return_value = mock_token_instance
+        mock_token_instance.with_ttl.return_value = mock_token_instance
+        mock_token_instance.to_jwt.return_value = "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJ0ZXN0In0.signature"
+
+        mock_lk_api = MagicMock()
+        mock_lk_api.AccessToken.return_value = mock_token_instance
+
+        mock_livekit = MagicMock()
+        mock_livekit.api = mock_lk_api
+
+        return mock_livekit, mock_lk_api, mock_token_instance
+
+    def test_generate_room_token_returns_jwt(self) -> None:
+        """generate_room_token returns a JWT-like string (3 dot-separated parts)."""
+        manager = VoiceSessionManager()
+        mock_livekit, mock_lk_api, mock_token_instance = self._setup_mock()
+
+        with patch.dict("sys.modules", {"livekit": mock_livekit, "livekit.api": mock_lk_api}):
+            token = manager.generate_room_token(
+                "test-room",
+                "doctor-1",
+                api_key="test-key",
+                api_secret="test-secret",
+            )
+
+        assert token == "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJ0ZXN0In0.signature"
+        # JWT has 3 parts separated by dots
+        assert len(token.split(".")) == 3
+
+    def test_generate_room_token_identity(self) -> None:
+        """Token generation includes correct identity."""
+        manager = VoiceSessionManager()
+        mock_livekit, mock_lk_api, mock_token_instance = self._setup_mock()
+
+        with patch.dict("sys.modules", {"livekit": mock_livekit, "livekit.api": mock_lk_api}):
+            manager.generate_room_token(
+                "test-room",
+                "doctor-42",
+                api_key="test-key",
+                api_secret="test-secret",
+            )
+
+        # Verify identity was set
+        mock_token_instance.with_identity.assert_called_once_with("doctor-42")
+
+    def test_generate_room_token_ttl_capped(self) -> None:
+        """Token TTL is capped at VOICE_ROOM_TTL_SECONDS (600)."""
+        manager = VoiceSessionManager()
+        mock_livekit, mock_lk_api, mock_token_instance = self._setup_mock()
+
+        with patch.dict("sys.modules", {"livekit": mock_livekit, "livekit.api": mock_lk_api}):
+            # Request 3600s TTL, should be capped to 600
+            manager.generate_room_token(
+                "test-room",
+                "doctor-1",
+                api_key="test-key",
+                api_secret="test-secret",
+                ttl_seconds=3600,
+            )
+
+        # Verify TTL was capped
+        mock_token_instance.with_ttl.assert_called_once_with(VOICE_ROOM_TTL_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +218,9 @@ class TestVoiceAgent:
             start_time=0.0,
             end_time=3.5,
             is_final=True,
+            room_sid="room-1",
+            participant_sid="participant-1",
+            turn_id="turn-1",
         )
 
         loop = asyncio.new_event_loop()
@@ -166,6 +233,7 @@ class TestVoiceAgent:
             loop.close()
 
         assert result["processed"] is True
+        assert result["persisted"] is True
         assert result["speaker"] == "doctor"
         assert len(agent.transcripts) == 1
         assert agent.transcripts[0].text == "你好，请问哪里不舒服？"
@@ -174,3 +242,68 @@ class TestVoiceAgent:
         summary = agent.get_transcript_summary()
         assert "[doctor]" in summary
         assert "你好" in summary
+
+    def test_duplicate_final_transcript_creates_one_message(self) -> None:
+        """Duplicate final transcript (same room_sid, participant_sid, turn_id) creates only one message."""
+        config = VoiceAgentConfig(
+            room_name="test-room", consultation_id=1, doctor_id=1
+        )
+        agent = VoiceAgent(config)
+
+        transcript = VoiceTranscript(
+            text="你好",
+            speaker="doctor",
+            start_time=0.0,
+            end_time=1.0,
+            is_final=True,
+            room_sid="room-1",
+            participant_sid="participant-1",
+            turn_id="turn-1",
+        )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result1 = loop.run_until_complete(agent.process_transcript(transcript))
+            # Same dedup key -> should be skipped
+            result2 = loop.run_until_complete(agent.process_transcript(transcript))
+        finally:
+            loop.close()
+
+        assert result1["processed"] is True
+        assert result1["duplicated"] is False
+        assert result2["processed"] is False
+        assert result2["duplicated"] is True
+
+        # Only one transcript stored (dedup worked)
+        assert len(agent.transcripts) == 1
+
+    def test_partial_transcript_memory_only(self) -> None:
+        """Partial transcripts are stored in memory but not persisted."""
+        config = VoiceAgentConfig(
+            room_name="test-room", consultation_id=1, doctor_id=1
+        )
+        agent = VoiceAgent(config)
+
+        partial = VoiceTranscript(
+            text="你",
+            speaker="doctor",
+            start_time=0.0,
+            end_time=0.5,
+            is_final=False,
+        )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(agent.process_transcript(partial))
+        finally:
+            loop.close()
+
+        assert result["processed"] is True
+        assert result["persisted"] is False
+        # Partial transcripts are in memory
+        assert len(agent.transcripts) == 1
+        # But not in summary (only final)
+        summary = agent.get_transcript_summary()
+        assert summary == ""

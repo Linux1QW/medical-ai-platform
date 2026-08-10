@@ -1,4 +1,5 @@
-# LiveKit Voice Beta — NOT installed in production image by default
-# Install separately for voice-enabled deployments
-livekit-agents==1.6.6
-livekit>=1.0,<2
+# Optional LiveKit voice dependencies
+# Install only when voice profile is built:
+#   pip install -r requirements-voice.txt
+livekit>=0.12.0
+livekit-agents>=0.12.0

@@ -6,7 +6,7 @@ Revises: 1a2b3c4d5e6f
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "2b3c4d5e6f7a"
 down_revision = "1a2b3c4d5e6f"
@@ -15,21 +15,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── 前置检查：非空 run_id 重复则失败 ─────────────────────────────────────
-    conn = op.get_bind()
-    dup_check = conn.execute(
-        sa.text(
-            "SELECT run_id, COUNT(*) AS cnt FROM evaluations "
-            "WHERE run_id IS NOT NULL "
-            "GROUP BY run_id HAVING cnt > 1"
+    # ── 前置检查：非空 run_id 重复则失败（仅在线模式） ────────────────────────
+    if not context.is_offline_mode():
+        conn = op.get_bind()
+        dup_check = conn.execute(
+            sa.text(
+                "SELECT run_id, COUNT(*) AS cnt FROM evaluations "
+                "WHERE run_id IS NOT NULL "
+                "GROUP BY run_id HAVING cnt > 1"
+            )
         )
-    )
-    duplicates = dup_check.fetchall()
-    if duplicates:
-        raise RuntimeError(
-            f"Migration blocked: found {len(duplicates)} duplicate non-null run_id(s) "
-            f"in evaluations table. Resolve duplicates before running this migration."
-        )
+        duplicates = dup_check.fetchall()
+        if duplicates:
+            raise RuntimeError(
+                f"Migration blocked: found {len(duplicates)} duplicate non-null run_id(s) "
+                f"in evaluations table. Resolve duplicates before running this migration."
+            )
 
     # ── 1. 创建 evaluation_dispatch_outbox 表 ────────────────────────────────
     op.create_table(

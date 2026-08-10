@@ -6,7 +6,7 @@ Revises: 2b3c4d5e6f7a
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "3c4d5e6f7a8b"
 down_revision = "2b3c4d5e6f7a"
@@ -39,21 +39,22 @@ def upgrade() -> None:
     )
 
     # ── 3. FK evaluations.run_id → evaluation_runs.id ───────────────────────
-    # precheck: 不存在 orphan run_id
-    conn = op.get_bind()
-    orphan_check = conn.execute(
-        sa.text(
-            "SELECT e.run_id FROM evaluations e "
-            "LEFT JOIN evaluation_runs er ON e.run_id = er.id "
-            "WHERE e.run_id IS NOT NULL AND er.id IS NULL"
+    # precheck: 不存在 orphan run_id（仅在线模式）
+    if not context.is_offline_mode():
+        conn = op.get_bind()
+        orphan_check = conn.execute(
+            sa.text(
+                "SELECT e.run_id FROM evaluations e "
+                "LEFT JOIN evaluation_runs er ON e.run_id = er.id "
+                "WHERE e.run_id IS NOT NULL AND er.id IS NULL"
+            )
         )
-    )
-    orphans = orphan_check.fetchall()
-    if orphans:
-        raise RuntimeError(
-            f"Migration blocked: found {len(orphans)} orphan run_id(s) in evaluations table. "
-            f"Run backfill_legacy_evaluation_runs.py before this migration."
-        )
+        orphans = orphan_check.fetchall()
+        if orphans:
+            raise RuntimeError(
+                f"Migration blocked: found {len(orphans)} orphan run_id(s) in evaluations table. "
+                f"Run backfill_legacy_evaluation_runs.py before this migration."
+            )
 
     op.create_foreign_key(
         "fk_evaluations_run_id_evaluation_runs",

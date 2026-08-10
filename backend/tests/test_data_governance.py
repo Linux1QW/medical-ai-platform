@@ -290,28 +290,28 @@ class TestCleanupTask:
         """清理逻辑正确删除过期数据"""
         from app.tasks.data_cleanup import _do_cleanup
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 5
-
         mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.commit = AsyncMock()
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_db)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("app.db.session.AsyncSessionLocal", return_value=mock_session):
+        with (
+            patch("app.tasks.data_cleanup.maybe_cleanup_audit_logs", AsyncMock(return_value={"deleted": 5, "skipped": False})),
+            patch("app.services.evaluation_dispatch_service.purge_terminal_dispatches", AsyncMock(return_value=3)),
+            patch("app.tasks.data_cleanup.cleanup_unreported_runs", AsyncMock(return_value=2)),
+            patch("app.db.session.AsyncSessionLocal", return_value=mock_session),
+        ):
             result = await _do_cleanup()
 
         assert result["audit_logs_deleted"] == 5
-        assert result["evaluation_runs_deleted"] == 5
-        assert result["node_results_deleted"] == 5
+        assert result["outbox_deleted"] == 3
+        assert result["evaluation_runs_deleted"] == 2
+        assert "outbox_cutoff" in result
         assert "audit_cutoff" in result
         assert "run_cutoff" in result
-        # 验证 execute 被调用了三次（审计日志 + 节点审计行 + 评估运行记录）
-        assert mock_db.execute.call_count == 3
-        mock_db.commit.assert_called_once()
+        mock_db.commit.assert_awaited_once()
 
 
 # ── 测试数据导出 API ──────────────────────────────────────────────────────────

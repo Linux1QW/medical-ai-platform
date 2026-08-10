@@ -158,14 +158,13 @@ async def claim_run(
 
     # running — 检查 lease
     if run.status == "running":
-        lease_valid = run.lease_expires_at is not None and run.lease_expires_at > now
+        lease_expires_at = run.lease_expires_at
 
-        if lease_valid:
+        if lease_expires_at is not None and lease_expires_at > now:
             # 同 task_id → ACTIVE_SAME_TASK
             if run.execution_task_id == celery_task_id:
-                _lease_exp = run.lease_expires_at  # type: datetime, guaranteed by lease_valid
                 remaining = math.ceil(
-                    (_lease_exp - now).total_seconds()  # type: ignore[operator]
+                    (lease_expires_at - now).total_seconds()
                 ) + 1
                 return RunClaimResult(
                     disposition=RunClaimDisposition.ACTIVE_SAME_TASK,

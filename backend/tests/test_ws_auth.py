@@ -2,6 +2,7 @@
 """WebSocket 首条消息鉴权回归测试（#18）+ Task 4 统一认证 + Task 5 run_id 路由"""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -58,11 +59,18 @@ class TestWebSocketFirstMessageAuth:
             _assert_closed_1008(ws)
 
     def test_valid_token_receives_auth_ok(self, client, monkeypatch):
-        # 绕过真实数据库：mock EvaluationRun 查询与访问控制
+        # 绕过真实数据库：mock 认证与 run 访问控制
         fake_run = MagicMock()
         fake_run.consultation_id = 1
         fake_run.id = "test-run-id-123"
-        monkeypatch.setattr(eval_module, "require_evaluation_run_access", AsyncMock(return_value=fake_run))
+
+        async def _authenticated_user(db, token):
+            return SimpleNamespace(id=1, role="doctor", permissions=None)
+
+        monkeypatch.setattr(eval_module, "authenticate_access_token", _authenticated_user)
+        monkeypatch.setattr(
+            eval_module, "require_evaluation_run_access", AsyncMock(return_value=fake_run)
+        )
 
         token = create_access_token({"sub": "1"})
         with client.websocket_connect(WS_URL) as ws:

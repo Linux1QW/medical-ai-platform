@@ -685,7 +685,7 @@ CASES_DATA = {
     ["expected_diagnosis:热射病", "unrevealed:核心体温超过40°C", "unrevealed:有横纹肌溶解风险"],
     ["examination", "hpi_associated", "treatment_communication"]),
 
-    ("emergency", "medium", "anxious"): (20, "女", "踝关节扭伤后肿痛一小时", [
+    ("emergency", "medium", "anxious"): (20, "女", "下楼梯崴脚后肿痛一小时", [
         ("doctor", "您好，脚踝怎么伤的？"),
         ("patient", "下楼梯的时候崴了一下，马上就肿了。"),
         ("doctor", "能站起来走几步吗？"),

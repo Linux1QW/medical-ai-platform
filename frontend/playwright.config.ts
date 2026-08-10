@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Playwright 配置 for V1.1 Production Closure E2E
- * 
+ *
  * 测试完整评估 → 复核闭环流程
  */
 export default defineConfig({
@@ -15,7 +15,7 @@ export default defineConfig({
     ['html', { open: 'never' }],
     ['list'],
   ],
-  
+
   /* 共享测试配置 */
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://localhost:8080',

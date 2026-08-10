@@ -70,7 +70,7 @@ jobs:
     environment: ${{ inputs.environment }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # Step 1: GitHub Environment approval (handled by environment protection rules)
       - name: Step 1 – Environment approval gate
@@ -79,7 +79,7 @@ jobs:
 
       # Step 2: Pull image with exact tag
       - name: Step 2 – Pull immutable image
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -102,7 +102,7 @@ jobs:
 
       # Step 3: Read previous tag and enable maintenance
       - name: Step 3 – Enable maintenance mode & drain
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -147,7 +147,7 @@ jobs:
 
       # Step 4: Drain in-flight tasks
       - name: Step 4 – Drain in-flight evaluations
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -208,7 +208,7 @@ jobs:
 
       # Step 5: Encrypted backup
       - name: Step 5 – Encrypted database backup
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -237,7 +237,7 @@ jobs:
 
       # Step 6: Run migrations
       - name: Step 6 – Run database migrations
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -264,7 +264,7 @@ jobs:
 
       # Step 7: Start new services
       - name: Step 7 – Start new version
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -286,7 +286,7 @@ jobs:
 
       # Step 8: Smoke tests
       - name: Step 8 – Smoke tests
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -333,7 +333,7 @@ jobs:
 
       # Step 9: Restore traffic
       - name: Step 9 – Restore traffic
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -372,7 +372,7 @@ jobs:
       # Step 10: Rollback on failure (conditional)
       - name: Step 10 – Rollback on failure
         if: failure()
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -413,7 +413,7 @@ jobs:
 
       # Step 11: Cleanup (no unconditional image prune)
       - name: Step 11 – Image cleanup (retain current + previous)
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}

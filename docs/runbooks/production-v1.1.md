@@ -1,6 +1,6 @@
 # Production Runbook – Medical AI Platform V1.1
 
-> **Scope:** Single-host controlled production with maintenance windows.  
+> **Scope:** Single-host controlled production with maintenance windows.
 > **Not** a high-availability architecture.
 
 ---

@@ -43,10 +43,10 @@ jobs:
 
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -146,7 +146,7 @@ jobs:
       - name: Upload coverage to Codecov
         if: always()
         # v5.0.0
-        uses: codecov/codecov-action@b9fd48f0b4f09e4a5b1d0e2e5e4f5c3d6a8b9c0e
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45
         with:
           files: ./backend/coverage.xml
           flags: backend
@@ -159,10 +159,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # v5.0.0
-      - uses: actions/setup-node@b5e8b5c6d7e8f7a8b9c0d1e2f3a4b5c6d7e8f9a0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '22'
           cache: 'npm'
@@ -218,10 +218,10 @@ jobs:
 
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -265,12 +265,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
 
@@ -305,12 +305,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
 
@@ -320,7 +320,7 @@ jobs:
           pip-audit -r backend/requirements.txt
 
       # v5.0.0
-      - uses: actions/setup-node@b5e8b5c6d7e8f7a8b9c0d1e2f3a4b5c6d7e8f9a0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '22'
           cache: 'npm'
@@ -334,7 +334,7 @@ jobs:
 
       - name: Trivy filesystem scan
         # v0.36.0
-        uses: aquasecurity/trivy-action@b6c7c4e8f7a9c8e2d5f6b8c9a0d1e2f3a4b5c6d7
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
           scan-type: fs
           scan-ref: .
@@ -343,7 +343,7 @@ jobs:
 
       - name: Gitleaks secret scan
         # v8.18.0
-        uses: gitleaks/gitleaks-action@a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
         env:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
@@ -354,10 +354,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -390,7 +390,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set lowercase image repo
         run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
@@ -411,7 +411,7 @@ jobs:
           sha256sum frontend-image.tar >> manifest.txt
 
       - name: Upload candidate images as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: docker-candidate-images
           path: |
@@ -428,10 +428,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Download candidate images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: docker-candidate-images
 
@@ -450,7 +450,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: compose-smoke-logs
           path: |
@@ -465,7 +465,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download candidate images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: docker-candidate-images
 
@@ -476,7 +476,7 @@ jobs:
 
       - name: Trivy image scan (backend)
         # v0.36.0
-        uses: aquasecurity/trivy-action@b6c7c4e8f7a9c8e2d5f6b8c9a0d1e2f3a4b5c6d7
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
           image-ref: ${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -484,7 +484,7 @@ jobs:
 
       - name: Trivy image scan (frontend)
         # v0.36.0
-        uses: aquasecurity/trivy-action@b6c7c4e8f7a9c8e2d5f6b8c9a0d1e2f3a4b5c6d7
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
           image-ref: ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -499,10 +499,10 @@ jobs:
     if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       # v6.0.0
-      - uses: actions/setup-python@e797f83bcb1c12e7e5e580b8e22e5b8e2b8a0e2c
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -542,20 +542,20 @@ jobs:
     environment: production
     steps:
       # v5.0.0
-      - uses: actions/checkout@08eba0b21bd66751aebcf6b0b4c7f0c7f4e2e2b6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set lowercase image repo
         run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       # v4.0.0
-      - uses: docker/login-action@e92390c5fb421da1463d20d0380a7e3b8f6c0d1e
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download candidate images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: docker-candidate-images
 

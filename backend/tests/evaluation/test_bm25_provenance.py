@@ -1,7 +1,7 @@
 """Tests for BM25 provenance validation."""
 import json
+
 import pytest
-from pathlib import Path
 
 from evaluation.provenance import (
     ProvenanceError,

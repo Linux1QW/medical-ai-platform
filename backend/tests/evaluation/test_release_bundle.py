@@ -1,16 +1,14 @@
 """Tests for RAG release bundle verification."""
 import json
-
-import pytest
+import sys
 from pathlib import Path
 
-import sys
-import os
+import pytest
 
 # Add scripts/eval to path for import
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "eval"))
 
-from verify_release_bundle import verify_bundle, REQUIRED_MEMBERS
+from verify_release_bundle import REQUIRED_MEMBERS, verify_bundle
 
 
 @pytest.fixture

@@ -1,12 +1,11 @@
 """Tests for V1.1 fault matrix controller."""
-import pytest
-from unittest.mock import patch
-
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "ci"))
 
-from run_v11_fault_matrix import FAULTS, run_fault_matrix, FaultResult
+from run_v11_fault_matrix import FAULTS, FaultResult, run_fault_matrix
 
 
 def test_fault_matrix_defines_four_scenarios():

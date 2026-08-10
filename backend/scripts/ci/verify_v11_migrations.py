@@ -16,7 +16,6 @@ import argparse
 import hashlib
 import subprocess
 import sys
-import textwrap
 import uuid
 from contextlib import contextmanager
 from pathlib import Path

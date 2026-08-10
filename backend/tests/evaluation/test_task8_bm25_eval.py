@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from scripts.eval import evaluate_bm25
 
 

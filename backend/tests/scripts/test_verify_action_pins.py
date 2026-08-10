@@ -1,6 +1,4 @@
 """Tests for verify_action_pins."""
-import pytest
-from pathlib import Path
 
 from scripts.ci.verify_action_pins import verify_workflow_pins
 

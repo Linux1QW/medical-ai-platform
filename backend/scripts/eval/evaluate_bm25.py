@@ -389,6 +389,75 @@ def validate_golden_only(golden_path: Path) -> Dict[str, Any]:
     return {"passed": True, "case_count": len(cases), "categories": sorted(present_categories)}
 
 
+def _write_report(report: Dict[str, Any], output: Optional[Path]) -> None:
+    """Write the report to the output path or print a summary."""
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("w", encoding="utf-8") as output_file:
+            json.dump(report, output_file, ensure_ascii=False, indent=2)
+            output_file.write("\n")
+        print(f"BM25 report written to {output} ({report['case_count']} cases)")
+    else:
+        print(f"BM25 report evaluated ({report['case_count']} cases)")
+
+
+def _run_policy_gates(
+    args: argparse.Namespace,
+    report: dict,
+    baseline: dict,
+) -> Tuple[Optional[dict], Optional[int]]:
+    """Validate provenance and policy gates.
+
+    Returns (policy_gate_result, error_exit_code).
+    error_exit_code is None when no error occurred.
+    """
+    if not (
+        args.fail_on_regression
+        and args.policy
+        and args.baseline_provenance
+        and args.consistency_report
+    ):
+        return None, None
+
+    # Validate provenance
+    try:
+        candidate_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, cwd=Path(__file__).resolve().parents[2]
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        candidate_commit = "unknown"
+
+    manifest_path = (
+        Path(args.compare).parent / "index-manifest.json" if args.compare else Path("index-manifest.json")
+    )
+    try:
+        validate_baseline_provenance(
+            provenance_path=Path(args.baseline_provenance),
+            baseline_path=Path(args.compare),
+            golden_path=Path(args.golden),
+            evaluator_path=Path(__file__),
+            manifest_path=manifest_path,
+            candidate_commit=candidate_commit,
+        )
+    except ProvenanceError as e:
+        print(f"ERROR: provenance validation failed: {e}", file=sys.stderr)
+        return None, 1
+
+    # Load consistency report and inject into candidate report
+    consistency = json.loads(Path(args.consistency_report).read_text(encoding="utf-8"))
+    report["consistency"] = {
+        "measured": True,
+        "generation_mismatch_count": consistency.get("generation_mismatch_count", 0),
+        "stale_cache_hit_count": consistency.get("stale_cache_hit_count", 0),
+    }
+
+    # Load policy and validate gates
+    policy = load_release_policy(Path(args.policy))
+    policy_gate_result = validate_policy_gates(report, baseline, policy)
+    report["policy_gates"] = policy_gate_result
+    return policy_gate_result, None
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -413,9 +482,8 @@ def main() -> int:
         if result["passed"]:
             print(f"Golden set valid: {result['case_count']} cases, categories: {result['categories']}")
             return 0
-        else:
-            print(f"Golden set validation failed: {result['error']}", file=sys.stderr)
-            return 1
+        print(f"Golden set validation failed: {result['error']}", file=sys.stderr)
+        return 1
 
     # A missing/empty active index is an honest offline skip.  It is not a
     # fabricated green candidate and leaves the real-gate decision to CI once
@@ -442,51 +510,12 @@ def main() -> int:
         gate_result = compare_reports(report, baseline)
         report["gates"] = gate_result
 
-    # Provenance + policy gate path
-    if args.fail_on_regression and args.policy and args.baseline_provenance and args.consistency_report:
-        # Validate provenance
-        try:
-            candidate_commit = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, cwd=Path(__file__).resolve().parents[2]
-            ).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            candidate_commit = "unknown"
+        # Provenance + policy gate path
+        policy_gate_result, err = _run_policy_gates(args, report, baseline)
+        if err is not None:
+            return err
 
-        manifest_path = Path(args.compare).parent / "index-manifest.json" if args.compare else Path("index-manifest.json")
-        try:
-            validate_baseline_provenance(
-                provenance_path=Path(args.baseline_provenance),
-                baseline_path=Path(args.compare),
-                golden_path=Path(args.golden),
-                evaluator_path=Path(__file__),
-                manifest_path=manifest_path,
-                candidate_commit=candidate_commit,
-            )
-        except ProvenanceError as e:
-            print(f"ERROR: provenance validation failed: {e}", file=sys.stderr)
-            return 1
-
-        # Load consistency report and inject into candidate report
-        consistency = json.loads(Path(args.consistency_report).read_text(encoding="utf-8"))
-        report["consistency"] = {
-            "measured": True,
-            "generation_mismatch_count": consistency.get("generation_mismatch_count", 0),
-            "stale_cache_hit_count": consistency.get("stale_cache_hit_count", 0),
-        }
-
-        # Load policy and validate gates
-        policy = load_release_policy(Path(args.policy))
-        policy_gate_result = validate_policy_gates(report, baseline, policy)
-        report["policy_gates"] = policy_gate_result
-
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", encoding="utf-8") as output_file:
-            json.dump(report, output_file, ensure_ascii=False, indent=2)
-            output_file.write("\n")
-        print(f"BM25 report written to {args.output} ({report['case_count']} cases)")
-    else:
-        print(f"BM25 report evaluated ({report['case_count']} cases)")
+    _write_report(report, args.output)
 
     exit_code = _preservation_exit_code(
         report,

@@ -118,7 +118,7 @@ async function reviewAsAdmin(
 test.describe('V1.1 Evaluation and Review Closure', () => {
   test('doctor submission reaches reviewed after admin review', async ({ page }) => {
     // 1. 登录并打开已完成的问诊
-    const consultationId = await loginAndOpenCompletedConsultation(page);
+    await loginAndOpenCompletedConsultation(page);
 
     // 2. 提交评估并期望 202
     const runId = await submitEvaluationAndExpect202(page);

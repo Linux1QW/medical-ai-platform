@@ -597,9 +597,11 @@ async def test_purge_terminal_dispatches(db_session: AsyncSession):
 
 def test_claim_uses_skip_locked_and_deterministic_order():
     """claim_dispatch_batch must use FOR UPDATE SKIP LOCKED with deterministic ordering."""
-    from sqlalchemy.dialects import mysql
-    from app.services.evaluation_dispatch_service import build_claim_statement
     from datetime import datetime, timezone
+
+    from sqlalchemy.dialects import mysql
+
+    from app.services.evaluation_dispatch_service import build_claim_statement
 
     now = datetime.now(timezone.utc)
     stmt = build_claim_statement(now=now, batch_size=20)

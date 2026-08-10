@@ -32,11 +32,11 @@ function setupHook(overrides: Record<string, unknown> = {}) {
     suggestion: null,
     errorMessage: null,
     turnNo: 0,
+    history: [],
     requestSuggestion: vi.fn(),
+    retryLastSuggestion: vi.fn(),
     handleFeedback: vi.fn(),
-    pendingText: '',
-    setPendingText: vi.fn(),
-    applyToInput: vi.fn().mockReturnValue(null),
+    dismissSuggestion: vi.fn(),
     ...overrides,
   });
 }
@@ -48,14 +48,14 @@ describe('CoachPanel', () => {
 
   it('shows "教练已关闭" when status is disabled', () => {
     setupHook({ status: 'disabled' });
-    render(<CoachPanel consultationId={1} doctorId={1} />);
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
     expect(screen.getByText('教练已关闭')).toBeInTheDocument();
     expect(screen.getByText('教练功能已关闭。请联系管理员启用。')).toBeInTheDocument();
   });
 
   it('shows textarea and button when status is idle', () => {
     setupHook({ status: 'idle' });
-    render(<CoachPanel consultationId={1} doctorId={1} />);
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
     expect(screen.getByText('等待问诊')).toBeInTheDocument();
     expect(screen.getByLabelText('教练输入框')).toBeInTheDocument();
     expect(screen.getByText('给我一个提示')).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe('CoachPanel', () => {
 
   it('displays suggestion text when status is suggestion', () => {
     setupHook({ status: 'suggestion', suggestion: mockSuggestion });
-    render(<CoachPanel consultationId={1} doctorId={1} />);
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
     expect(screen.getByText('建议就绪')).toBeInTheDocument();
     expect(screen.getByText('建议问题：')).toBeInTheDocument();
     expect(screen.getByText('您是否有胸闷的症状？')).toBeInTheDocument();
@@ -71,24 +71,20 @@ describe('CoachPanel', () => {
     expect(screen.getByText('置信度: 85%')).toBeInTheDocument();
   });
 
-  it('calls applyToInput and updates input when "填入输入框" is clicked', () => {
-    const setPendingText = vi.fn();
-    const applyToInput = vi.fn().mockReturnValue('您是否有胸闷的症状？');
+  it('calls onApplySuggestion with suggested text when "填入输入框" is clicked', () => {
+    const onApplySuggestion = vi.fn();
     setupHook({
       status: 'suggestion',
       suggestion: mockSuggestion,
-      setPendingText,
-      applyToInput,
     });
-    render(<CoachPanel consultationId={1} doctorId={1} />);
+    render(<CoachPanel consultationId={1} onApplySuggestion={onApplySuggestion} />);
     fireEvent.click(screen.getByText('填入输入框'));
-    expect(applyToInput).toHaveBeenCalled();
-    expect(setPendingText).toHaveBeenCalledWith('您是否有胸闷的症状？');
+    expect(onApplySuggestion).toHaveBeenCalledWith('您是否有胸闷的症状？');
   });
 
   it('shows thinking indicator when status is thinking', () => {
     setupHook({ status: 'thinking' });
-    render(<CoachPanel consultationId={1} doctorId={1} />);
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
     expect(screen.getByText('正在分析...')).toBeInTheDocument();
     expect(screen.getByText('正在分析您的问诊内容...')).toBeInTheDocument();
   });

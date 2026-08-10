@@ -1,9 +1,7 @@
-export interface CoachStreamRequest {
-  consultation_id: number;
-  doctor_id: number;
-  latest_message: string;
-  idempotency_key: string;
-}
+import request from '../utils/request';
+import { createSSEParser } from './sseParser';
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface CoachState {
   consultation_id: number;
@@ -31,89 +29,172 @@ export interface FeedbackRequest {
   reason?: string;
 }
 
-const API_BASE = '/api/v1/coach';
-
-export async function getCoachState(consultationId: number): Promise<CoachState> {
-  const res = await fetch(`${API_BASE}/consultations/${consultationId}/state`);
-  if (!res.ok) throw new Error(`Failed to get coach state: ${res.status}`);
-  return res.json();
+export interface CoachStreamRequest {
+  consultation_id: number;
+  latest_message: string;
+  idempotency_key: string;
 }
 
+export type CoachSSEEvent =
+  | { type: 'thinking'; turn_no: number; stage: string }
+  | { type: 'suggestion'; suggestion: CoachSuggestion }
+  | { type: 'error'; message: string }
+  | { type: 'done' };
+
+export interface CoachTraceNode {
+  node: string;
+  status: 'started' | 'completed' | 'error';
+  duration_ms: number | null;
+  /** Sanitised, user-safe description. Never raw prompts or tool args. */
+  safe_message: string | null;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function getAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+const API_BASE = '/coach';
+
+// ── JSON endpoints (use authenticated axios instance) ─────────────────────────
+
+/** Fetch current coach state for a consultation. */
+export async function getCoachState(consultationId: number): Promise<CoachState> {
+  return request.get(`${API_BASE}/consultations/${consultationId}/state`);
+}
+
+/** Submit user feedback on a suggestion. */
 export async function submitFeedback(
   suggestionId: string,
   feedback: FeedbackRequest,
 ): Promise<{ suggestion_id: string; feedback: string; recorded: boolean }> {
-  const res = await fetch(`${API_BASE}/suggestions/${suggestionId}/feedback`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(feedback),
-  });
-  if (!res.ok) throw new Error(`Failed to submit feedback: ${res.status}`);
-  return res.json();
+  return request.post(`${API_BASE}/suggestions/${suggestionId}/feedback`, feedback);
 }
 
+/** Fetch sanitised agent trace projection (admin only). */
+export async function getCoachTrace(consultationId: number): Promise<CoachTraceNode[]> {
+  return request.get(`${API_BASE}/consultations/${consultationId}/trace`);
+}
+
+// ── SSE stream (uses fetch with auth token) ──────────────────────────────────
+
+export interface CoachStreamCallbacks {
+  onEvent: (event: CoachSSEEvent) => void;
+  onError?: (error: Error) => void;
+}
+
+/**
+ * Open a coach suggestion SSE stream.
+ *
+ * - Uses the session token for authentication (no doctorId parameter).
+ * - Rejects non-2xx responses before reading the stream body.
+ * - Supports `Last-Event-ID` for replay after reconnect.
+ *
+ * Returns an `AbortController` so the caller can cancel the stream.
+ */
 export function createCoachSSEStream(
   consultationId: number,
-  request: CoachStreamRequest,
-  onEvent: (event: string, data: Record<string, unknown>) => void,
+  streamRequest: CoachStreamRequest,
+  callbacks: CoachStreamCallbacks,
   lastEventId?: string,
 ): AbortController {
   const controller = new AbortController();
+  const parser = createSSEParser();
 
-  fetch(`${API_BASE}/consultations/${consultationId}/suggestions/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
-    },
-    body: JSON.stringify(request),
-    signal: controller.signal,
-  })
-    .then(async (response) => {
-      const reader = response.body?.getReader();
-      if (!reader) return;
+  const run = async () => {
+    const response = await fetch(`/api/v1${API_BASE}/consultations/${consultationId}/suggestions/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...getAuthHeaders(),
+        ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
+      },
+      body: JSON.stringify(streamRequest),
+      signal: controller.signal,
+    });
 
-      const decoder = new TextDecoder();
-      let buffer = '';
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const msg =
+        (body as Record<string, string> | null)?.message ||
+        (body as Record<string, string> | null)?.detail ||
+        `HTTP ${response.status}`;
+      throw new Error(msg);
+    }
 
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Unable to read response stream');
+
+    const decoder = new TextDecoder();
+    try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        const chunk = decoder.decode(value, { stream: true });
+        const events = parser.push(chunk);
 
-        let currentEvent = '';
-        let currentData = '';
-        let currentId = '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7);
-          } else if (line.startsWith('data: ')) {
-            currentData = line.slice(6);
-          } else if (line.startsWith('id: ')) {
-            currentId = line.slice(4);
-          } else if (line === '' && currentEvent) {
-            try {
-              const data = JSON.parse(currentData) as Record<string, unknown>;
-              onEvent(currentEvent, { ...data, _id: currentId || undefined });
-            } catch {
-              onEvent(currentEvent, { _raw: currentData, _id: currentId || undefined });
-            }
-            currentEvent = '';
-            currentData = '';
-            currentId = '';
-          }
+        for (const evt of events) {
+          handleSSEEvent(evt.event, evt.data, callbacks);
         }
       }
-    })
-    .catch((err: Error) => {
-      if (err.name !== 'AbortError') {
-        onEvent('error', { message: err.message });
+      // Flush any remaining event
+      for (const evt of parser.flush()) {
+        handleSSEEvent(evt.event, evt.data, callbacks);
       }
-    });
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  run().catch((err: Error) => {
+    if (err.name !== 'AbortError') {
+      callbacks.onError?.(err);
+    }
+  });
 
   return controller;
+}
+
+function handleSSEEvent(
+  eventType: string,
+  rawData: unknown,
+  callbacks: CoachStreamCallbacks,
+): void {
+  const data = (rawData ?? {}) as Record<string, unknown>;
+
+  switch (eventType) {
+    case 'thinking':
+      callbacks.onEvent({
+        type: 'thinking',
+        turn_no: (data.turn_no as number) ?? 0,
+        stage: (data.stage as string) ?? '',
+      });
+      break;
+
+    case 'suggestion':
+      callbacks.onEvent({
+        type: 'suggestion',
+        suggestion: data as unknown as CoachSuggestion,
+      });
+      break;
+
+    case 'error':
+      callbacks.onEvent({
+        type: 'error',
+        message: (data.message as string) ?? 'Unknown error',
+      });
+      break;
+
+    case 'done':
+      callbacks.onEvent({ type: 'done' });
+      break;
+
+    default:
+      // Unknown event type — ignore
+      break;
+  }
 }

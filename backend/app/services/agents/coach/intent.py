@@ -1,7 +1,7 @@
 """Rules-first + LLM fallback intent classification."""
 from __future__ import annotations
 
-from typing import Callable, Literal, get_args
+from typing import Callable, Literal, cast, get_args
 
 from app.agent_runtime.contracts import CoachIntent
 
@@ -47,7 +47,7 @@ def classify_intent(
         try:
             result = llm_fn(message)
             if result in get_args(CoachIntent):
-                return result
+                return cast(CoachIntent, result)
         except Exception:
             pass
 

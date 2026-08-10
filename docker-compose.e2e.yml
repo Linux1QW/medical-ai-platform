@@ -1,14 +1,14 @@
 # ============================================
-# Docker Compose E2E Override - V1.1 Production Closure
+# Docker Compose E2E Override - V1.2 Coach Intelligence
 # ============================================
 # 使用方式:
-#   docker compose -p medical-ai-v11-e2e -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+#   docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
 #
 # 清理:
-#   docker compose -p medical-ai-v11-e2e -f docker-compose.yml -f docker-compose.e2e.yml down -v
+#   docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml down -v
 # ============================================
 
-name: medical-ai-v11-e2e
+name: medical-ai-v12-e2e
 
 # ──────────────────────────────────────────
 # E2E 环境覆盖
@@ -36,10 +36,10 @@ x-e2e-backend-environment: &e2e-backend-environment
   QWEN_MODEL: mock-chat
   RERANK_MODEL: mock-rerank
   # RAG 索引版本
-  ACTIVE_INDEX_VERSION: e2e-low-evidence-v1
+  ACTIVE_INDEX_VERSION: e2e-coach-v12
   # E2E 测试凭据
-  E2E_ADMIN_USER: admin_v11
-  E2E_DOCTOR_USER: doctor_v11
+  E2E_ADMIN_USER: admin_v12
+  E2E_DOCTOR_USER: doctor_v12
   E2E_PASSWORD: e2e_test_password_2026
   # CORS 允许 Playwright 访问
   CORS_ORIGINS: '["http://localhost:${E2E_FRONTEND_PORT:-8080}"]'
@@ -91,7 +91,7 @@ services:
     environment:
       MYSQL_DATABASE: medical_ai_e2e
 
-  # ── Backend（FastAPI API）────────────────────
+  # ── Backend A (FastAPI API) ──────────────────
   backend:
     environment:
       <<: *e2e-backend-environment
@@ -100,6 +100,32 @@ services:
     depends_on:
       mock-openai:
         condition: service_healthy
+
+  # ── Backend B (second instance for multi-instance tests) ──
+  backend-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      <<: *e2e-backend-environment
+    ports:
+      - "${E2E_BACKEND_B_PORT:-8001}:8000"
+    depends_on:
+      mock-openai:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis-state:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend-net
 
   # ── Evaluation Dispatcher ────────────────────
   evaluation-dispatcher:
@@ -130,7 +156,7 @@ services:
       backend:
         condition: service_healthy
 
-  # ── Seed（一次性，创建测试数据）──────────────
+  # ── Seed V1.1（production smoke）────────────
   seed:
     build:
       context: .
@@ -144,6 +170,22 @@ services:
         condition: service_completed_successfully
       backend:
         condition: service_healthy
+    restart: "no"
+    networks:
+      - backend-net
+
+  # ── Seed V1.2（Coach E2E data）──────────────
+  seed-v12:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    command: python -m tests.fixtures.seed_v12_coach_e2e
+    environment:
+      <<: *e2e-backend-environment
+    depends_on:
+      seed:
+        condition: service_completed_successfully
     restart: "no"
     networks:
       - backend-net

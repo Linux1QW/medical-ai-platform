@@ -1,37 +1,58 @@
-"""Trainee profile memory service with approval lifecycle."""
+"""Trainee profile memory service with approval lifecycle and DB persistence."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Optional
 
-MemoryStatus = Literal["candidate", "approved", "rejected", "expired"]
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.audit import record_audit_log
+from app.repositories.trainee_memory import TraineeMemoryRepository
 
 VALID_DIMENSIONS = [
     "rapport", "information_gathering", "clinical_reasoning",
     "communication", "safety_awareness", "professionalism",
 ]
 
+# Patterns that suggest PHI or non-trainee-behavior content
+_PHI_PATTERNS = re.compile(
+    r"\b("
+    r"\d{3}-\d{2}-\d{4}"        # SSN
+    r"|\d{16,19}"                # Credit card
+    r"|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"  # Email
+    r"|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"  # IP address
+    r")",
+    re.IGNORECASE,
+)
 
-@dataclass
-class ProfileMemoryEntry:
-    """In-memory profile memory entry."""
-    memory_id: str
-    doctor_id: int
-    status: MemoryStatus
-    skill_dimension: str
-    summary: str
-    evidence_refs: list[str] = field(default_factory=list)
-    reviewer_id: int | None = None
-    review_comment: str | None = None
-    reviewed_at: datetime | None = None
-    expires_at: datetime | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    consent_given: bool = False  # Default OFF
+# Keywords suggesting non-trainee-behavior content (patient data, not behavior)
+_NON_BEHAVIOR_KEYWORDS = re.compile(
+    r"\b("
+    r"patient\s+name"
+    r"|diagnosis\s+code"
+    r"|icd-10"
+    r"|prescription\s+details"
+    r"|lab\s+results?\s+for\s+patient"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_deidentification(summary: str) -> None:
+    """Validate that summary contains no PHI or patient-identifiable info."""
+    if _PHI_PATTERNS.search(summary):
+        raise ValueError("Summary contains potential PHI or identifiable information")
+
+
+def _validate_trainee_behavior_only(summary: str) -> None:
+    """Validate that summary describes trainee behavior, not patient data."""
+    if _NON_BEHAVIOR_KEYWORDS.search(summary):
+        raise ValueError("Summary must describe trainee behavior only, not patient data")
 
 
 class ProfileMemoryService:
-    """Manages trainee profile memories.
+    """Manages trainee profile memories with DB persistence.
 
     Lifecycle: candidate → approved/rejected/expired
     - Only approved memories are visible to the coach
@@ -40,133 +61,159 @@ class ProfileMemoryService:
     - 6 skill dimensions
     """
 
-    def __init__(self) -> None:
-        self._memories: dict[str, ProfileMemoryEntry] = {}
-        self._consent: dict[int, bool] = {}  # doctor_id → consent
-        self._counter = 0
+    def __init__(self, db: AsyncSession) -> None:
+        self._repo = TraineeMemoryRepository(db)
+        self._db = db
 
-    def _next_id(self) -> str:
-        self._counter += 1
-        return f"mem_{self._counter:06d}"
-
-    def create_candidate(
+    async def create_candidate(
         self,
         *,
         doctor_id: int,
         skill_dimension: str,
         summary: str,
-        evidence_refs: list[str] | None = None,
-    ) -> ProfileMemoryEntry:
-        """Create a new candidate memory entry."""
+        evidence_refs: Optional[list[str]] = None,
+    ):
+        """Create a new candidate memory entry.
+
+        Validates:
+        - skill_dimension is one of the 6 valid dimensions
+        - summary is deidentified (no PHI)
+        - summary describes trainee behavior only
+        """
         if skill_dimension not in VALID_DIMENSIONS:
             raise ValueError(
                 f"Invalid skill dimension: {skill_dimension}. "
                 f"Must be one of {VALID_DIMENSIONS}"
             )
 
-        entry = ProfileMemoryEntry(
-            memory_id=self._next_id(),
+        _validate_deidentification(summary)
+        _validate_trainee_behavior_only(summary)
+
+        memory = await self._repo.create_memory(
             doctor_id=doctor_id,
-            status="candidate",
             skill_dimension=skill_dimension,
             summary=summary[:500],
             evidence_refs=evidence_refs or [],
         )
-        self._memories[entry.memory_id] = entry
-        return entry
+        return memory
 
-    def approve(
+    async def approve(
         self,
-        memory_id: str,
+        memory_id: int,
+        doctor_id: int,
         *,
         reviewer_id: int,
-        review_comment: str | None = None,
+        review_comment: Optional[str] = None,
         ttl_days: int = 90,
-    ) -> ProfileMemoryEntry:
-        """Approve a candidate memory."""
-        entry = self._memories.get(memory_id)
-        if entry is None:
-            raise KeyError(f"Memory {memory_id} not found")
-        if entry.status != "candidate":
-            raise ValueError(
-                f"Memory {memory_id} is {entry.status}, not candidate"
-            )
+    ):
+        """Approve a candidate memory.
 
-        entry.status = "approved"
-        entry.reviewer_id = reviewer_id
-        entry.review_comment = review_comment
-        entry.reviewed_at = datetime.utcnow()
-        entry.expires_at = datetime.utcnow() + timedelta(days=ttl_days)
-        return entry
+        Records reviewer from token and creates audit event.
+        """
+        expires_at = datetime.utcnow() + timedelta(days=ttl_days)
+        memory = await self._repo.update_status(
+            memory_id=memory_id,
+            doctor_id=doctor_id,
+            status="approved",
+            reviewer_id=reviewer_id,
+            review_comment=review_comment,
+        )
+        if memory is None:
+            raise KeyError(f"Memory {memory_id} not found for doctor {doctor_id}")
 
-    def reject(
+        # Set expires_at directly since repo doesn't handle it
+        memory.expires_at = expires_at
+        await self._db.flush()
+
+        # Create audit event
+        await record_audit_log(
+            self._db,
+            user_id=reviewer_id,
+            action="approve_trainee_memory",
+            resource_id=str(memory_id),
+            detail=f"Approved memory {memory_id} for doctor {doctor_id}",
+        )
+        return memory
+
+    async def reject(
         self,
-        memory_id: str,
+        memory_id: int,
+        doctor_id: int,
         *,
         reviewer_id: int,
-        review_comment: str | None = None,
-    ) -> ProfileMemoryEntry:
+        review_comment: Optional[str] = None,
+    ):
         """Reject a candidate memory."""
-        entry = self._memories.get(memory_id)
-        if entry is None:
-            raise KeyError(f"Memory {memory_id} not found")
-        if entry.status != "candidate":
-            raise ValueError(
-                f"Memory {memory_id} is {entry.status}, not candidate"
-            )
+        memory = await self._repo.update_status(
+            memory_id=memory_id,
+            doctor_id=doctor_id,
+            status="rejected",
+            reviewer_id=reviewer_id,
+            review_comment=review_comment,
+        )
+        if memory is None:
+            raise KeyError(f"Memory {memory_id} not found for doctor {doctor_id}")
 
-        entry.status = "rejected"
-        entry.reviewer_id = reviewer_id
-        entry.review_comment = review_comment
-        entry.reviewed_at = datetime.utcnow()
-        return entry
+        await record_audit_log(
+            self._db,
+            user_id=reviewer_id,
+            action="reject_trainee_memory",
+            resource_id=str(memory_id),
+            detail=f"Rejected memory {memory_id} for doctor {doctor_id}",
+        )
+        return memory
 
-    def expire_stale(self) -> int:
-        """Expire all approved memories past their TTL. Returns count expired."""
-        now = datetime.utcnow()
-        count = 0
-        for entry in self._memories.values():
-            if entry.status == "approved" and entry.expires_at and entry.expires_at < now:
-                entry.status = "expired"
-                count += 1
-        return count
-
-    def get_approved_memories(
+    async def get_approved_memories(
         self,
         doctor_id: int,
         *,
         max_count: int = 5,
-    ) -> list[ProfileMemoryEntry]:
+    ) -> list:
         """Get approved memories for a doctor. Max 5 by default.
 
         Only returns memories if consent is given.
+        Consent OFF → immediately excludes approved memories from Coach context.
         """
-        if not self._consent.get(doctor_id, False):
+        if not await self._repo.has_consent(doctor_id):
             return []
 
-        approved = [
-            m for m in self._memories.values()
-            if m.doctor_id == doctor_id and m.status == "approved"
-        ]
-        # Sort by most recently reviewed
-        approved.sort(key=lambda m: m.reviewed_at or m.created_at, reverse=True)
-        return approved[:max_count]
+        memories = await self._repo.list_memories(
+            doctor_id=doctor_id,
+            status="approved",
+            include_expired=False,
+        )
+        return memories[:max_count]
 
-    def set_consent(self, doctor_id: int, consent: bool) -> None:
-        """Set consent for a doctor. Default is False."""
-        self._consent[doctor_id] = consent
+    async def set_consent(self, doctor_id: int, consent: bool):
+        """Set consent for a doctor. Default is False.
 
-    def get_consent(self, doctor_id: int) -> bool:
+        Consent OFF → immediately excludes approved memories from Coach context.
+        """
+        if consent:
+            await self._repo.grant_consent(doctor_id)
+        else:
+            await self._repo.revoke_consent(doctor_id)
+
+    async def get_consent(self, doctor_id: int) -> bool:
         """Get consent status for a doctor."""
-        return self._consent.get(doctor_id, False)
+        return await self._repo.has_consent(doctor_id)
 
-    def list_memories(
+    async def list_memories(
         self,
         doctor_id: int,
-        status: MemoryStatus | None = None,
-    ) -> list[ProfileMemoryEntry]:
+        status: Optional[str] = None,
+    ) -> list:
         """List memories for a doctor, optionally filtered by status."""
-        results = [m for m in self._memories.values() if m.doctor_id == doctor_id]
-        if status:
-            results = [m for m in results if m.status == status]
-        return results
+        return await self._repo.list_memories(
+            doctor_id=doctor_id,
+            status=status,
+            include_expired=True,
+        )
+
+    async def delete_memory(self, memory_id: int, doctor_id: int) -> bool:
+        """Delete a memory scoped to doctor."""
+        return await self._repo.delete_memory(memory_id, doctor_id)
+
+    async def get_memory(self, memory_id: int, doctor_id: int):
+        """Get a single memory scoped to doctor."""
+        return await self._repo.get_memory(memory_id, doctor_id)

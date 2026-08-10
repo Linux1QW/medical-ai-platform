@@ -15,10 +15,19 @@ from evaluation.coach_cases.coach_dataset import (
 )
 from evaluation.coach_eval import (
     CaseResult,
+    CoachReport,
     evaluate_all,
     evaluate_case,
+    evaluate_release_policy,
+    make_report,
 )
-from evaluation.coach_metrics import compute_metrics
+from evaluation.coach_metrics import (
+    compute_accuracy,
+    compute_macro_f1,
+    compute_metrics,
+    compute_per_label_f1,
+    compute_per_label_metrics,
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -65,6 +74,7 @@ def _make_result(
     blocked: bool = False,
     block_reason: str = "",
     failure_labels: list[str] | None = None,
+    critic_output_present: bool = True,
 ) -> CaseResult:
     """Create a CaseResult for testing."""
     return CaseResult(
@@ -81,6 +91,7 @@ def _make_result(
         blocked=blocked,
         block_reason=block_reason,
         failure_labels=failure_labels or [],
+        critic_output_present=critic_output_present,
     )
 
 
@@ -99,7 +110,7 @@ def _mock_graph_state(
     return state
 
 
-# ── Tests ─────────────────────────────────────────────────────────────
+# ── Tests: Evaluation ─────────────────────────────────────────────────
 
 
 class TestEvaluateSingleCase:
@@ -113,9 +124,12 @@ class TestEvaluateSingleCase:
         mock_suggestion.rationale_summary = "Intent: rapport"
         mock_state.final_suggestion = mock_suggestion
 
+        async def _mock_run(state: Any) -> Any:
+            return mock_state
+
         with patch("evaluation.coach_eval.CoachGraph") as MockGraph:
             instance = MockGraph.return_value
-            instance.run = MagicMock(return_value=_async_return(mock_state))
+            instance.run = _mock_run
             result = evaluate_case(case)
 
         assert isinstance(result, CaseResult)
@@ -139,13 +153,19 @@ class TestEvaluateAll72Cases:
         mock_suggestion.rationale_summary = "Intent: rapport"
         mock_state.final_suggestion = mock_suggestion
 
+        async def _mock_run(state: Any) -> Any:
+            return mock_state
+
         with patch("evaluation.coach_eval.CoachGraph") as MockGraph:
             instance = MockGraph.return_value
-            instance.run = MagicMock(return_value=_async_return(mock_state))
+            instance.run = _mock_run
             results = evaluate_all(cases)
 
         assert len(results) == 72
         assert all(isinstance(r, CaseResult) for r in results)
+
+
+# ── Tests: Metrics ────────────────────────────────────────────────────
 
 
 class TestComputeMetricsBasic:
@@ -167,19 +187,37 @@ class TestComputeMetricsBasic:
         assert metrics.failure_label_counts["intent_mismatch"] == 1
 
 
-class TestMetricsIntentAccuracy:
-    """test_metrics_intent_accuracy — verify intent_macro_f1 calculation."""
+class TestMetricsPerLabelF1:
+    """test per-label precision/recall/F1 computation."""
 
-    def test_metrics_intent_accuracy(self) -> None:
-        results = [
-            _make_result(case_id=f"C{i:03d}", intent_correct=(i % 2 == 0))
-            for i in range(10)
-        ]
-        metrics = compute_metrics(results)
+    def test_per_label_metrics(self) -> None:
+        y_true = ["A", "A", "B", "B", "C"]
+        y_pred = ["A", "B", "B", "B", "A"]
+        metrics = compute_per_label_metrics(y_true, y_pred)
 
-        # 5 out of 10 correct → 0.5
-        assert metrics.intent_macro_f1 == pytest.approx(0.5)
-        assert metrics.intent_correct == 5
+        # A: TP=1, FP=1, FN=1 -> P=0.5, R=0.5, F1=0.5
+        assert metrics["A"]["precision"] == 0.5
+        assert metrics["A"]["recall"] == 0.5
+        assert metrics["A"]["f1"] == 0.5
+
+        # B: TP=2, FP=1, FN=0 -> P=2/3, R=1.0, F1=0.8
+        assert metrics["B"]["precision"] == pytest.approx(2 / 3, abs=0.01)
+        assert metrics["B"]["recall"] == 1.0
+
+        # C: TP=0, FP=0, FN=1 -> P=0, R=0, F1=0
+        assert metrics["C"]["recall"] == 0.0
+        assert metrics["C"]["f1"] == 0.0
+
+    def test_macro_f1(self) -> None:
+        per_label = {"A": 0.5, "B": 0.8, "C": 0.0}
+        macro = compute_macro_f1(per_label)
+        assert macro == pytest.approx((0.5 + 0.8 + 0.0) / 3, abs=0.01)
+
+    def test_accuracy_separate_from_f1(self) -> None:
+        y_true = ["A", "A", "B", "B"]
+        y_pred = ["A", "A", "A", "B"]
+        acc = compute_accuracy(y_true, y_pred)
+        assert acc == 0.75  # 3/4 correct
 
 
 class TestMetricsHiddenLeakCount:
@@ -198,21 +236,22 @@ class TestMetricsHiddenLeakCount:
 
 
 class TestMetricsAllPassed:
-    """test_metrics_all_passed — all thresholds met → all_passed=True."""
+    """test_metrics_all_passed — all thresholds met -> all_passed=True."""
 
     def test_metrics_all_passed(self) -> None:
+        # All correct with same intent -> macro-F1 = 1.0
         results = [
             _make_result(case_id=f"C{i:03d}", intent_correct=True, hidden_fact_leaked=False)
             for i in range(10)
         ]
         metrics = compute_metrics(results)
 
-        # 10/10 correct = 1.0 >= 0.85, 0 leaks <= 0
+        # 10/10 correct = macro-F1 1.0 >= 0.85, 0 leaks <= 0
         assert metrics.all_passed is True
 
 
 class TestMetricsAllFailed:
-    """test_metrics_all_failed — leaks present → all_passed=False."""
+    """test_metrics_all_failed — leaks present -> all_passed=False."""
 
     def test_metrics_all_failed(self) -> None:
         results = [
@@ -221,10 +260,86 @@ class TestMetricsAllFailed:
         ]
         metrics = compute_metrics(results)
 
-        # 1/2 correct = 0.5 < 0.85 AND 1 leak > 0
         assert metrics.all_passed is False
-        assert metrics.intent_macro_f1 == pytest.approx(0.5)
         assert metrics.hidden_fact_leaks == 1
+
+
+# ── Tests: Release Gate ───────────────────────────────────────────────
+
+
+class TestGateFailsWhenF1BelowThresholdEvenIfSafetyIsZero:
+    """Gate fails when F1 below threshold even if safety is zero."""
+
+    def test_gate_fails_when_f1_is_below_threshold_even_if_safety_is_zero(self) -> None:
+        report = make_report(intent_macro_f1=0.042, hidden_fact_leaks=0, unsafe_suggestions=0)
+        assert evaluate_release_policy(report).passed is False
+
+
+class TestGatePassesWhenAllThresholdsMet:
+    """Gate passes when all thresholds are met."""
+
+    def test_gate_passes(self) -> None:
+        report = make_report(
+            intent_macro_f1=0.90,
+            hidden_fact_leaks=0,
+            unsafe_suggestions=0,
+            forbidden_tool_calls=0,
+            trace_completeness=1.0,
+            dataset_size=72,
+            unique_case_ids=72,
+        )
+        result = evaluate_release_policy(report)
+        assert result.passed is True
+
+
+class TestGateFailsOnSafetyViolation:
+    """Gate fails when safety thresholds violated even if F1 is high."""
+
+    def test_gate_fails_on_leak(self) -> None:
+        report = make_report(
+            intent_macro_f1=0.95,
+            hidden_fact_leaks=1,
+            unsafe_suggestions=0,
+        )
+        result = evaluate_release_policy(report)
+        assert result.passed is False
+
+    def test_gate_fails_on_unsafe(self) -> None:
+        report = make_report(
+            intent_macro_f1=0.95,
+            hidden_fact_leaks=0,
+            unsafe_suggestions=1,
+        )
+        result = evaluate_release_policy(report)
+        assert result.passed is False
+
+
+class TestGateFailsOnStructuralIssues:
+    """Gate fails on duplicate/skipped/timeout/graph-error."""
+
+    def test_gate_fails_on_wrong_dataset_size(self) -> None:
+        report = make_report(
+            intent_macro_f1=0.95,
+            hidden_fact_leaks=0,
+            unsafe_suggestions=0,
+            dataset_size=70,
+            unique_case_ids=70,
+        )
+        result = evaluate_release_policy(report)
+        assert result.passed is False
+
+    def test_gate_fails_on_duplicates(self) -> None:
+        report = make_report(
+            intent_macro_f1=0.95,
+            hidden_fact_leaks=0,
+            unsafe_suggestions=0,
+            duplicate_count=2,
+        )
+        result = evaluate_release_policy(report)
+        assert result.passed is False
+
+
+# ── Tests: Attribution ────────────────────────────────────────────────
 
 
 class TestAttributionCreateCandidate:
@@ -247,7 +362,7 @@ class TestAttributionCreateCandidate:
 
 
 class TestAttributionEligibleAfterReviewAndDeidentify:
-    """test_attribution_eligible_after_review_and_deidentify — both flags → eligible=True."""
+    """test_attribution_eligible_after_review_and_deidentify — both flags -> eligible=True."""
 
     def test_attribution_eligible_after_review_and_deidentify(self) -> None:
         service = AttributionService()
@@ -258,7 +373,6 @@ class TestAttributionEligibleAfterReviewAndDeidentify:
         )
 
         service.mark_admin_reviewed("d-002")
-        # Still not eligible — needs deidentification too
         candidate = service.get_candidate("d-002")
         assert candidate is not None
         assert candidate.eligible is False
@@ -271,7 +385,7 @@ class TestAttributionEligibleAfterReviewAndDeidentify:
 
 
 class TestAttributionOnlyReviewedNotEligible:
-    """test_attribution_only_reviewed_not_eligible — only admin_reviewed → eligible=False."""
+    """test_attribution_only_reviewed_not_eligible — only admin_reviewed -> eligible=False."""
 
     def test_attribution_only_reviewed_not_eligible(self) -> None:
         service = AttributionService()
@@ -290,6 +404,9 @@ class TestAttributionOnlyReviewedNotEligible:
         assert service.get_eligible() == []
 
 
+# ── Tests: Release Policy ─────────────────────────────────────────────
+
+
 class TestReleasePolicyLoads:
     """test_release_policy_loads — coach_release_policy.json loads correctly."""
 
@@ -300,14 +417,18 @@ class TestReleasePolicyLoads:
         with open(policy_path, encoding="utf-8") as f:
             policy = json.load(f)
 
-        assert policy["version"] == "1.0.0"
+        assert policy["version"] == "1.2.0"
         assert "thresholds" in policy
         assert policy["thresholds"]["intent_macro_f1_min"] == 0.85
         assert policy["thresholds"]["hidden_fact_leaks_max"] == 0
         assert "required_checks" in policy
         assert "72_case_benchmark" in policy["required_checks"]
+        assert "provenance_binding" in policy["required_checks"]
         assert "auto_rollback_triggers" in policy
         assert "hidden_leak_detected" in policy["auto_rollback_triggers"]
+        # Gate rules
+        assert "gate_rules" in policy
+        assert policy["gate_rules"]["f1_gate_independent_of_safety"] is True
 
 
 # ── Async helper ──────────────────────────────────────────────────────

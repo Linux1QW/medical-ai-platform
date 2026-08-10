@@ -26,7 +26,7 @@ export function useCoachSuggestion(
   const [turnNo, setTurnNo] = useState(0);
   const [pendingText, setPendingText] = useState('');
   const controllerRef = useRef<AbortController | null>(null);
-  const lastEventIdRef = useRef<string | undefined>();
+  const lastEventIdRef = useRef<string | undefined>(undefined);
   const turnNoRef = useRef(turnNo);
 
   // Keep ref in sync so SSE callback always sees latest value

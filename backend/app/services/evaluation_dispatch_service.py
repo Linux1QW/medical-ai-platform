@@ -134,6 +134,7 @@ async def enqueue_dispatch(
     run_id: str,
     consultation_id: int,
     trace_context: dict,
+    now: datetime | None = None,
 ) -> EvaluationDispatchOutbox:
     """将评估任务写入 outbox（只 flush，不 commit）
 
@@ -148,6 +149,7 @@ async def enqueue_dispatch(
     # 校验 payload — 拒绝 PII
     validate_payload(payload)
 
+    effective_now = now if now is not None else datetime.utcnow()
     outbox = EvaluationDispatchOutbox(
         event_id=str(uuid.uuid4()),
         run_id=run_id,
@@ -155,7 +157,7 @@ async def enqueue_dispatch(
         task_name=_EVAL_TASK_NAME,
         payload=payload,
         attempt=0,
-        next_attempt_at=datetime.utcnow(),
+        next_attempt_at=effective_now,
     )
     db.add(outbox)
     await db.flush()

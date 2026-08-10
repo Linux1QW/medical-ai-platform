@@ -142,7 +142,7 @@ async def test_claim_dispatch_batch_leases_pending(db_session: AsyncSession):
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     leases = await claim_dispatch_batch(
         db_session,
@@ -179,7 +179,7 @@ async def test_claim_dispatch_batch_reclaims_expired_lease(db_session: AsyncSess
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     # Manually set to leased with expired lease
     await db_session.execute(
@@ -242,7 +242,7 @@ async def test_reject_dispatch_1499_attempts_continues(db_session: AsyncSession)
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     # Set attempt=1499, created_at=1h ago
     await db_session.execute(
@@ -286,7 +286,7 @@ async def test_reject_dispatch_1500_attempts_dead_letters(db_session: AsyncSessi
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     await db_session.execute(
         update(EvaluationDispatchOutbox)
@@ -325,7 +325,7 @@ async def test_reject_dispatch_24h_age_dead_letters(db_session: AsyncSession):
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     # attempt=5 but created 25h ago
     await db_session.execute(
@@ -389,7 +389,7 @@ async def test_cancel_dispatch_from_leased(db_session: AsyncSession):
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
     await claim_dispatch_batch(db_session, worker_id="w1", now=now, batch_size=10, lease_seconds=30)
 
     cancelled = await cancel_dispatch(db_session, run_id=run_id)
@@ -446,7 +446,7 @@ async def test_reject_dispatch_dead_letter_marks_run_failed(db_session: AsyncSes
     db_session.add(run)
     await db_session.flush()
 
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     # Set attempt=1500 to force dead_letter
     await db_session.execute(
@@ -508,7 +508,7 @@ async def test_acknowledge_dispatch_sets_published(db_session: AsyncSession):
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
     leases = await claim_dispatch_batch(
         db_session, worker_id="w1", now=now, batch_size=10, lease_seconds=30
     )
@@ -545,7 +545,7 @@ async def test_acknowledge_dispatch_wrong_owner_raises(db_session: AsyncSession)
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
     leases = await claim_dispatch_batch(
         db_session, worker_id="w1", now=now, batch_size=10, lease_seconds=30
     )
@@ -573,7 +573,7 @@ async def test_purge_terminal_dispatches(db_session: AsyncSession):
 
     run_id = _make_run_id()
     now = _now()
-    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
+    await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={}, now=now)
 
     # Set to published, 8 days old
     await db_session.execute(

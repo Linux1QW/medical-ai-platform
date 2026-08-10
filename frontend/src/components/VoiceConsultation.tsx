@@ -13,6 +13,10 @@ interface VoiceConsultationProps {
   doctorId: number;
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : '未知语音服务错误';
+}
+
 export const VoiceConsultation: React.FC<VoiceConsultationProps> = ({
   consultationId,
   doctorId,
@@ -33,8 +37,8 @@ export const VoiceConsultation: React.FC<VoiceConsultationProps> = ({
       if (!res.ok) throw new Error(`Failed to create voice session: ${res.status}`);
       const data = await res.json();
       setSession(data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setIsConnecting(false);
     }
@@ -45,8 +49,8 @@ export const VoiceConsultation: React.FC<VoiceConsultationProps> = ({
     try {
       await fetch(`/api/v1/voice/sessions/${session.room_name}/end`, { method: 'POST' });
       setSession(null);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }, [session]);
 

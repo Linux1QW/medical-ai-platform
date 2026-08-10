@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 from scripts.eval import evaluate_bm25
 
 
@@ -286,3 +287,20 @@ def test_fail_on_regression_requires_policy_provenance_consistency():
     # main() should error
     assert args.fail_on_regression is True
     assert args.policy is None
+
+
+# ---------------------------------------------------------------------------
+# Medical tokenizer boundary tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "required"),
+    [
+        ("PD-L1 TPS≥50%", {"pd-l1", "tps", "50%"}),
+        ("EGFR-T790M阳性", {"egfr-t790m"}),
+        ("HER2 3+", {"her2", "3"}),
+    ],
+)
+def test_medical_tokenizer_preserves_boundary_tokens(text, required):
+    assert required <= set(evaluate_bm25._simple_tokenize(text))

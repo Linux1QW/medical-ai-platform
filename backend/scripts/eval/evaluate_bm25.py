@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,9 +31,21 @@ REQUIRED_CATEGORIES = tuple(RAG_STRATA)
 REQUIRED_K_VALUES = tuple(RAG_K_VALUES)
 
 
+# Regex that preserves medical abbreviations (PD-L1, EGFR-T790M),
+# numbers with ASCII units (50%, 100mg, ml/min/1.73m2), dotted/gt-lt
+# notation (c.2573T>G), and CJK runs.  Symbols like >= < are
+# treated as separators.
+MEDICAL_TOKEN_RE = re.compile(
+    r"[a-z]+(?:[-_./><][a-z0-9]+)*\d*"          # letter-led token with connectors + trailing digits
+    r"|\d+(?:\.\d+)?%?(?:[a-z]+(?:[-_/][a-z]+)*)?"  # number + optional ASCII unit
+    r"|[^\W\d_]+(?:[-_/][^\W\d_]+)*",            # Unicode-letter-led token
+    re.IGNORECASE,
+)
+
+
 def _simple_tokenize(text: str) -> List[str]:
-    """Simple whitespace + lowercase tokenizer for golden validation."""
-    return text.lower().split()
+    """Tokenize text preserving medical abbreviations, numbers, percentages and connectors."""
+    return [m.group(0).casefold() for m in MEDICAL_TOKEN_RE.finditer(text)]
 
 
 def _match_group(source: str, groups: Iterable[str]) -> str:

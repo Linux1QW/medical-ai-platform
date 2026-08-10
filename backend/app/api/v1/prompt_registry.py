@@ -46,7 +46,7 @@ async def create_experiment(request: CreateExperimentRequest) -> ExperimentRespo
                                   stage=exp.stage, rollout_percentage=exp.rollout_percentage,
                                   auto_rollback_triggered=exp.auto_rollback_triggered)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.post("/experiments/{experiment_id}/advance", response_model=ExperimentResponse)
@@ -67,4 +67,4 @@ async def assign_bundle(experiment_id: str, request: AssignmentRequest) -> Assig
         bundle_id = _registry.assign_bundle(experiment_id, request.doctor_id)
         return AssignmentResponse(experiment_id=experiment_id, doctor_id=request.doctor_id, assigned_bundle_id=bundle_id)
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e

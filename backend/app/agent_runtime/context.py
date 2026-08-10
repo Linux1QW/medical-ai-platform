@@ -51,7 +51,7 @@ def compile_coach_context(
     budget: ContextBudget = DEFAULT_COACH_BUDGET,
 ) -> CompiledContext:
     """Compile coach context within fixed token budget.
-    
+
     System and policy sections are NEVER truncated.
     Trimming order: low-score evidence → old dialogue → low-confidence memory.
     """

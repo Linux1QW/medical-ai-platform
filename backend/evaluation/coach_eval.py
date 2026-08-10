@@ -96,7 +96,12 @@ def evaluate_case(case: CoachCase) -> CaseResult:
             turn_no=len(messages),
         )
 
-        final_state = asyncio.get_event_loop().run_until_complete(graph.run(state))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            final_state = loop.run_until_complete(graph.run(state))
+        finally:
+            loop.close()
 
         result.actual_intent = final_state.intent
         result.intent_correct = (final_state.intent == case.expected_intent)

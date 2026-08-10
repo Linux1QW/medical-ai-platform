@@ -43,7 +43,7 @@ async def create_memory(request: CreateMemoryRequest) -> MemoryResponse:
             created_at=entry.created_at,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/memories/{memory_id}/review", response_model=MemoryResponse)
@@ -77,9 +77,9 @@ async def review_memory(memory_id: str, request: ReviewMemoryRequest) -> MemoryR
             created_at=entry.created_at,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found") from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/doctors/{doctor_id}/memories", response_model=list[MemoryResponse])

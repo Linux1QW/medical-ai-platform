@@ -123,11 +123,16 @@ class TestVoiceAgent:
 
         assert agent.is_running is False
 
-        asyncio.get_event_loop().run_until_complete(agent.start())
-        assert agent.is_running is True
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(agent.start())
+            assert agent.is_running is True
 
-        asyncio.get_event_loop().run_until_complete(agent.stop())
-        assert agent.is_running is False
+            loop.run_until_complete(agent.stop())
+            assert agent.is_running is False
+        finally:
+            loop.close()
 
     def test_voice_agent_no_raw_audio(self) -> None:
         """save_raw_audio defaults to False."""
@@ -151,9 +156,14 @@ class TestVoiceAgent:
             is_final=True,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            agent.process_transcript(transcript)
-        )
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                agent.process_transcript(transcript)
+            )
+        finally:
+            loop.close()
 
         assert result["processed"] is True
         assert result["speaker"] == "doctor"

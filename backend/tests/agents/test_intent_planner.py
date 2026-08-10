@@ -36,7 +36,8 @@ class TestClassifyIntent:
 
     def test_classify_intent_llm_fallback(self) -> None:
         """Test that LLM fallback works when no rule matches."""
-        mock_llm = lambda msg: "examination"
+        def mock_llm(msg):
+            return "examination"
         result = classify_intent("请量一下血压", llm_fn=mock_llm)
         # Note: "血压" is in examination keywords, so it will match rule first
         # Let's use a message that doesn't match any rule
@@ -45,7 +46,8 @@ class TestClassifyIntent:
 
     def test_classify_intent_llm_fallback_invalid(self) -> None:
         """Test that invalid LLM response falls through to off_topic."""
-        mock_llm = lambda msg: "invalid_intent"
+        def mock_llm(msg):
+            return "invalid_intent"
         result = classify_intent("今天天气不错", llm_fn=mock_llm)
         assert result == "off_topic"
 

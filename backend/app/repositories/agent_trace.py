@@ -1,10 +1,9 @@
 """Repository for agent trace event persistence and querying."""
 
-import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_trace_event import AgentTraceEvent

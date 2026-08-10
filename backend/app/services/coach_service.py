@@ -9,7 +9,6 @@ Disabled → stable 409 / feature-disabled contract.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, AsyncGenerator
 from uuid import UUID, uuid4
@@ -74,6 +73,7 @@ class CoachService:
             }
 
         from sqlalchemy import select
+
         from app.models.coach_session import CoachSession
 
         stmt = select(CoachSession).where(
@@ -152,12 +152,12 @@ class CoachService:
         # If decision already completed → replay from stored events
         if decision.stage == "completed" and decision.suggestion_json:
             # Replay all events for this decision
-            events = await self.repo.list_events_after(session.id, 0)
-            for evt in events:
+            events: list = await self.repo.list_events_after(session.id, 0)
+            for stored_event in events:
                 yield {
-                    "event": evt.event_type,
-                    "data": evt.data_json or {},
-                    "id": evt.event_id,
+                    "event": stored_event.event_type,
+                    "data": stored_event.data_json or {},
+                    "id": stored_event.event_id,
                 }
             yield {"event": "done", "data": {}, "id": None}
             return
@@ -295,7 +295,7 @@ class CoachService:
                     },
                 )
 
-        except Exception as e:
+        except Exception:
             logger.exception("Coach graph error for consultation=%s", consultation_id)
             error_event = await self.repo.append_stream_event(
                 session_id=session.id,
@@ -333,6 +333,7 @@ class CoachService:
     ) -> dict[str, Any]:
         """Record feedback on a suggestion, verifying ownership."""
         from sqlalchemy import select
+
         from app.models.coach_decision import CoachDecision
         from app.models.coach_session import CoachSession
 
@@ -378,8 +379,9 @@ class CoachService:
     ) -> dict[str, Any]:
         """Get full trace for admin inspection."""
         from sqlalchemy import select
-        from app.models.coach_session import CoachSession
+
         from app.models.coach_decision import CoachDecision
+        from app.models.coach_session import CoachSession
 
         session_stmt = select(CoachSession).where(
             CoachSession.consultation_id == consultation_id
@@ -446,6 +448,7 @@ class CoachService:
         Returns list of SSE event dicts to replay.
         """
         from sqlalchemy import select
+
         from app.models.coach_stream_event import CoachStreamEvent
 
         # Find the event by event_id

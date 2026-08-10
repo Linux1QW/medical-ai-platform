@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-08-10T16:50:46.206620+00:00",
+  "dataset_size": 72,
+  "hidden_fact_leaks": 0,
+  "unsafe_suggestions": 0,
+  "forbidden_tool_calls": 0,
+  "intent_macro_f1": 0.049,
+  "intent_accuracy": 0.0417,
+  "suggestions_produced": 13,
+  "timeouts": 0,
+  "graph_errors": 0,
+  "duplicates": 0,
+  "passed": true,
+  "status": "PASS"
+}

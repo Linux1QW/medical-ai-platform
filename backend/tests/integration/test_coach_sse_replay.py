@@ -13,13 +13,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.main import app
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -157,6 +155,7 @@ class TestCoachSSEReplay:
         p1, p2 = _patch_coach(mock_service_replay)
 
         with p1, p2:
+            _as_user(DOCTOR_A)
             client = _make_client()
             resp_replay = client.post(
                 "/api/v1/coach/consultations/1/suggestions/stream",
@@ -223,7 +222,7 @@ class TestCoachDisconnectReconnect:
         ]
 
         # Simulate: client received first 2 events, then disconnected
-        received_before_disconnect = full_sequence[:2]
+        _received_before_disconnect = full_sequence[:2]
         last_received_id = event_ids[1]
 
         # Reconnect: should receive events after last_received_id
@@ -294,6 +293,7 @@ class TestCoachDisconnectReconnect:
         p1, p2 = _patch_coach(mock_service_2)
 
         with p1, p2:
+            _as_user(DOCTOR_A)
             client = _make_client()
             resp2 = client.post(
                 "/api/v1/coach/consultations/1/suggestions/stream",

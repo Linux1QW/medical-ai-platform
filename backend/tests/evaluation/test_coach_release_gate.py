@@ -3,12 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
 
-import pytest
-
-from evaluation.coach_cases.coach_dataset import CoachCase, load_cases, validate_dataset
+from evaluation.coach_cases.coach_dataset import load_cases, validate_dataset
 from evaluation.coach_eval import (
     CaseResult,
     CriticFinding,
@@ -22,7 +18,6 @@ from evaluation.coach_metrics import (
     compute_metrics,
     validate_provenance,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────
 

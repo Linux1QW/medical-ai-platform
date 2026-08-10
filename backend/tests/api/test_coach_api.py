@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.deps import get_current_user
@@ -146,12 +147,12 @@ class TestCoachIDOR:
         mock_service = MagicMock()
         mock_service.enabled = True
 
-        from fastapi import HTTPException
-
         async def fake_verify(consultation_id, doctor_id, db):
-            if doctor_id != 20:  # DOCTOR_A has id=10
-                raise HTTPException(status_code=403, detail={"error_code": "COACH_IDOR_DENIED", "message": "IDOR denied"})
-            return SimpleNamespace(id=100, doctor_id=20)
+            # DOCTOR_A has id=10, consultation belongs to doctor 20
+            raise HTTPException(
+                status_code=403,
+                detail={"error_code": "COACH_IDOR_DENIED", "message": "IDOR denied"},
+            )
 
         with patch("app.api.v1.coach._get_service", return_value=mock_service), \
              patch("app.api.v1.coach._verify_consultation_ownership", side_effect=fake_verify):
@@ -168,12 +169,11 @@ class TestCoachIDOR:
         mock_service = MagicMock()
         mock_service.enabled = True
 
-        from fastapi import HTTPException
-
         async def fake_verify(consultation_id, doctor_id, db):
-            if doctor_id != 20:
-                raise HTTPException(status_code=403, detail={"error_code": "COACH_IDOR_DENIED", "message": "IDOR denied"})
-            return SimpleNamespace(id=100, doctor_id=20)
+            raise HTTPException(
+                status_code=403,
+                detail={"error_code": "COACH_IDOR_DENIED", "message": "IDOR denied"},
+            )
 
         with patch("app.api.v1.coach._get_service", return_value=mock_service), \
              patch("app.api.v1.coach._verify_consultation_ownership", side_effect=fake_verify):

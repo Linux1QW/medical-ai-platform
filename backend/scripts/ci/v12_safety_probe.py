@@ -10,7 +10,6 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 # Ensure backend root is on sys.path
 _BACKEND = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -95,7 +94,7 @@ def run_safety_probe(*, output_dir: str | None = None) -> bool:
     report_path = os.path.join(output_dir, "v12_safety_probe_report.json")
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    print(f"Report written to: {report_path}")
+    print(f"Report written to: {report_path.encode('ascii', 'replace').decode('ascii')}")
 
     return all_pass
 

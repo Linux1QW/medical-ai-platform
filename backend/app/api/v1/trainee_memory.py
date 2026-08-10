@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import record_audit_log
-from app.core.deps import get_current_user
 from app.core.permissions import require_permission
 from app.db.session import get_db
 from app.models.user import User
@@ -84,8 +83,9 @@ async def review_memory(
 
     # We need to get the memory first to know the doctor_id
     # Use a raw query since we're admin reviewing any doctor's memory
-    from app.models.trainee_memory import TraineeMemory
     from sqlalchemy import select
+
+    from app.models.trainee_memory import TraineeMemory
     result = await db.execute(
         select(TraineeMemory).where(TraineeMemory.id == memory_id)
     )

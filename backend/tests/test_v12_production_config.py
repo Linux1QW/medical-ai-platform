@@ -12,8 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.core.permissions import PERMISSIONS, get_user_permissions
-
+from app.core.permissions import get_user_permissions
 
 # ── Coach 配置验证 ────────────────────────────────────────────────────────────
 

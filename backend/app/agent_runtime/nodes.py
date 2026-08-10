@@ -9,8 +9,8 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from app.agent_runtime.contracts import CoachSuggestion
 from app.agent_runtime.context import COACH_SAFETY_POLICY, COACH_SYSTEM_PROMPT, compile_coach_context
+from app.agent_runtime.contracts import CoachSuggestion
 from app.agent_runtime.critic import (
     DIAGNOSTIC_PATTERNS,
     HIDDEN_FACT_PATTERNS,
@@ -23,14 +23,12 @@ from app.agent_runtime.state import (
     EvidenceItem,
     IntentDecision,
 )
-from app.services.agents.coach.intent import INTENT_RULES, classify_intent
+from app.services.agents.coach.intent import INTENT_RULES
 from app.services.agents.coach.planner import (
     INTENT_TO_STAGE,
-    FollowupPlan,
     build_followup_plan,
 )
 from app.services.memory.working import WorkingMemoryState
-
 
 # ── Intent node ──────────────────────────────────────────────────────────────
 
@@ -272,7 +270,6 @@ async def critic_node(state: CoachGraphState, **_: Any) -> dict[str, Any]:
         "critic_result": CriticResult(
             passed=True,
             findings=findings,
-            adjusted_confidence=adjusted_confidence,
         ),
         "trace_refs": ["critic:passed"],
     }

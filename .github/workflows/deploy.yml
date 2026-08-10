@@ -79,7 +79,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHA="${{ inputs.image_tag }}"
-          # Check CI workflow run status for this commit
           CI_STATUS=$(gh api repos/${{ github.repository }}/actions/runs \
             --jq ".workflow_runs[] | select(.head_sha==\"$SHA\" and .name==\"CI\" and .conclusion==\"success\") | .id" | head -1)
           if [ -z "$CI_STATUS" ]; then

@@ -4,7 +4,6 @@ Updated to use the new LangGraph runtime (replaces hand-written CoachGraph).
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from uuid import uuid4
 
@@ -49,21 +48,17 @@ def _make_state(**overrides: Any) -> CoachGraphState:
     return CoachGraphState(**defaults)
 
 
-def _run(coro: Any) -> Any:
-    """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
 # ── Graph pipeline tests ─────────────────────────────────────────────────────
 
 
-def test_graph_full_pipeline() -> None:
+@pytest.mark.asyncio
+async def test_graph_full_pipeline() -> None:
     """Full pipeline with valid context produces a suggestion."""
     graph = build_coach_graph()
     view = _make_test_view()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
-    ))
+    )
 
     assert result["blocked"] is False
     assert result["final_suggestion"] is not None
@@ -71,32 +66,35 @@ def test_graph_full_pipeline() -> None:
     assert result["status"] == "done"
 
 
-def test_graph_blocks_unsafe_intent() -> None:
+@pytest.mark.asyncio
+async def test_graph_blocks_unsafe_intent() -> None:
     """Message classified as unsafe → blocked."""
     graph = build_coach_graph()
     view = _make_test_view()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="我想伤害自己", turn=1, timeout_seconds=10,
-    ))
+    )
 
     assert result["intent_result"] is not None
     assert result["intent_result"].intent == "unsafe"
     assert result["final_suggestion"] is None
 
 
-def test_graph_intent_classification() -> None:
+@pytest.mark.asyncio
+async def test_graph_intent_classification() -> None:
     """'你好' → intent='rapport'."""
     graph = build_coach_graph()
     view = _make_test_view()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
-    ))
+    )
 
     assert result["intent_result"].intent == "rapport"
     assert result["blocked"] is False
 
 
-def test_graph_evidence_fn_called() -> None:
+@pytest.mark.asyncio
+async def test_graph_evidence_fn_called() -> None:
     """Provide evidence_fn, verify it's called."""
     called_with: list[tuple[str, str]] = []
 
@@ -107,22 +105,23 @@ def test_graph_evidence_fn_called() -> None:
     deps = CoachDependencies(evidence_fn=evidence_fn)
     graph = build_coach_graph(dependencies=deps)
     view = _make_test_view()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
-    ))
+    )
 
     assert len(called_with) == 1
     assert called_with[0][0] == "rapport"
     assert result["status"] == "done"
 
 
-def test_graph_node_trace_recorded() -> None:
+@pytest.mark.asyncio
+async def test_graph_node_trace_recorded() -> None:
     """Verify trace_refs has entries for each node."""
     graph = build_coach_graph()
     view = _make_test_view()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
-    ))
+    )
 
     refs = result.get("trace_refs", [])
     # Should have at least intent and persist refs
@@ -130,13 +129,14 @@ def test_graph_node_trace_recorded() -> None:
     assert any("persist" in r for r in refs)
 
 
-def test_graph_empty_messages() -> None:
+@pytest.mark.asyncio
+async def test_graph_empty_messages() -> None:
     """Context with no messages still works."""
     view = _make_test_view(messages=[])
     graph = build_coach_graph()
-    result = _run(invoke_coach_graph(
+    result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
-    ))
+    )
 
     assert result["blocked"] is False
     assert result["status"] == "done"
@@ -187,9 +187,10 @@ def test_critic_evaluate_fails_hidden_leak() -> None:
 # ── Evidence agent tests ──────────────────────────────────────────────────────
 
 
-def test_evidence_agent_blocked_skills() -> None:
+@pytest.mark.asyncio
+async def test_evidence_agent_blocked_skills() -> None:
     """EvidenceAgent rejects non-allowed skill."""
     agent = EvidenceAgent()
-    result = agent.search("dangerous_tool", "test query")
+    result = await agent.search("dangerous_tool", "test query")
     assert "error" in result
     assert "not allowed" in result["error"]

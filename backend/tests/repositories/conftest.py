@@ -7,18 +7,18 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.models.base import Base
 # Import all models to ensure they are registered with Base.metadata
 from app.models import (  # noqa: F401
-    CoachSession,
-    CoachDecision,
-    CoachStreamEvent,
     AgentTraceEvent,
+    CoachDecision,
+    CoachSession,
+    CoachStreamEvent,
+    ExperimentAssignment,
+    PromptBundle,
     TraineeMemory,
     TraineeMemoryConsent,
-    PromptBundle,
-    ExperimentAssignment,
 )
+from app.models.base import Base
 
 
 @pytest.fixture(scope="session")
@@ -46,7 +46,7 @@ async def db_session(async_engine, setup_tables) -> AsyncSession:
     Uses a connection-level transaction that is rolled back after each test
     to ensure test isolation.
     """
-    session_factory = async_sessionmaker(
+    _session_factory = async_sessionmaker(
         bind=async_engine, class_=AsyncSession, expire_on_commit=False
     )
     async with async_engine.connect() as conn:

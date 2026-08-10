@@ -47,7 +47,7 @@ def run_gate(
 
     errors = validate_dataset(cases)
     if errors:
-        print(f"  Dataset validation FAILED:")
+        print("  Dataset validation FAILED:")
         for e in errors:
             print(f"    - {e}")
         _write_failure_report(output_dir, "dataset_validation_failed", errors)
@@ -59,7 +59,7 @@ def run_gate(
     provenance = collect_provenance(execution_mode=execution_mode)
     prov_errors = validate_provenance(provenance)
     if prov_errors:
-        print(f"  Provenance validation FAILED:")
+        print("  Provenance validation FAILED:")
         for e in prov_errors:
             print(f"    - {e}")
         _write_failure_report(output_dir, "provenance_validation_failed", prov_errors)

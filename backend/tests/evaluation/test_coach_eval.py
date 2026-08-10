@@ -15,7 +15,6 @@ from evaluation.coach_cases.coach_dataset import (
 )
 from evaluation.coach_eval import (
     CaseResult,
-    CoachReport,
     evaluate_all,
     evaluate_case,
     evaluate_release_policy,
@@ -25,7 +24,6 @@ from evaluation.coach_metrics import (
     compute_accuracy,
     compute_macro_f1,
     compute_metrics,
-    compute_per_label_f1,
     compute_per_label_metrics,
 )
 
@@ -95,19 +93,22 @@ def _make_result(
     )
 
 
-def _mock_graph_state(
+def _mock_graph_state_dict(
     intent: str = "rapport",
     blocked: bool = False,
     block_reason: str = "",
     suggestion: Any = None,
-) -> MagicMock:
-    """Create a mock final state from the coach graph."""
-    state = MagicMock()
-    state.intent = intent
-    state.blocked = blocked
-    state.block_reason = block_reason
-    state.final_suggestion = suggestion
-    return state
+) -> dict:
+    """Create a mock final state dict from the coach graph."""
+    intent_obj = MagicMock()
+    intent_obj.intent = intent
+    return {
+        "intent_result": intent_obj if intent else None,
+        "blocked": blocked,
+        "block_reason": block_reason,
+        "final_suggestion": suggestion,
+        "status": "done",
+    }
 
 
 # ── Tests: Evaluation ─────────────────────────────────────────────────
@@ -118,18 +119,17 @@ class TestEvaluateSingleCase:
 
     def test_evaluate_single_case(self) -> None:
         case = _make_case()
-        mock_state = _mock_graph_state(intent="rapport")
         mock_suggestion = MagicMock()
         mock_suggestion.suggested_question = "请问还有什么不舒服？"
         mock_suggestion.rationale_summary = "Intent: rapport"
-        mock_state.final_suggestion = mock_suggestion
+        mock_state_dict = _mock_graph_state_dict(intent="rapport", suggestion=mock_suggestion)
 
-        async def _mock_run(state: Any) -> Any:
-            return mock_state
+        async def _mock_ainvoke(state: Any, config: Any = None) -> Any:
+            return mock_state_dict
 
         with patch("evaluation.coach_eval.CoachGraph") as MockGraph:
             instance = MockGraph.return_value
-            instance.run = _mock_run
+            instance.ainvoke = _mock_ainvoke
             result = evaluate_case(case)
 
         assert isinstance(result, CaseResult)
@@ -147,18 +147,17 @@ class TestEvaluateAll72Cases:
         cases = load_cases()
         assert len(cases) == 72
 
-        mock_state = _mock_graph_state(intent="rapport")
         mock_suggestion = MagicMock()
         mock_suggestion.suggested_question = "请问还有什么不舒服？"
         mock_suggestion.rationale_summary = "Intent: rapport"
-        mock_state.final_suggestion = mock_suggestion
+        mock_state_dict = _mock_graph_state_dict(intent="rapport", suggestion=mock_suggestion)
 
-        async def _mock_run(state: Any) -> Any:
-            return mock_state
+        async def _mock_ainvoke(state: Any, config: Any = None) -> Any:
+            return mock_state_dict
 
         with patch("evaluation.coach_eval.CoachGraph") as MockGraph:
             instance = MockGraph.return_value
-            instance.run = _mock_run
+            instance.ainvoke = _mock_ainvoke
             results = evaluate_all(cases)
 
         assert len(results) == 72

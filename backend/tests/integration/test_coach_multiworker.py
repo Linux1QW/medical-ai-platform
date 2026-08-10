@@ -8,16 +8,14 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.main import app
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

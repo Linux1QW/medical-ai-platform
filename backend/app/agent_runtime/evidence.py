@@ -7,7 +7,7 @@ All outputs are normalized to citation records and wrapped as UNTRUSTED_EVIDENCE
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 from app.agent_runtime.policy import SkillPolicy, mark_output_untrusted
 from app.agent_runtime.skills import SkillManifest, SkillRegistry

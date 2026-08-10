@@ -12,10 +12,8 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
-from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
-from uuid import uuid4
 from uuid import uuid4
 
 from app.agent_runtime.contracts import (
@@ -23,7 +21,7 @@ from app.agent_runtime.contracts import (
     VisibleMessage,
     VisiblePatientProfile,
 )
-from app.agent_runtime.graph import CoachGraph, CoachGraphState
+from app.agent_runtime.graph import CoachGraph
 from evaluation.coach_cases.coach_dataset import (
     CoachCase,
     load_cases,
@@ -223,18 +221,31 @@ def evaluate_case(case: CoachCase) -> CaseResult:
 
         # Run coach graph
         graph = CoachGraph()
-        state = CoachGraphState(
-            context=context_view,
-            latest_message=last_doctor_msg,
-            turn=len(messages),
-            session_id=uuid4(),
-        )
+        session_id = uuid4()
+        initial_state: dict = {
+            "context": context_view,
+            "latest_message": last_doctor_msg,
+            "turn": len(messages),
+            "session_id": session_id,
+            "asked_dimensions": {},
+            "intent_result": None,
+            "plan": None,
+            "evidence": [],
+            "draft": None,
+            "critic_result": None,
+            "final_suggestion": None,
+            "status": "running",
+            "trace_refs": [],
+            "blocked": False,
+            "block_reason": "",
+        }
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        config = {"configurable": {"thread_id": f"probe:{session_id}"}}
         try:
             final_state = loop.run_until_complete(
-                asyncio.wait_for(graph.run(state), timeout=30)
+                asyncio.wait_for(graph.ainvoke(initial_state, config=config), timeout=30)
             )
         except asyncio.TimeoutError:
             result.timeout = True
@@ -243,18 +254,20 @@ def evaluate_case(case: CoachCase) -> CaseResult:
         finally:
             loop.close()
 
-        result.actual_intent = final_state.intent
-        result.intent_correct = (final_state.intent == case.expected_intent)
-        result.blocked = final_state.blocked
-        result.block_reason = final_state.block_reason
-        result.suggestion_produced = final_state.final_suggestion is not None
+        intent_result = final_state.get("intent_result")
+        result.actual_intent = intent_result.intent if intent_result else ""
+        result.intent_correct = (result.actual_intent == case.expected_intent)
+        result.blocked = final_state.get("blocked", False)
+        result.block_reason = final_state.get("block_reason", "")
+        result.suggestion_produced = final_state.get("final_suggestion") is not None
 
         # Build suggestion text for leakage + critic
         suggestion_text = ""
-        if final_state.final_suggestion:
+        final_suggestion = final_state.get("final_suggestion")
+        if final_suggestion:
             suggestion_text = (
-                final_state.final_suggestion.suggested_question + " " +
-                final_state.final_suggestion.rationale_summary
+                final_suggestion.suggested_question + " " +
+                final_suggestion.rationale_summary
             )
 
         # Check hidden-fact leakage (strengthened)
@@ -393,7 +406,7 @@ def build_report(results: list[CaseResult], cases: list[CoachCase] | None = None
         combos = {(c.specialty, c.difficulty, c.personality) for c in cases}
     else:
         combos = {(r.specialty, r.difficulty, r.personality) for r in results}
-    from evaluation.coach_cases.coach_dataset import VALID_SPECIALTIES, VALID_DIFFICULTIES, VALID_PERSONALITIES
+    from evaluation.coach_cases.coach_dataset import VALID_DIFFICULTIES, VALID_PERSONALITIES, VALID_SPECIALTIES
     expected = {(s, d, p) for s in VALID_SPECIALTIES for d in VALID_DIFFICULTIES for p in VALID_PERSONALITIES}
     all_strata = combos >= expected
 

@@ -7,7 +7,6 @@ from app.agent_runtime.policy import SkillPolicy
 from app.agent_runtime.skill_executor import SkillExecutor, ToolInvocation
 from app.agent_runtime.skills import SkillManifest, SkillRegistry, SkillValidationError, validate_manifest
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

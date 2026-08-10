@@ -81,7 +81,7 @@ class TestVoiceNonOwner:
         _as_user(DOCTOR_B)
 
         # Mock require_consultation_access to raise 403
-        mock_consultation = SimpleNamespace(id=1, doctor_id=10)
+        _mock_consultation = SimpleNamespace(id=1, doctor_id=10)
         with patch(
             "app.api.v1.voice.require_consultation_access",
             new_callable=AsyncMock,

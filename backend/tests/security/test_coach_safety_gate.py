@@ -1,10 +1,11 @@
 """Tests for coach safety gate (critic agent)."""
 
-import pytest
 from uuid import uuid4
 
+import pytest
+
 from app.agent_runtime.contracts import CoachSuggestion
-from app.agent_runtime.critic import CriticAgent, CriticFinding
+from app.agent_runtime.critic import CriticAgent
 from app.agent_runtime.telemetry import COACH_POLICY_BLOCKED
 
 

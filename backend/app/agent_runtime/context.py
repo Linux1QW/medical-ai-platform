@@ -1,7 +1,7 @@
 """Deterministic context compiler with fixed token budget."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.agent_runtime.contracts import CoachContextView
 

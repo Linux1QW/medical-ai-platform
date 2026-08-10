@@ -4,13 +4,13 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
-    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 

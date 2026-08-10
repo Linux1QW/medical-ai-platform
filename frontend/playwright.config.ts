@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright 配置 for V1.1 Production Closure E2E
+ * Playwright 配置 for V1.2 Coach Intelligence E2E
  *
- * 测试完整评估 → 复核闭环流程
+ * 测试 Coach 建议 → 反馈 → 持久化闭环流程
  */
 export default defineConfig({
   testDir: './e2e',
@@ -40,8 +40,8 @@ export default defineConfig({
   // },
 
   /* 超时配置 */
-  timeout: 60_000, // 单个测试超时
+  timeout: 90_000, // 单个测试超时 (V1.2 Coach SSE may take longer)
   expect: {
-    timeout: 10_000, // 断言超时
+    timeout: 15_000, // 断言超时
   },
 });

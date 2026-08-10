@@ -9,14 +9,11 @@ Provides:
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import subprocess
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-
 
 # ── Per-label precision / recall / F1 ──────────────────────────────────
 
@@ -34,9 +31,9 @@ def compute_per_label_metrics(
     result: dict[str, dict[str, float]] = {}
 
     for label in labels:
-        tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == label and yp == label)
-        fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt != label and yp == label)
-        fn = sum(1 for yt, yp in zip(y_true, y_pred) if yt == label and yp != label)
+        tp = sum(1 for yt, yp in zip(y_true, y_pred, strict=True) if yt == label and yp == label)
+        fp = sum(1 for yt, yp in zip(y_true, y_pred, strict=True) if yt != label and yp == label)
+        fn = sum(1 for yt, yp in zip(y_true, y_pred, strict=True) if yt == label and yp != label)
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
@@ -76,7 +73,7 @@ def compute_accuracy(y_true: list[str], y_pred: list[str]) -> float:
     """Compute plain accuracy (separate from macro-F1)."""
     if not y_true:
         return 0.0
-    correct = sum(1 for yt, yp in zip(y_true, y_pred) if yt == yp)
+    correct = sum(1 for yt, yp in zip(y_true, y_pred, strict=True) if yt == yp)
     return round(correct / len(y_true), 4)
 
 

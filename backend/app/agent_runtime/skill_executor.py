@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agent_runtime.policy import SkillPolicy, TrustLevel, mark_output_untrusted
+from app.agent_runtime.policy import SkillPolicy, mark_output_untrusted
 from app.agent_runtime.skills import SkillManifest, SkillRegistry
 
 logger = logging.getLogger(__name__)

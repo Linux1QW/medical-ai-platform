@@ -1,15 +1,13 @@
 """Tests for CoachRepository transactional operations."""
 
-import asyncio
 import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.repositories.coach import CoachRepository
-from app.models.coach_session import CoachSession
 from app.models.coach_decision import CoachDecision
-from app.models.coach_stream_event import CoachStreamEvent
+from app.models.coach_session import CoachSession
+from app.repositories.coach import CoachRepository
 
 
 @pytest.fixture

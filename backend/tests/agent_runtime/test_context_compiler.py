@@ -1,4 +1,6 @@
 """Tests for context compiler."""
+from uuid import uuid4
+
 import pytest
 
 from app.agent_runtime.context import (
@@ -15,7 +17,6 @@ from app.agent_runtime.contracts import (
     VisibleMessage,
     VisiblePatientProfile,
 )
-from uuid import uuid4
 
 
 def test_default_budget_totals():

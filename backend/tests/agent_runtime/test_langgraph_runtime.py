@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
@@ -17,8 +16,6 @@ from app.agent_runtime.graph import (
     build_coach_graph,
     invoke_coach_graph,
 )
-from app.agent_runtime.state import CoachGraphState
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -205,7 +202,7 @@ async def test_repetition_penalized_once() -> None:
         timeout_seconds=10,
     )
     assert first["status"] == "done"
-    first_confidence = first["final_suggestion"].confidence if first["final_suggestion"] else 0.0
+    _first_confidence = first["final_suggestion"].confidence if first["final_suggestion"] else 0.0
 
     # Second invocation — same intent, same turn, with asked_dimensions showing prior ask
     second = await invoke_coach_graph(

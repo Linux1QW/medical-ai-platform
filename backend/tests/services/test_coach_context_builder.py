@@ -1,10 +1,9 @@
 """Tests for CoachContextBuilder — source-bound context construction."""
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
-from app.agent_runtime.contracts import CoachContextView
+import pytest
+
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.patient import VirtualPatient
 from app.models.trainee_memory import TraineeMemory, TraineeMemoryConsent

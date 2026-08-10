@@ -7,11 +7,25 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _find_alembic_python() -> str:
+    """Find a Python executable that has alembic installed.
+
+    Prefers the project venv; falls back to sys.executable.
+    """
+    venv_python = BACKEND_ROOT / ".venv" / "Scripts" / "python.exe"
+    if not venv_python.exists():
+        venv_python = BACKEND_ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
 def _run_alembic_sql() -> tuple[int, str, str]:
     """Run alembic upgrade head --sql and return (returncode, stdout, stderr)."""
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    python_exe = _find_alembic_python()
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
+        [python_exe, "-m", "alembic", "upgrade", "head", "--sql"],
         cwd=BACKEND_ROOT,
         env=env,
         stdout=subprocess.PIPE,

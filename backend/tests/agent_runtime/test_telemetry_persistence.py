@@ -1,16 +1,17 @@
 """Tests for privacy-safe agent telemetry persistence."""
 
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 from pydantic import SecretStr
 
 from app.agent_runtime.telemetry import (
-    AgentEventRecorder,
-    AgentEventType,
-    compute_hmac,
     COACH_POLICY_BLOCKED,
     COACH_TIMEOUT,
     COACH_UNAVAILABLE,
+    AgentEventRecorder,
+    AgentEventType,
+    compute_hmac,
 )
 
 

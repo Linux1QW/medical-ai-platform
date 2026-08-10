@@ -8,12 +8,12 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.coach_session import CoachSession
 from app.models.coach_decision import CoachDecision
+from app.models.coach_session import CoachSession
 from app.models.coach_stream_event import CoachStreamEvent
 
 

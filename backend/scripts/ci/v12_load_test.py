@@ -452,7 +452,7 @@ async def run_load_test(
     print(f"  Duplicate IDs:     {duplicate_count}")
     print(f"  Trace complete:    {sum(1 for r in results if r.trace_complete)}/{total_completed}")
     if error_counts:
-        print(f"  Error breakdown:")
+        print("  Error breakdown:")
         for cat, cnt in sorted(error_counts.items()):
             print(f"    {cat}: {cnt}")
     print(f"{'='*60}")

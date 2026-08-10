@@ -10,13 +10,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.agent_runtime.context import ContextBudget
 from app.agent_runtime.contracts import (
     CoachContextView,
     CoachIntent,
     CoachSuggestion,
     InterviewStage,
 )
-from app.agent_runtime.context import ContextBudget
 from app.agent_runtime.critic import CriticResult
 from app.services.agents.coach.planner import FollowupPlan
 

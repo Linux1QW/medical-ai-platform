@@ -1,18 +1,15 @@
 """Tests for agent runtime contracts."""
-import pytest
 from uuid import uuid4
+
+import pytest
 from pydantic import ValidationError
 
 from app.agent_runtime.contracts import (
     CoachContextView,
-    CoachSuggestion,
     CoachIntent,
-    AgentRequest,
-    AgentDecision,
-    VisiblePatientProfile,
-    VisibleMessage,
-    ApprovedMemory,
+    CoachSuggestion,
     InterviewStage,
+    VisiblePatientProfile,
 )
 
 

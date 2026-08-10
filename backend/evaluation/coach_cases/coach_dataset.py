@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 CASES_FILE = os.path.join(os.path.dirname(__file__), "coach_v1.jsonl")

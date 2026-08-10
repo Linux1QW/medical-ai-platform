@@ -3,19 +3,15 @@ from __future__ import annotations
 
 from typing import get_args
 
-import pytest
-
-from app.agent_runtime.contracts import CoachIntent, InterviewStage
-from app.services.agents.coach.intent import INTENT_RULES, classify_intent
+from app.agent_runtime.contracts import CoachIntent
+from app.services.agents.coach.intent import classify_intent
 from app.services.agents.coach.planner import (
     INTENT_TO_STAGE,
-    STAGE_PRIORITY,
     FollowupCandidate,
     FollowupPlan,
     build_followup_plan,
 )
 from app.services.memory.working import WorkingMemoryState
-
 
 # ── Intent classification tests ─────────────────────────────────────────────
 

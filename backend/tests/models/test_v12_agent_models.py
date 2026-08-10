@@ -1,13 +1,11 @@
 """Tests for V1.2 agent runtime models."""
-import pytest
-from datetime import datetime, timezone
 
-from app.models.coach_session import CoachSession
-from app.models.coach_decision import CoachDecision
 from app.models.agent_trace_event import AgentTraceEvent
-from app.models.trainee_memory import TraineeMemory
-from app.models.prompt_bundle import PromptBundle
+from app.models.coach_decision import CoachDecision
+from app.models.coach_session import CoachSession
 from app.models.experiment_assignment import ExperimentAssignment
+from app.models.prompt_bundle import PromptBundle
+from app.models.trainee_memory import TraineeMemory
 
 
 def test_coach_session_has_required_columns():

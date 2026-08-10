@@ -1,7 +1,8 @@
 """Deterministic context compiler with fixed token budget."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
 from app.agent_runtime.contracts import CoachContextView
 
 
@@ -57,19 +58,19 @@ def compile_coach_context(
     # System and policy are never truncated
     system_section = COACH_SYSTEM_PROMPT
     policy_section = COACH_SAFETY_POLICY
-    
+
     # Build dialogue section from visible messages
     dialogue_lines = []
     for msg in view.messages:
         dialogue_lines.append(f"[{msg.role}]: {msg.content}")
     dialogue_section = "\n".join(dialogue_lines) if dialogue_lines else None
-    
+
     # Build memory section from approved profile memories
     memory_lines = []
     for mem in view.approved_profile_memories:
         memory_lines.append(f"- {mem.skill_dimension}: {mem.summary}")
     memory_section = "\n".join(memory_lines) if memory_lines else None
-    
+
     return CompiledContext(
         system_section=system_section,
         policy_section=policy_section,

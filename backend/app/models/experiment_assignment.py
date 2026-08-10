@@ -1,7 +1,6 @@
 """Experiment assignment model for V1.2 agent intelligence."""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column

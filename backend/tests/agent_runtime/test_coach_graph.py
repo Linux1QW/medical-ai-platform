@@ -13,10 +13,9 @@ from app.agent_runtime.contracts import (
     VisibleMessage,
     VisiblePatientProfile,
 )
-from app.agent_runtime.critic import CriticAgent, CriticResult
+from app.agent_runtime.critic import CriticAgent
 from app.agent_runtime.evidence import EvidenceAgent
 from app.agent_runtime.graph import CoachGraph, CoachGraphState
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

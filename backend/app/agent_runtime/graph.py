@@ -11,13 +11,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
+from app.agent_runtime.context import CompiledContext, compile_coach_context
 from app.agent_runtime.contracts import (
     CoachContextView,
     CoachIntent,
     CoachSuggestion,
     InterviewStage,
 )
-from app.agent_runtime.context import CompiledContext, compile_coach_context
 from app.agent_runtime.telemetry import AgentEventRecorder
 from app.services.agents.coach.intent import classify_intent
 from app.services.agents.coach.planner import (

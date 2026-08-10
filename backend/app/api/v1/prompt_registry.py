@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.prompt_registry import (
-    AssignmentRequest, AssignmentResponse, BundleResponse,
-    CreateExperimentRequest, ExperimentResponse, RegisterBundleRequest,
-)
 from app.agent_runtime.prompt_registry import PromptRegistry
+from app.schemas.prompt_registry import (
+    AssignmentRequest,
+    AssignmentResponse,
+    BundleResponse,
+    CreateExperimentRequest,
+    ExperimentResponse,
+    RegisterBundleRequest,
+)
 
 router = APIRouter(prefix="/prompt-registry", tags=["prompt-registry"])
 _registry = PromptRegistry()

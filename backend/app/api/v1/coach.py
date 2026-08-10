@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 
 from app.schemas.coach import (

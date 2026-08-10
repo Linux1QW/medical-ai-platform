@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast, Literal, cast
+from typing import Literal, cast
 
 from app.agent_runtime.contracts import (
     CoachContextView,

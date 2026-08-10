@@ -2,27 +2,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from evaluation.coach_attribution import AttributionCandidate, AttributionService
+from evaluation.coach_attribution import AttributionService
 from evaluation.coach_cases.coach_dataset import (
     CoachCase,
     load_cases,
-    validate_dataset,
 )
 from evaluation.coach_eval import (
-    FAILURE_LABELS,
     CaseResult,
     evaluate_all,
     evaluate_case,
 )
-from evaluation.coach_metrics import CoachMetrics, compute_metrics
-
+from evaluation.coach_metrics import compute_metrics
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -318,7 +314,6 @@ class TestReleasePolicyLoads:
 
 def _async_return(value: Any) -> Any:
     """Create a coroutine that returns the given value."""
-    import asyncio
 
     async def _coro() -> Any:
         return value

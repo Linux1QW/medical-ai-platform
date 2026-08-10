@@ -1,10 +1,11 @@
 """Tests for working memory."""
 import pytest
+
 from app.services.memory.working import (
-    WorkingMemoryState,
-    SlotObservation,
-    MemoryConflict,
     HiddenContextViolation,
+    MemoryConflict,
+    SlotObservation,
+    WorkingMemoryState,
     validate_memory_sources,
 )
 

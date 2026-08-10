@@ -1,7 +1,7 @@
 """Rules-first + LLM fallback intent classification."""
 from __future__ import annotations
 
-from typing import Callable, Literal, cast, get_args
+from typing import Callable, cast, get_args
 
 from app.agent_runtime.contracts import CoachIntent
 

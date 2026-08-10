@@ -4,11 +4,9 @@ from __future__ import annotations
 import pytest
 
 from app.agent_runtime.prompt_registry import (
-    PromptBundle,
     PromptRegistry,
     deterministic_assign,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. test_register_bundle

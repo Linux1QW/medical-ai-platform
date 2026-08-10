@@ -7,8 +7,7 @@ import time
 import pytest
 
 from app.voice.agent import VoiceAgent, VoiceAgentConfig, VoiceTranscript
-from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession, VoiceSessionManager
-
+from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSessionManager
 
 # ---------------------------------------------------------------------------
 # VoiceSession / VoiceSessionManager tests

@@ -4,9 +4,9 @@ from __future__ import annotations
 import pytest
 
 from evaluation.coach_cases.coach_dataset import (
-    CoachCase,
     VALID_INTENTS,
     VALID_ROLES,
+    CoachCase,
     load_cases,
     validate_dataset,
 )

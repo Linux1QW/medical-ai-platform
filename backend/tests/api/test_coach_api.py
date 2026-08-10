@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.v1.coach import router, _coach_service
+from app.api.v1.coach import _coach_service, router
 
 
 @pytest.fixture

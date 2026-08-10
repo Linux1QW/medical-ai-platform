@@ -1,15 +1,14 @@
 """Tests for context compiler."""
-import pytest
 from app.agent_runtime.context import (
-    ContextBudget,
-    CompiledContext,
-    compile_coach_context,
     DEFAULT_COACH_BUDGET,
+    CompiledContext,
+    ContextBudget,
+    compile_coach_context,
 )
 from app.agent_runtime.contracts import (
     CoachContextView,
-    VisiblePatientProfile,
     VisibleMessage,
+    VisiblePatientProfile,
 )
 
 

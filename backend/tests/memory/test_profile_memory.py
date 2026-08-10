@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from app.services.memory.profile import ProfileMemoryService, VALID_DIMENSIONS
+from app.services.memory.profile import VALID_DIMENSIONS, ProfileMemoryService
 
 
 @pytest.fixture

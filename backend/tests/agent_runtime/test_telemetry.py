@@ -1,14 +1,10 @@
 """Tests for agent telemetry."""
+
 import pytest
-import hashlib
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
 
 from app.agent_runtime.telemetry import (
     AgentEventRecorder,
     AgentEventType,
-    AgentEventStatus,
-    AgentSpan,
     compute_hmac,
 )
 

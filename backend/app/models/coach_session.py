@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -11,8 +11,21 @@ from app.models.base import Base
 
 class CoachSession(Base):
     __tablename__ = "coach_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('off', 'on_demand', 'shadow')",
+            name="ck_coach_session_mode",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'ended', 'error')",
+            name="ck_coach_session_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, comment="durable public identifier"
+    )
     consultation_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("consultations.id"), nullable=False, unique=True
     )

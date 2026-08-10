@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -23,6 +24,14 @@ class CoachDecision(Base):
         UniqueConstraint(
             "session_id", "turn_no", name="uq_coach_decision_session_turn"
         ),
+        UniqueConstraint(
+            "session_id", "idempotency_key",
+            name="uq_coach_decision_session_idempotency",
+        ),
+        CheckConstraint(
+            "risk_level IN ('low', 'medium', 'high', 'critical')",
+            name="ck_coach_decision_risk_level",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -32,6 +41,14 @@ class CoachDecision(Base):
         nullable=False,
     )
     turn_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    suggestion_id: Mapped[Optional[str]] = mapped_column(
+        String(36), unique=True, nullable=True,
+        comment="durable public identifier for the suggestion",
+    )
+    idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True,
+        comment="client-provided idempotency key",
+    )
     intent: Mapped[str] = mapped_column(String(120), nullable=False)
     stage: Mapped[str] = mapped_column(String(50), nullable=False)
     suggestion_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)

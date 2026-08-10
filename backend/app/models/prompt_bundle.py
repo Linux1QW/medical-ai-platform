@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -11,6 +11,13 @@ from app.models.base import Base
 
 class PromptBundle(Base):
     __tablename__ = "prompt_bundles"
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_prompt_bundle_name_version"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'archived')",
+            name="ck_prompt_bundle_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -23,6 +30,10 @@ class PromptBundle(Base):
     node_prompts: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     output_schemas: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
     model_config: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True,
+        comment="SHA-256 hash of bundle content for integrity verification",
+    )
     skill_manifest_checksum: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )

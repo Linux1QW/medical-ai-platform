@@ -29,7 +29,10 @@ def upgrade() -> None:
         "|| substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) "
         "WHERE public_id IS NULL"
     )
-    op.alter_column("coach_sessions", "public_id", nullable=False)
+    op.alter_column(
+        "coach_sessions", "public_id",
+        existing_type=sa.String(36), nullable=False,
+    )
     op.create_unique_constraint("uq_coach_session_public_id", "coach_sessions", ["public_id"])
     op.create_check_constraint(
         "ck_coach_session_mode",
@@ -65,8 +68,14 @@ def upgrade() -> None:
         "'legacy-' || CAST(id AS TEXT) "
         "WHERE idempotency_key IS NULL"
     )
-    op.alter_column("coach_decisions", "suggestion_id", nullable=False)
-    op.alter_column("coach_decisions", "idempotency_key", nullable=False)
+    op.alter_column(
+        "coach_decisions", "suggestion_id",
+        existing_type=sa.String(36), nullable=False,
+    )
+    op.alter_column(
+        "coach_decisions", "idempotency_key",
+        existing_type=sa.String(64), nullable=False,
+    )
     op.create_unique_constraint(
         "uq_coach_decision_suggestion_id", "coach_decisions", ["suggestion_id"]
     )

@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,12 @@ from evaluation.metrics import (  # noqa: E402
     RAG_STRATA,
     aggregate_stratified_retrieval_metrics,
     evaluate_rag_quality_gates,
+    load_release_policy,
+    validate_policy_gates,
+)
+from evaluation.provenance import (  # noqa: E402
+    ProvenanceError,
+    validate_baseline_provenance,
 )
 
 DEFAULT_GOLDEN = Path(__file__).with_name("bm25_golden_set.json")
@@ -389,6 +396,13 @@ def main() -> int:
         parser.error("--top-k must be positive")
     if args.fail_on_regression and args.compare is None:
         parser.error("--fail-on-regression requires --compare")
+    if args.fail_on_regression and not (
+        args.compare and args.policy and args.baseline_provenance and args.consistency_report
+    ):
+        parser.error(
+            "--fail-on-regression requires --compare, --policy, "
+            "--baseline-provenance, --consistency-report"
+        )
     golden_path = args.golden.resolve()
     if not golden_path.is_file():
         parser.error(f"golden set does not exist: {golden_path}")
@@ -419,6 +433,7 @@ def main() -> int:
 
     report = evaluate(golden_path, args.top_k, index=active_index)
     gate_result = None
+    policy_gate_result = None
     if args.compare is not None:
         if not args.compare.is_file():
             parser.error(f"baseline report does not exist: {args.compare.resolve()}")
@@ -426,6 +441,43 @@ def main() -> int:
             baseline = json.load(baseline_file)
         gate_result = compare_reports(report, baseline)
         report["gates"] = gate_result
+
+    # Provenance + policy gate path
+    if args.fail_on_regression and args.policy and args.baseline_provenance and args.consistency_report:
+        # Validate provenance
+        try:
+            candidate_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True, cwd=Path(__file__).resolve().parents[2]
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            candidate_commit = "unknown"
+
+        manifest_path = Path(args.compare).parent / "index-manifest.json" if args.compare else Path("index-manifest.json")
+        try:
+            validate_baseline_provenance(
+                provenance_path=Path(args.baseline_provenance),
+                baseline_path=Path(args.compare),
+                golden_path=Path(args.golden),
+                evaluator_path=Path(__file__),
+                manifest_path=manifest_path,
+                candidate_commit=candidate_commit,
+            )
+        except ProvenanceError as e:
+            print(f"ERROR: provenance validation failed: {e}", file=sys.stderr)
+            return 1
+
+        # Load consistency report and inject into candidate report
+        consistency = json.loads(Path(args.consistency_report).read_text(encoding="utf-8"))
+        report["consistency"] = {
+            "measured": True,
+            "generation_mismatch_count": consistency.get("generation_mismatch_count", 0),
+            "stale_cache_hit_count": consistency.get("stale_cache_hit_count", 0),
+        }
+
+        # Load policy and validate gates
+        policy = load_release_policy(Path(args.policy))
+        policy_gate_result = validate_policy_gates(report, baseline, policy)
+        report["policy_gates"] = policy_gate_result
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -451,6 +503,12 @@ def main() -> int:
     if args.fail_on_regression and gate_result is not None and not gate_result["passed"]:
         print(
             "BM25 Task 8 gates failed: " + ", ".join(gate_result["failures"]),
+            file=sys.stderr,
+        )
+        exit_code = 1
+    if args.fail_on_regression and policy_gate_result is not None and not policy_gate_result["passed"]:
+        print(
+            "BM25 policy gates failed: " + ", ".join(policy_gate_result["failures"]),
             file=sys.stderr,
         )
         exit_code = 1

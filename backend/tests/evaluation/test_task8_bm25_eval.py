@@ -112,6 +112,12 @@ def test_fail_on_regression_rejects_missing_active_generation(monkeypatch):
             "--compare",
             "missing-baseline.json",
             "--fail-on-regression",
+            "--policy",
+            "policy.json",
+            "--baseline-provenance",
+            "provenance.json",
+            "--consistency-report",
+            "consistency.json",
         ],
     )
 

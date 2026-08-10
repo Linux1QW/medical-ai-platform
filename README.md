@@ -1,6 +1,6 @@
 # 基于多智能体的医生临床问诊评估平台
 
-这是一个面向医学教育、标准化问诊训练和教学复核的全栈平台。医生用户与虚拟患者对话、提交诊断和治疗方案；后台通过 Celery 执行 LangGraph 多智能体评估，输出五维评分、分析、改进建议、知识库证据和人工复核状态。当前版本 **v1.1.0**，覆盖 Task 0–16 全部迭代实现。
+这是一个面向医学教育、标准化问诊训练和教学复核的全栈平台。医生用户与虚拟患者对话、提交诊断和治疗方案；后台通过 Celery 执行 LangGraph 多智能体评估，输出五维评分、分析、改进建议、知识库证据和人工复核状态。当前版本 **v1.2.0**，覆盖 Task 0–16 全部迭代实现（含 V1.2 智能教练、语音 beta 和数据飞轮）。
 
 > **医疗安全声明**：本项目仅用于教学、训练、研究和质量改进，不提供真实诊疗服务，也不能替代执业医师的诊断、处方、急救决策或人工审核。出现急危重症或现实医疗问题时，应立即转交合格医疗机构和专业人员。所有评估报告均为**辅助质量评估，非自主诊断/治疗决策**。
 
@@ -16,6 +16,13 @@
 - **Transactional Outbox + Dispatcher**：评估任务通过 Outbox 表与业务事务原子写入，独立 Dispatcher 进程轮询派发至 Celery，保证至少一次投递。
 - **双 Redis 物理拓扑**：`redis-state`（AOF + noeviction）承载 checkpoint/broker/result/JWT/控制/进度；`redis-cache`（allkeys-LRU）承载 LLM 缓存和检索缓存。
 - **EvaluationRun 状态机**：queued → running → completed/needs_review/failed/cancelled，含 retrying 重试路径和协作式取消。
+- **Interview Coach（opt-in，默认关闭）**：7 节点 LangGraph 图（intent → planner → evidence → draft → critic → finalize → persist），CoachContextView 隔离隐藏字段，Working Memory 16K 预算，Critic 安全检查，SSE 流式建议 + 幂等重放。
+- **三层记忆**：Working Memory（对话槽位 + 隐藏事实校验）、Episodic Memory（历史问诊摘要）、Approved Trainee Profile（6 维度、consent 默认 false、PHI 校验、管理员审批）。
+- **Skill Registry + Policy Enforcement**：工具白名单、预算控制、UNTRUSTED_EVIDENCE 包装、控制指令清洗。
+- **MCP Demo Server**：stdio-only JSON-RPC 2.0，只读、去标识化、静态 fixture，不绑定网络端口。
+- **LiveKit Voice Beta（optional）**：房间令牌 TTL ≤600s、部分转录仅内存、原始录音不保存、去重 final transcript。
+- **Prompt Registry + A/B Rollout**：PromptBundle 生命周期管理 + ExperimentAssignment 实验分配。
+- **Coach Attribution Flywheel**：trace → eval → attribution candidate → admin review + deidentify → eligible for training。
 - MySQL 8、双 Redis 7、Celery Worker/Beat、Evaluation Dispatcher、Prometheus/Grafana 和 Docker Compose。
 
 ```text
@@ -138,6 +145,9 @@ Compose 的 `migrate` 服务会在启动时自动执行 Alembic 迁移。`backen
 | `DASHSCOPE_API_KEY` | 空 | 阿里云百炼 API Key |
 | `LANGGRAPH_ENABLED` | `true` | Feature Flag |
 | `ENABLE_TOOL_USE` | `true` | Function Call / Tool Use |
+| `COACH_ENABLED` | `false` | Interview Coach（opt-in，默认关闭） |
+| `COACH_HMAC_KEY` | 空 | Coach 遥测 HMAC 签名密钥（启用时必须配置） |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | 空 | LiveKit 语音 beta（可选） |
 
 完整变量列表见 `backend/.env.example` 和 [PROJECT_GUIDE](docs/PROJECT_GUIDE.md#6-配置与默认值)。
 
@@ -146,6 +156,9 @@ Compose 的 `migrate` 服务会在启动时自动执行 Alembic 迁移。`backen
 - [PROJECT_GUIDE](docs/PROJECT_GUIDE.md)：唯一权威总手册；配置、API、数据、RAG/Celery、评测、运维与限制均以此为准。
 - [技术架构说明](docs/technical-document.md)：面向开发者，聚焦状态机、Outbox/Dispatcher、双 Redis、LangGraph、RAG generation 和数据保留。
 - [平台操作说明](docs/platform-documentation.md)：面向医生、教师/管理员和运维人员的操作流程。
+- [V1.2 Production Guide](docs/release-evidence/v1.2/production-v1.2.md)：V1.2 API 与安全行为权威文档。
+- [V1.2 Runbook](docs/runbooks/production-v1.2.md)：V1.2 部署、回滚和运维流程。
+- [V1.2 Acceptance Summary](docs/release-evidence/v1.2/acceptance-summary.md)：V1.2 验收证据（指标待实测）。
 - [评测基线](docs/evaluation-baseline.md)：五维分数语义、图节点清单、复核反馈闭环。
 - [Prompt 与 Provider 适配](docs/prompt-and-provider-adapter.md)：Prompt 文件与 LLM Provider 专题。
 - [贡献指南](CONTRIBUTING.md)、[变更记录](CHANGELOG.md)。

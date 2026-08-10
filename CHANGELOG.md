@@ -5,15 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/spec/v2.0.0.html).
 
-## [Unreleased] - V1.2 Agent Intelligence
+## [Unreleased]
+
+## [1.2.0] - 2026-08-10
 
 ### Added
-- Interview Coach Agent with Multi-Agent LangGraph orchestration
-- Three-layer memory: working, episodic, approved trainee profile
-- Skill/Tool registry with versioning, permissions, budgets and injection protection
-- AgentOps data flywheel: trace → eval → attribution → candidate → A/B → release
-- LiveKit realtime voice beta
-- 72-case stratified coach benchmark
+
+- **Interview Coach Agent（opt-in，默认关闭）**：7 节点 LangGraph 图（intent → planner → evidence → draft → critic → finalize → persist），CoachContextView 隔离隐藏字段（`extra="forbid"`），Working Memory 16K 预算，Critic 安全检查，SSE 流式建议 + 幂等重放 + Last-Event-ID 重放
+- **三层记忆架构**：Working Memory（对话槽位 + 隐藏事实校验 `HiddenContextViolation`）、Episodic Memory（历史问诊摘要）、Approved Trainee Profile Memory（6 维度、consent 默认 false、PHI 正则校验、管理员审批、最多 5 条进入上下文）
+- **Skill Registry + Policy Enforcement**：工具白名单（per-agent least privilege）、预算控制、UNTRUSTED_EVIDENCE 包装、控制指令清洗、结果长度限制
+- **MCP Demo Server**：stdio-only JSON-RPC 2.0，两个只读工具（search_teaching_rubric、search_medical_kb），静态 fixture，去标识化，不绑定网络端口
+- **LiveKit Voice Beta（optional）**：房间令牌 TTL ≤600s、max 4 participants、部分转录仅内存不持久化、原始录音不保存、final transcript 去重 `(room_sid, participant_sid, turn_id)`
+- **Prompt Registry + A/B Rollout**：PromptBundle 生命周期（draft → active → deprecated）+ ExperimentAssignment 实验分配
+- **Coach Attribution Flywheel**：trace → eval → attribution candidate → admin review + deidentify → eligible for training
+- **Coach API 端点**：`/api/v1/coach/consultations/{id}/suggestions/stream`（SSE）、`/state`、`/feedback`、`/admin/traces`
+- **Voice API 端点**：`/api/v1/voice/sessions`、`/sessions/{room_name}/state`、`/sessions/{room_name}/end`
+- **Trainee Memory API 端点**：`/api/v1/trainee-memory/memories`、`/me/memories`、`/me/consent`、`/memories/{id}/review`
+- **V1.2 数据库迁移**：`4d5e6f7a8b9c` 新增 coach_sessions、coach_decisions、coach_stream_events、trainee_memories、trainee_memory_consents、prompt_bundles、experiment_assignments、agent_trace_events；`5e6f7a8b9c0d` remediation 补充约束和索引
+- **V1.2 权限模型**：`coach:use`、`coach:trace:view`、`trainee-memory:manage-self`、`trainee-memory:review`、`voice:use`、`prompt:manage`、`experiment:manage`
+- **Agent Telemetry**：12 事件类型、HMAC 签名、隐私安全
+- **Coach Frontend UI**：CoachPanel 组件（6 状态：disabled/idle/thinking/suggestion/degraded/error）、useCoachSuggestion hook（SSE + 幂等重放）
+
+### Changed
+
+- README 更新到 v1.2.0，新增 V1.2 功能描述和文档导航
+- 文档新增 V1.2 Production Guide、V1.2 Runbook、V1.2 Acceptance Summary
+
+### Security
+
+- Coach 默认关闭（`COACH_ENABLED=false`），所有 coach 端点在禁用时返回 409
+- CoachContextView 使用 `extra="forbid"` 拒绝 expected_diagnosis 等隐藏字段
+- Working Memory `validate_memory_sources()` 阻止隐藏上下文泄露
+- 所有工具输出标记为 UNTRUSTED_EVIDENCE 防止 prompt injection
+- Trainee memory consent 默认 false（opt-in），PHI 正则校验拒绝 SSN/信用卡/邮箱/IP
+- Voice 不保存原始音频，部分转录仅内存
+- MCP Demo Server 不绑定网络端口，stdio-only
+- IDOR 防护：Coach 端点验证 consultation 归属，Voice 端点验证问诊访问权
+
+### Note
+
+- Coach 为 opt-in 功能，默认关闭，需要显式配置 `COACH_ENABLED=true` 和 `COACH_HMAC_KEY`
+- Voice 为 optional beta，需要配置 LiveKit 凭据，不参与评估流程
+- MCP Demo Server 为演示用途，使用静态 fixture，不连接生产数据库
+- 验收指标（Intent F1、hidden-fact leakage、latency 等）需要实测环境运行，当前未宣称通过
 
 ## [1.1.0] - 2026-08-10
 

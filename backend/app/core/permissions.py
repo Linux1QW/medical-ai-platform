@@ -5,18 +5,27 @@ from fastapi import Depends, HTTPException
 from app.core.deps import get_current_user
 from app.models.user import User
 
-# 预定义角色权限映射
+# 预定义角色权限映射（least-privilege）
 PERMISSIONS: dict[str, list[str]] = {
     "admin": [
         "evaluation:create", "evaluation:view", "evaluation:review",
         "consultation:create", "consultation:view",
         "patient:create", "patient:view", "patient:export",
         "user:manage", "system:manage", "model:manage", "knowledge:manage",
+        # v1.2: 管理员额外权限
+        "coach:use", "coach:trace:view",
+        "trainee-memory:manage-self", "trainee-memory:review",
+        "voice:use",
+        "prompt:manage", "experiment:manage",
     ],
     "doctor": [
         "evaluation:create", "evaluation:view",
         "consultation:create", "consultation:view",
         "patient:view",
+        # v1.2: 医生最小权限
+        "coach:use",
+        "trainee-memory:manage-self",
+        "voice:use",
     ],
 }
 

@@ -1,5 +1,5 @@
 # ============================================
-# Docker Compose - 医疗AI平台 v1.1 统一容器运行环境
+# Docker Compose - 医疗AI平台 v1.2 统一容器运行环境
 # ============================================
 # 使用方式:
 #   生产环境: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -76,6 +76,16 @@ x-backend-environment: &backend-environment
   LOG_FORMAT: ${LOG_FORMAT:-json}
   # 备份状态文件（只读，缺失只影响指标不阻止 readiness）
   BACKUP_STATUS_FILE: /var/run/medical-ai-backup/last_success.json
+  # Coach / Voice (v1.2)
+  COACH_ENABLED: ${COACH_ENABLED:-false}
+  COACH_HMAC_KEY: ${COACH_HMAC_KEY:-}
+  COACH_CONTEXT_TOKEN_LIMIT: ${COACH_CONTEXT_TOKEN_LIMIT:-16000}
+  COACH_OUTPUT_TOKEN_LIMIT: ${COACH_OUTPUT_TOKEN_LIMIT:-250}
+  COACH_HARD_TIMEOUT_SECONDS: ${COACH_HARD_TIMEOUT_SECONDS:-8}
+  COACH_SSE_EVENT_TTL_SECONDS: ${COACH_SSE_EVENT_TTL_SECONDS:-3600}
+  LIVEKIT_URL: ${LIVEKIT_URL:-}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
   TZ: Asia/Shanghai
 
 x-backend-volumes: &backend-volumes
@@ -123,7 +133,7 @@ services:
     networks:
       - backend-net
 
-  # ── Redis（状态）：AOF + noeviction ────────
+  # ── Redis（状态）：AOM + noeviction ────────
   redis-state:
     image: redis:7-alpine
     command:
@@ -150,7 +160,7 @@ services:
     networks:
       - backend-net
 
-  # ── Redis（缓存）：allkeys-lru ─────────────
+  # ── Redis（缓存）：allkeys-lru ───────────
   redis-cache:
     image: redis:7-alpine
     command:

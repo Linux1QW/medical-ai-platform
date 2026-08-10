@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote_plus
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -307,6 +307,19 @@ class Settings(BaseSettings):
     BGE_M3_USE_FP16: bool = False         # GPU 环境开启 FP16 量化
     BGE_M3_QUERY_INSTRUCTION: str = "为这个医学查询生成检索表示："
 
+    # ── Coach（临床教练智能体）────────────────────────────────
+    COACH_ENABLED: bool = False
+    COACH_HMAC_KEY: Optional[SecretStr] = None
+    COACH_CONTEXT_TOKEN_LIMIT: int = 16_000
+    COACH_OUTPUT_TOKEN_LIMIT: int = 250
+    COACH_HARD_TIMEOUT_SECONDS: int = 8
+    COACH_SSE_EVENT_TTL_SECONDS: int = 3_600
+
+    # ── Voice（语音问诊，LiveKit）──────────────────────────────
+    LIVEKIT_URL: Optional[str] = None
+    LIVEKIT_API_KEY: Optional[SecretStr] = None
+    LIVEKIT_API_SECRET: Optional[SecretStr] = None
+
     # 数据库连接池配置
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
@@ -344,6 +357,44 @@ class Settings(BaseSettings):
     def llm_model(self) -> str:
         """通用 LLM 模型（未配置时回退 QWEN_MODEL）。"""
         return self.LLM_MODEL or self.QWEN_MODEL
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_coach_and_voice(cls, values: dict) -> dict:
+        env = values.get("ENVIRONMENT", "development")
+        # --- Coach: staging/production 要求 HMAC key >= 32 bytes ---
+        if env in ("staging", "production"):
+            coach_enabled = values.get("COACH_ENABLED", False)
+            if isinstance(coach_enabled, str):
+                coach_enabled = coach_enabled.lower() in ("true", "1", "yes")
+            if coach_enabled:
+                hmac_key = values.get("COACH_HMAC_KEY")
+                if not hmac_key:
+                    raise ValueError(
+                        "COACH_HMAC_KEY is required (>= 32 bytes) when "
+                        "COACH_ENABLED=true in staging/production"
+                    )
+                key_str = (
+                    hmac_key.get_secret_value()
+                    if hasattr(hmac_key, "get_secret_value")
+                    else str(hmac_key)
+                )
+                if len(key_str.encode("utf-8")) < 32:
+                    raise ValueError(
+                        "COACH_HMAC_KEY must be >= 32 bytes in staging/production"
+                    )
+        # --- Voice: 三个 LiveKit 值必须同时配置 ---
+        lk_vals = [
+            values.get("LIVEKIT_URL"),
+            values.get("LIVEKIT_API_KEY"),
+            values.get("LIVEKIT_API_SECRET"),
+        ]
+        if any(lk_vals) and not all(lk_vals):
+            raise ValueError(
+                "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET "
+                "must all be set together for voice functionality"
+            )
+        return values
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

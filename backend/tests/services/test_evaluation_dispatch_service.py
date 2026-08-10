@@ -590,3 +590,20 @@ async def test_purge_terminal_dispatches(db_session: AsyncSession):
 
     result = await db_session.execute(select(EvaluationDispatchOutbox))
     assert result.scalar_one_or_none() is None
+
+
+# ── Test: claim uses FOR UPDATE SKIP LOCKED with deterministic order ─────────
+
+
+def test_claim_uses_skip_locked_and_deterministic_order():
+    """claim_dispatch_batch must use FOR UPDATE SKIP LOCKED with deterministic ordering."""
+    from sqlalchemy.dialects import mysql
+    from app.services.evaluation_dispatch_service import build_claim_statement
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    stmt = build_claim_statement(now=now, batch_size=20)
+    compiled = stmt.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True})
+    sql = str(compiled).upper()
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "ORDER BY" in sql

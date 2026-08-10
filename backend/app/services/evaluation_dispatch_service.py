@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from app.models.evaluation_dispatch_outbox import (
     EvaluationDispatchOutbox,
@@ -77,6 +78,53 @@ def compute_backoff(attempts: int, jitter: float = 0.0) -> float:
     return float(base) + jitter
 
 
+# ── Claimable predicate ───────────────────────────────────────────────────────
+
+
+def claimable_dispatch_predicate(now: datetime):
+    """Return the WHERE clause for rows that are claimable.
+
+    - status=pending AND (next_attempt_at IS NULL OR next_attempt_at <= now)
+    - status=leased AND lease_expires_at <= now (expired lease recovery)
+    """
+    return or_(
+        # pending 且到达重试时间
+        and_(
+            EvaluationDispatchOutbox.status == "pending",
+            or_(
+                EvaluationDispatchOutbox.next_attempt_at.is_(None),
+                EvaluationDispatchOutbox.next_attempt_at <= now,
+            ),
+        ),
+        # leased 但租约过期
+        and_(
+            EvaluationDispatchOutbox.status == "leased",
+            EvaluationDispatchOutbox.lease_expires_at <= now,
+        ),
+    )
+
+
+# ── Build claim statement ─────────────────────────────────────────────────────
+
+
+def build_claim_statement(*, now: datetime, batch_size: int) -> Select:
+    """Build a SELECT statement with FOR UPDATE SKIP LOCKED for concurrent claim.
+
+    Deterministic ordering: next_attempt_at ASC, created_at ASC, event_id ASC.
+    """
+    return (
+        select(EvaluationDispatchOutbox)
+        .where(claimable_dispatch_predicate(now))
+        .order_by(
+            EvaluationDispatchOutbox.next_attempt_at.asc(),
+            EvaluationDispatchOutbox.created_at.asc(),
+            EvaluationDispatchOutbox.event_id.asc(),
+        )
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+
+
 # ── Service functions ─────────────────────────────────────────────────────────
 
 
@@ -125,33 +173,10 @@ async def claim_dispatch_batch(
 ) -> list[DispatchLease]:
     """批量 claim pending 或 lease 过期的 outbox 行
 
-    SQLite 不支持 SELECT FOR UPDATE SKIP LOCKED，此处用普通 SELECT 模拟。
-    生产环境（MySQL）应使用 FOR UPDATE SKIP LOCKED。
+    使用 FOR UPDATE SKIP LOCKED 实现并发安全 claim（MySQL）。
+    SQLite 单元测试中 with_for_update 会被忽略，不影响功能验证。
     """
-    # 查找可 claim 的行：
-    # 1. status=pending AND (next_attempt_at IS NULL OR next_attempt_at <= now)
-    # 2. status=leased AND lease_expires_at <= now（过期租约回收）
-    stmt = (
-        select(EvaluationDispatchOutbox)
-        .where(
-            or_(
-                # pending 且到达重试时间
-                and_(
-                    EvaluationDispatchOutbox.status == "pending",
-                    or_(
-                        EvaluationDispatchOutbox.next_attempt_at.is_(None),
-                        EvaluationDispatchOutbox.next_attempt_at <= now,
-                    ),
-                ),
-                # leased 但租约过期
-                and_(
-                    EvaluationDispatchOutbox.status == "leased",
-                    EvaluationDispatchOutbox.lease_expires_at <= now,
-                ),
-            )
-        )
-        .limit(batch_size)
-    )
+    stmt = build_claim_statement(now=now, batch_size=batch_size)
     result = await db.execute(stmt)
     rows = result.scalars().all()
 

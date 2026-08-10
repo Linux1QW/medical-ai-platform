@@ -49,14 +49,16 @@ x-e2e-backend-environment: &e2e-backend-environment
 services:
 
   # ── Mock OpenAI Server ──────────────────────
+  # NOTE: 不暴露 host 端口，避免与 frontend 8080 冲突。
+  # 后端通过 Compose 内部网络访问 http://mock-openai:8080/v1
   mock-openai:
     build:
       context: .
       dockerfile: Dockerfile.backend
       target: production
     command: python -m tests.fixtures.mock_openai_server
-    ports:
-      - "${E2E_MOCK_OPENAI_PORT:-8080}:8080"
+    expose:
+      - "8080"
     environment:
       ENVIRONMENT: test
     healthcheck:

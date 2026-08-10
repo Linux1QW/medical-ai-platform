@@ -162,7 +162,7 @@ class CoachGraph:
         recommended = state.followup_plan.recommended_intent or state.intent
 
         # Map intent to stage
-        stage: InterviewStage = INTENT_TO_STAGE.get(state.intent, "off_topic")  # type: ignore[assignment]
+        stage: InterviewStage = INTENT_TO_STAGE.get(state.intent, "off_topic")
 
         # Build rationale from plan
         rationale = f"Intent: {state.intent}"

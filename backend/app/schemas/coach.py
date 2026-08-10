@@ -4,15 +4,19 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CoachStreamRequest(BaseModel):
-    """Request to start a coach suggestion stream."""
-    consultation_id: int
-    doctor_id: int
-    latest_message: str = Field(min_length=1, max_length=5000)
-    idempotency_key: str = Field(min_length=8, max_length=64)
+    """Request to start a coach suggestion stream.
+
+    consultation_id and doctor_id are NOT in the body — they come from
+    the URL path and the authenticated user respectively.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    latest_message: str = Field(min_length=1, max_length=5_000)
+    idempotency_key: str = Field(min_length=16, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class CoachStateResponse(BaseModel):

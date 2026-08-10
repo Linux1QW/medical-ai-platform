@@ -648,11 +648,11 @@ CASES_DATA = {
     ["expected_diagnosis:急性胰腺炎", "unrevealed:患者有胆石症病史", "unrevealed:发病前有暴饮暴食"],
     ["examination", "past_history", "hpi_associated"]),
 
-    ("emergency", "easy", "anxious"): (35, "男", "被犬咬伤右小腿两小时", [
-        ("doctor", "您好，被狗咬了？"),
-        ("patient", "对，小区里的狗突然冲出来咬了我一口。"),
-        ("doctor", "伤口有没有出血？狗有没有打过疫苗？"),
-        ("patient", "出血了，不知道狗打没打疫苗。我会不会得狂犬病？")
+    ("emergency", "easy", "anxious"): (35, "男", "右小腿动物咬伤后出血两小时", [
+        ("doctor", "您好，腿是怎么伤的？"),
+        ("patient", "被小区里的狗咬了，突然冲出来咬了一口。"),
+        ("doctor", "伤口有没有出血？那只狗有没有打过疫苗？"),
+        ("patient", "出血了，不知道狗打没打疫苗。我会不会得什么病？")
     ], "examination", "history_present_illness",
     ["expected_diagnosis:犬咬伤", "unrevealed:伤口较深可能需缝合", "unrevealed:患者有青霉素过敏史影响预防用药"],
     ["examination", "past_history", "treatment_communication"]),

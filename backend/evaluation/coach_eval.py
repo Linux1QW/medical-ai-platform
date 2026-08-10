@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast, Literal, cast
 
 from app.agent_runtime.contracts import (
     CoachContextView,
@@ -65,7 +65,7 @@ def evaluate_case(case: CoachCase) -> CaseResult:
         for i, msg in enumerate(case.dialogue_prefix):
             messages.append(VisibleMessage(
                 sequence=i + 1,
-                role=msg["role"],
+                role=cast(Literal["doctor", "patient", "system"], msg["role"]),
                 content=msg["content"],
             ))
 

@@ -1,0 +1,340 @@
+name: V1.2 Release Candidate Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Full 40-character commit SHA of the release candidate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v12-rc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Validate input ────────────────────────────────────────────────
+  validate-input:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject non-SHA input
+        run: |
+          SHA="${{ inputs.candidate_sha }}"
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a full 40-character commit SHA, got: '$SHA'"
+            exit 1
+          fi
+          echo "candidate_sha is valid: $SHA"
+
+  # ── Real-model 72-case gate ───────────────────────────────────────
+  v12-72case-live:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run real-model 72-case gate
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: rc-test-secret-key
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          python scripts/ci/v12_coach_gate.py --execution-mode live --output-dir benchmark_reports --json
+
+      - name: Upload 72-case live report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v12-rc-72case-live-report
+          path: backend/benchmark_reports/v12_coach_gate_report.json
+          retention-days: 90
+
+  # ── Authenticated E2E ─────────────────────────────────────────────
+  v12-auth-e2e:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Start backend API
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: rc-test-secret-key
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'false'
+          TESTING: 'true'
+        run: |
+          cd backend
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+          curl -f http://localhost:8000/health || exit 1
+
+      - name: Run authenticated E2E tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: rc-test-secret-key
+          TESTING: 'true'
+        run: |
+          cd backend
+          python -m pytest tests/api/ -v --tb=short -k "auth"
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v12-rc-auth-e2e-report
+          path: |
+            backend/benchmark_reports/
+          retention-days: 90
+
+  # ── HTTP load test ────────────────────────────────────────────────
+  v12-load-test:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run HTTP load test
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python scripts/ci/v12_load_test.py
+
+      - name: Upload load test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v12-rc-load-test-report
+          path: backend/benchmark_reports/
+          retention-days: 90
+
+  # ── Fault recovery ────────────────────────────────────────────────
+  v12-fault-recovery:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run fault recovery tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: rc-test-secret-key
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python scripts/ci/run_v11_fault_matrix.py
+
+      - name: Upload fault recovery report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v12-rc-fault-recovery-report
+          path: backend/benchmark_reports/
+          retention-days: 90
+
+  # ── Generate signed manifest ──────────────────────────────────────
+  v12-rc-manifest:
+    needs: [v12-72case-live, v12-auth-e2e, v12-load-test, v12-fault-recovery]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Download all reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: reports/
+
+      - name: Generate signed manifest
+        run: |
+          CANDIDATE_SHA="${{ inputs.candidate_sha }}"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          cat > "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json" <<EOF
+          {
+            "candidate_sha": "$CANDIDATE_SHA",
+            "timestamp": "$TIMESTAMP",
+            "workflows": {
+              "v12-72case-live": "${{ needs.v12-72case-live.result }}",
+              "v12-auth-e2e": "${{ needs.v12-auth-e2e.result }}",
+              "v12-load-test": "${{ needs.v12-load-test.result }}",
+              "v12-fault-recovery": "${{ needs.v12-fault-recovery.result }}"
+            },
+            "all_passed": $([ "${{ needs.v12-72case-live.result }}" = "success" ] && \
+              [ "${{ needs.v12-auth-e2e.result }}" = "success" ] && \
+              [ "${{ needs.v12-load-test.result }}" = "success" ] && \
+              [ "${{ needs.v12-fault-recovery.result }}" = "success" ] && echo "true" || echo "false")
+          }
+          EOF
+
+          sha256sum "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json" > "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json.sha256"
+
+      - name: Upload signed manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v12-rc-manifest
+          path: |
+            v12-rc-manifest-*.json
+            v12-rc-manifest-*.json.sha256
+          retention-days: 365

@@ -40,16 +40,16 @@ def _task_key(run_id: str) -> str:
 
 async def _get_control_redis() -> Optional[aioredis.Redis]:
     """获取控制 Redis 客户端（lazy init）"""
-    global _controlredis
-    if _controlredis is not None:
-        return _controlredis
+    global _control_redis
+    if _control_redis is not None:
+        return _control_redis
 
     try:
         from app.core.config import settings
         url = getattr(settings, "EVALUATION_CONTROL_REDIS_URL", "redis://localhost:6379/8")
-        _controlredis = aioredis.from_url(url, decode_responses=True)
-        await _controlredis.ping()
-        return _controlredis
+        _control_redis = aioredis.from_url(url, decode_responses=True)
+        await _control_redis.ping()
+        return _control_redis
     except Exception as e:
         logger.debug(f"控制 Redis 连接失败: {e}")
         return None
@@ -57,13 +57,13 @@ async def _get_control_redis() -> Optional[aioredis.Redis]:
 
 async def close_control_redis() -> None:
     """幂等关闭控制 Redis 连接"""
-    global _controlredis
-    if _controlredis is not None:
+    global _control_redis
+    if _control_redis is not None:
         try:
-            await _controlredis.close()
+            await _control_redis.close()
         except Exception:
             pass
-        _controlredis = None
+        _control_redis = None
 
 
 # ── 向后兼容：保留 consultation_id 接口（内部转为 run_id key）──────────────

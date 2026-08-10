@@ -20,8 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
 _TEST_HMAC_KEY = "test-feedback-hmac-key-for-unit-tests"
@@ -406,8 +404,9 @@ class TestExportLogic:
 
     def test_missing_hmac_key_exits_nonzero(self):
         """缺少 FEEDBACK_EXPORT_HMAC_KEY 时 CLI 返回非零"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         args = argparse.Namespace(
             output="/tmp/test.jsonl",
@@ -428,8 +427,9 @@ class TestExportLogic:
 
     def test_sensitive_without_acknowledgment_rejected(self):
         """--include-content 没有 --acknowledge-sensitive-data 被拒绝"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         args = argparse.Namespace(
             output="/tmp/test.jsonl",
@@ -445,8 +445,9 @@ class TestExportLogic:
 
     def test_empty_result_writes_empty_file(self):
         """空结果正常退出并写空文件"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = str(Path(tmpdir) / "candidates.jsonl")
@@ -471,8 +472,9 @@ class TestExportLogic:
 
     def test_atomic_write_produces_valid_jsonl(self):
         """原子写输出有效 JSONL"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = str(Path(tmpdir) / "candidates.jsonl")
@@ -507,8 +509,9 @@ class TestExportLogic:
 
     def test_limit_caps_output(self):
         """--limit 限制导出数量"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = str(Path(tmpdir) / "candidates.jsonl")
@@ -541,13 +544,14 @@ class TestExportLogic:
 
             assert result == 0
             content = Path(output_path).read_text(encoding="utf-8").strip()
-            lines = [l for l in content.split("\n") if l.strip()]
+            lines = [line for line in content.split("\n") if line.strip()]
             assert len(lines) == 2
 
     def test_db_error_returns_nonzero(self):
         """数据库错误返回非零退出码"""
-        from scripts.export_review_feedback import async_main
         import argparse
+
+        from scripts.export_review_feedback import async_main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = str(Path(tmpdir) / "candidates.jsonl")

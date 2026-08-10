@@ -128,8 +128,8 @@ class TestReviewEndpointAuth:
     def test_submit_no_reviewer_id_in_body(self, client):
         """请求体不包含 reviewer_id 字段"""
         _as_admin()
-        from uuid import uuid4
         from datetime import datetime
+        from uuid import uuid4
 
         mock_result = {
             "review_id": uuid4(),

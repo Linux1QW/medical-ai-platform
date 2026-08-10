@@ -4,8 +4,9 @@
 TDD Phase 1: 这些测试在实现之前应该失败。
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 

@@ -1424,7 +1424,7 @@ def validate_policy_gates(
         else:
             continue
 
-        operator = metric_spec.get("operator", "ge")
+        _operator = metric_spec.get("operator", "ge")  # noqa: F841
         checks[metric_name] = _comparison_check(candidate_val, baseline_val)
 
     # Performance checks

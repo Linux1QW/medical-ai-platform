@@ -19,9 +19,9 @@ Reconciliation 语义：
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.celery_app import celery_app
@@ -55,7 +55,7 @@ _TERMINAL_STATUSES = frozenset({"completed", "needs_review", "reviewed", "failed
 # ── Reconciliation Logic ─────────────────────────────────────────────────────
 
 
-async def reconcile_all(db: AsyncSession) -> dict:
+async def reconcile_all(db: AsyncSession) -> dict:  # noqa: C901
     """执行一轮 reconciliation，返回处理统计"""
     now = datetime.utcnow()
     stats = {
@@ -293,6 +293,6 @@ async def _do_reconcile() -> dict:
             stats = await reconcile_all(db)
             await db.commit()
             return stats
-        except Exception as e:
+        except Exception:
             await db.rollback()
             raise

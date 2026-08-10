@@ -165,7 +165,7 @@ def test_probe_restores_pointer_on_failure(tmp_path):
     pointer_file = artifact_root / "active_pointer.json"
     pointer_file.write_text(json.dumps({"generation": "gen-v1"}), encoding="utf-8")
 
-    result = probe_rag_consistency.run_probe(
+    probe_rag_consistency.run_probe(
         baseline_generation="gen-v1",
         candidate_generation="gen-v2",
         artifact_root=artifact_root,

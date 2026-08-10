@@ -9,16 +9,13 @@ import asyncio
 import json
 import logging
 import random
-import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 from app.schemas.evaluation import EvaluationJobStatus
 from app.services.observability.metrics import (
-    EVALUATION_PROGRESS_DELIVERY,
     EVALUATION_PROGRESS_PUBLISH_TOTAL,
 )
 
@@ -31,7 +28,7 @@ logger = logging.getLogger(__name__)
 class EvaluationProgressEvent(BaseModel):
     """跨进程进度事件"""
     type: str = "progress"
-    run_id: UUID
+    run_id: str
     consultation_id: int
     status: EvaluationJobStatus
     progress: int = Field(ge=0, le=100)

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +27,8 @@ from app.services.review_service import (
     ReviewSaveError,
     count_pending_evaluations,
     list_pending_evaluations,
+)
+from app.services.review_service import (
     submit_review as svc_submit_review,
 )
 

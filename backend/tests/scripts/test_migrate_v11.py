@@ -11,10 +11,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, call, patch
-
-import pytest
-
+from unittest.mock import MagicMock, patch
 
 # ── 1. 全新库无 operator ────────────────────────────────────────────────────
 
@@ -31,7 +28,7 @@ class TestMigrateFreshDatabase:
         mock_result.stdout = "Current revision: None"
 
         with (
-            patch("scripts.migrate_v11._run_command", return_value=mock_result) as mock_cmd,
+            patch("scripts.migrate_v11._run_command", return_value=mock_result),
             patch("scripts.migrate_v11._get_current_revision", return_value=None),
             patch("scripts.migrate_v11._count_backfill_candidates", return_value={"null_run_id": 0, "orphans": 0, "ambiguous": 0}),
         ):

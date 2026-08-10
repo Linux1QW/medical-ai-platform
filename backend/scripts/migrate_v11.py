@@ -20,7 +20,7 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,9 @@ def _count_backfill_candidates(cwd: Optional[str] = None) -> Dict[str, int]:
     import asyncio
 
     async def _count():
-        from app.db.session import AsyncSessionLocal
         from sqlalchemy import text
+
+        from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(

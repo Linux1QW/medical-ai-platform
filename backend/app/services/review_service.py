@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evaluation import Evaluation
@@ -61,7 +61,7 @@ def _calculate_total(scores: dict) -> Optional[int]:
 
     使用与 scoring_agent.calculate_total 相同的逻辑（None 维度不参与，权重重分配）。
     """
-    from app.services.agents.scoring_agent import SCORING_WEIGHTS, calculate_total
+    from app.services.agents.scoring_agent import calculate_total
 
     # 将 _score 字段名映射为权重 key
     key_map = {

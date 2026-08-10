@@ -21,7 +21,6 @@ from pythonjsonlogger.json import JsonFormatter as _BaseJsonFormatter
 
 from app.core.config import settings
 
-
 # ── Allowlist 字段 ────────────────────────────────────────────────────────────
 
 _SAFE_LOG_FIELDS = {

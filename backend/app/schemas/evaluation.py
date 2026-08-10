@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -87,7 +86,7 @@ EvaluationJobStatus = Literal[
 
 class EvaluationSubmitOut(BaseModel):
     """202 response for evaluation submission."""
-    run_id: UUID
+    run_id: str
     consultation_id: int
     status: Literal["queued"]
     status_url: str
@@ -96,7 +95,7 @@ class EvaluationSubmitOut(BaseModel):
 
 class EvaluationRunStatusOut(BaseModel):
     """200 response for run status polling."""
-    run_id: UUID
+    run_id: str
     consultation_id: int
     status: EvaluationJobStatus
     progress: int | None = Field(default=None, ge=0, le=100)
@@ -120,7 +119,7 @@ class EvaluationRunStatusOut(BaseModel):
 
 class EvaluationCancelOut(BaseModel):
     """Response for cancel request."""
-    run_id: UUID
+    run_id: str
     status: EvaluationJobStatus
     cancel_requested: bool
     requested_at: datetime | None = None

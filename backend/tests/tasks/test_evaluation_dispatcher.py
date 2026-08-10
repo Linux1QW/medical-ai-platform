@@ -5,14 +5,11 @@ TDD Phase 1: These tests should FAIL until the implementation is complete.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ── Test: broker publish retry (2 failures then success) ─────────────────────
 
@@ -165,7 +162,6 @@ async def test_publish_success_ack_failure_republishes():
 
 def test_dispatcher_log_does_not_leak_payload():
     """Dispatcher log messages must not contain payload content or task IDs."""
-    import logging
     from app.tasks.evaluation_dispatcher import sanitize_for_log
 
     payload = {"run_id": "secret-run", "consultation_id": 42}

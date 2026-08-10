@@ -7,9 +7,7 @@
 import hashlib
 import hmac
 import json
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
@@ -353,10 +351,8 @@ class TestTraceContextPropagation:
     def test_trace_context_restored_from_celery_payload(self):
         from app.services.observability.trace_context import (
             TraceContext,
-            bind_trace_context,
             restore_trace_context,
             serialize_trace_context,
-            reset_trace_context,
         )
 
         original_ctx = TraceContext(

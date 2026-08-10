@@ -20,13 +20,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
 from app.models.evaluation_run import EvaluationRun
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -180,7 +179,7 @@ class TestReconcileQueuedWithExpiredLease:
     def test_queued_with_expired_leased_outbox_releases_to_pending(self):
         """queued run + 过期 leased outbox → outbox 重置为 pending"""
         run_id = str(uuid.uuid4())
-        run = _make_run(run_id=run_id, status="queued")
+        _run = _make_run(run_id=run_id, status="queued")
         outbox = _make_outbox(
             run_id=run_id, status="leased",
             lease_owner="worker-1",
@@ -202,7 +201,7 @@ class TestReconcileStaleQueuedPublished:
         """queued + published > 5 min + 总年龄 < 24h → requeue"""
         run_id = str(uuid.uuid4())
         now = datetime.utcnow()
-        run = _make_run(run_id=run_id, status="queued", created_at=now - timedelta(minutes=10))
+        _run = _make_run(run_id=run_id, status="queued", created_at=now - timedelta(minutes=10))
         outbox = _make_outbox(
             run_id=run_id, status="published",
             published_at=now - timedelta(minutes=6),
@@ -349,7 +348,7 @@ class TestReconcileRetryingRedeliveryLost:
             run_id=run_id, status="retrying", attempt=1,
         )
         run.updated_at = now - timedelta(minutes=21)
-        outbox = _make_outbox(
+        _make_outbox(
             run_id=run_id, status="published",
             published_at=now - timedelta(minutes=21),
         )

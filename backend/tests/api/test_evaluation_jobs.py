@@ -32,7 +32,6 @@ from app.db.session import get_db
 from app.main import app
 from app.models.evaluation_run import EvaluationRun
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 DOCTOR_A = SimpleNamespace(id=10, username="doc_a", role="doctor", permissions=None)

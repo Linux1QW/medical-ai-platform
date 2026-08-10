@@ -22,8 +22,8 @@ from app.db.session import engine
 from app.orchestration.adapters import register_all as register_all_adapters
 from app.orchestration.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
 from app.services.jwt_blacklist import close_blacklist_redis
-from app.services.llm_cache import close_cache_redis
 from app.services.llm_cache import _get_redis as _get_cache_redis
+from app.services.llm_cache import close_cache_redis
 from app.services.observability.metrics import (
     HTTP_REQUEST_DURATION,
     HTTP_REQUESTS_TOTAL,
@@ -65,8 +65,9 @@ async def lifespan(app: FastAPI):
     )
 
     # 初始化 Progress Bus（Redis Pub/Sub 跨进程进度广播）
-    from app.core.websocket import init_manager
     import redis.asyncio as aioredis
+
+    from app.core.websocket import init_manager
     global _progress_bus
     progress_redis = aioredis.from_url(settings.PROGRESS_REDIS_URL, decode_responses=True)
     progress_bus = RedisProgressBus(progress_redis, ttl=settings.PROGRESS_EVENT_TTL_SECONDS)

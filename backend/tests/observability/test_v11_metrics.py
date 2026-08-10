@@ -11,12 +11,10 @@
 from __future__ import annotations
 
 import pytest
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # ── 导入待测模块（Phase 1 时这些名称尚不存在，测试应先失败）──────────────
-
 from app.services.observability import metrics as metrics_mod
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

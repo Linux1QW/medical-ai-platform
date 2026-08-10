@@ -2,9 +2,9 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,6 @@ from app.core.deps import get_current_user
 from app.core.permissions import require_permission
 from app.core.websocket import get_manager
 from app.db.session import AsyncSessionLocal, get_db
-from app.models.evaluation import Evaluation
 from app.models.evaluation_lock import EvaluationLock
 from app.models.evaluation_run import EvaluationRun
 from app.models.user import User
@@ -393,7 +392,7 @@ async def get_run_status(
     return EvaluationRunStatusOut(
         run_id=run.id,
         consultation_id=run.consultation_id,
-        status=db_status,
+        status=db_status,  # type: ignore[arg-type]
         progress=progress,
         message=message,
         evaluation_id=run.evaluation_id,
@@ -452,7 +451,7 @@ async def cancel_evaluation(
     if disposition_str == "already_terminal":
         return EvaluationCancelOut(
             run_id=run.id,
-            status=run.status,
+            status=run.status,  # type: ignore[arg-type]
             cancel_requested=False,
         )
 

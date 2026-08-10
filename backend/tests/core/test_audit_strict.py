@@ -5,11 +5,9 @@ TDD Phase 1: These tests should FAIL until the implementation is complete.
 
 from __future__ import annotations
 
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ── Test: default mode flush failure logs safe warning ────────────────────────
 

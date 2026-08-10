@@ -36,13 +36,8 @@ def cleanup_expired_records() -> dict:
 
 async def _do_cleanup() -> dict:
     """执行清理逻辑"""
-    from sqlalchemy import delete, select
 
     from app.db.session import AsyncSessionLocal
-    from app.models.audit_log import AuditLog
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from app.models.evaluation_node_result import EvaluationNodeResult
-    from app.models.evaluation_run import EvaluationRun
 
     async with AsyncSessionLocal() as db:
         now = datetime.utcnow()
@@ -103,6 +98,7 @@ async def maybe_cleanup_audit_logs(
         return {"deleted": 0, "skipped": True}
 
     from sqlalchemy import delete
+
     from app.models.audit_log import AuditLog
 
     cutoff = now - timedelta(days=retention_days)

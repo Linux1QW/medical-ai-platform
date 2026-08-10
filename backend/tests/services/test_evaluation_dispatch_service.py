@@ -5,15 +5,11 @@ TDD Phase 1: These tests should FAIL until the implementation is complete.
 
 from __future__ import annotations
 
-import random
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.base import Base
@@ -50,8 +46,8 @@ def _now() -> datetime:
 @pytest.mark.asyncio
 async def test_enqueue_dispatch_creates_pending_outbox(db_session: AsyncSession):
     """enqueue_dispatch should add an outbox row with status=pending, without committing."""
-    from app.services.evaluation_dispatch_service import enqueue_dispatch
     from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
+    from app.services.evaluation_dispatch_service import enqueue_dispatch
 
     run_id = _make_run_id()
     trace_ctx = {"trace_id": "abc123", "span_id": "span456"}
@@ -85,10 +81,11 @@ async def test_enqueue_dispatch_creates_pending_outbox(db_session: AsyncSession)
 @pytest.mark.asyncio
 async def test_enqueue_dispatch_rollback_with_run(db_session: AsyncSession):
     """If the enclosing transaction rolls back, the outbox row must NOT persist."""
+    from sqlalchemy import select
+
     from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.models.evaluation_run import EvaluationRun
     from app.services.evaluation_dispatch_service import enqueue_dispatch
-    from sqlalchemy import select
 
     run_id = _make_run_id()
 
@@ -128,7 +125,7 @@ async def test_enqueue_dispatch_duplicate_run_id_raises(db_session: AsyncSession
     run_id = _make_run_id()
     await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
 
 
@@ -138,9 +135,10 @@ async def test_enqueue_dispatch_duplicate_run_id_raises(db_session: AsyncSession
 @pytest.mark.asyncio
 async def test_claim_dispatch_batch_leases_pending(db_session: AsyncSession):
     """claim_dispatch_batch should transition pending → leased and set lease fields."""
-    from app.services.evaluation_dispatch_service import claim_dispatch_batch, enqueue_dispatch
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from sqlalchemy import select
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
+    from app.services.evaluation_dispatch_service import claim_dispatch_batch, enqueue_dispatch
 
     run_id = _make_run_id()
     now = _now()
@@ -174,9 +172,10 @@ async def test_claim_dispatch_batch_leases_pending(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_claim_dispatch_batch_reclaims_expired_lease(db_session: AsyncSession):
     """Rows with expired leases should be reclaimable by another worker."""
-    from app.services.evaluation_dispatch_service import claim_dispatch_batch, enqueue_dispatch
+    from sqlalchemy import update
+
     from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select, update
+    from app.services.evaluation_dispatch_service import claim_dispatch_batch, enqueue_dispatch
 
     run_id = _make_run_id()
     now = _now()
@@ -232,13 +231,14 @@ async def test_backoff_calculation_capped_at_60(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_reject_dispatch_1499_attempts_continues(db_session: AsyncSession):
     """At 1499 attempts and under 24h age, reject should NOT dead_letter."""
+    from sqlalchemy import update
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.services.evaluation_dispatch_service import (
-        enqueue_dispatch,
         claim_dispatch_batch,
+        enqueue_dispatch,
         reject_dispatch,
     )
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select, update
 
     run_id = _make_run_id()
     now = _now()
@@ -275,13 +275,14 @@ async def test_reject_dispatch_1499_attempts_continues(db_session: AsyncSession)
 @pytest.mark.asyncio
 async def test_reject_dispatch_1500_attempts_dead_letters(db_session: AsyncSession):
     """At 1500 attempts, reject should dead_letter the outbox row."""
+    from sqlalchemy import update
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.services.evaluation_dispatch_service import (
-        enqueue_dispatch,
         claim_dispatch_batch,
+        enqueue_dispatch,
         reject_dispatch,
     )
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select, update
 
     run_id = _make_run_id()
     now = _now()
@@ -313,13 +314,14 @@ async def test_reject_dispatch_1500_attempts_dead_letters(db_session: AsyncSessi
 @pytest.mark.asyncio
 async def test_reject_dispatch_24h_age_dead_letters(db_session: AsyncSession):
     """Even with low attempt count, 24h age should dead_letter."""
+    from sqlalchemy import update
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.services.evaluation_dispatch_service import (
-        enqueue_dispatch,
         claim_dispatch_batch,
+        enqueue_dispatch,
         reject_dispatch,
     )
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import update
 
     run_id = _make_run_id()
     now = _now()
@@ -352,9 +354,10 @@ async def test_reject_dispatch_24h_age_dead_letters(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_cancel_dispatch_transitions_to_cancelled(db_session: AsyncSession):
     """cancel_dispatch should atomically cancel pending/leased/published outbox rows."""
-    from app.services.evaluation_dispatch_service import cancel_dispatch, enqueue_dispatch
+    from sqlalchemy import select
+
     from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select, update
+    from app.services.evaluation_dispatch_service import cancel_dispatch, enqueue_dispatch
 
     run_id = _make_run_id()
     await enqueue_dispatch(db_session, run_id=run_id, consultation_id=1, trace_context={})
@@ -375,13 +378,14 @@ async def test_cancel_dispatch_transitions_to_cancelled(db_session: AsyncSession
 @pytest.mark.asyncio
 async def test_cancel_dispatch_from_leased(db_session: AsyncSession):
     """cancel_dispatch should also cancel leased rows."""
+    from sqlalchemy import select
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.services.evaluation_dispatch_service import (
         cancel_dispatch,
         claim_dispatch_batch,
         enqueue_dispatch,
     )
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select
 
     run_id = _make_run_id()
     now = _now()
@@ -420,14 +424,15 @@ async def test_requeue_stale_dispatch_requires_published_status(db_session: Asyn
 @pytest.mark.asyncio
 async def test_reject_dispatch_dead_letter_marks_run_failed(db_session: AsyncSession):
     """When outbox dead_letters and run is queued, run should become failed."""
+    from sqlalchemy import select, update
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
+    from app.models.evaluation_run import EvaluationRun
     from app.services.evaluation_dispatch_service import (
-        enqueue_dispatch,
         claim_dispatch_batch,
+        enqueue_dispatch,
         reject_dispatch,
     )
-    from app.models.evaluation_run import EvaluationRun
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select, update
 
     run_id = _make_run_id()
     now = _now()
@@ -492,13 +497,14 @@ async def test_payload_allowlist_rejects_pii(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_acknowledge_dispatch_sets_published(db_session: AsyncSession):
     """acknowledge_dispatch should transition leased → published."""
+    from sqlalchemy import select
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from app.services.evaluation_dispatch_service import (
         acknowledge_dispatch,
         claim_dispatch_batch,
         enqueue_dispatch,
     )
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
-    from sqlalchemy import select
 
     run_id = _make_run_id()
     now = _now()
@@ -531,10 +537,10 @@ async def test_acknowledge_dispatch_sets_published(db_session: AsyncSession):
 async def test_acknowledge_dispatch_wrong_owner_raises(db_session: AsyncSession):
     """acknowledge_dispatch with wrong lease_owner should raise DispatchLeaseLost."""
     from app.services.evaluation_dispatch_service import (
+        DispatchLeaseLost,
         acknowledge_dispatch,
         claim_dispatch_batch,
         enqueue_dispatch,
-        DispatchLeaseLost,
     )
 
     run_id = _make_run_id()
@@ -560,9 +566,10 @@ async def test_acknowledge_dispatch_wrong_owner_raises(db_session: AsyncSession)
 @pytest.mark.asyncio
 async def test_purge_terminal_dispatches(db_session: AsyncSession):
     """purge_terminal_dispatches should delete published/cancelled/dead_letter older than cutoff."""
-    from app.services.evaluation_dispatch_service import enqueue_dispatch, purge_terminal_dispatches
-    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
     from sqlalchemy import select, update
+
+    from app.models.evaluation_dispatch_outbox import EvaluationDispatchOutbox
+    from app.services.evaluation_dispatch_service import enqueue_dispatch, purge_terminal_dispatches
 
     run_id = _make_run_id()
     now = _now()

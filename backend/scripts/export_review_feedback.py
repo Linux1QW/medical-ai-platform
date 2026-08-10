@@ -42,7 +42,7 @@ async def fetch_review_records(
         list of (ReviewRecord, Evaluation) 元组
     """
     try:
-        from sqlalchemy import select, cast, String
+        from sqlalchemy import String, cast, select
 
         from app.db.session import AsyncSessionLocal
         from app.models.evaluation import Evaluation

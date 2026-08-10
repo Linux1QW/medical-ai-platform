@@ -5,10 +5,6 @@ so this test must FAIL until WorkerAsyncRuntime is wired in.
 """
 
 import asyncio
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 
 def _make_fake_task_module():

@@ -33,23 +33,6 @@ async function login(page: Page, username: string, password: string) {
   });
 }
 
-async function waitForEvaluationStatus(page: Page, consultationId: string, expectedStatus: string, timeout = 30_000) {
-  const startTime = Date.now();
-  while (Date.now() - startTime < timeout) {
-    const response = await page.evaluate(async (id) => {
-      const res = await fetch(`/api/v1/evaluations/by-consultation/${id}`);
-      if (res.ok) return await res.json();
-      return null;
-    }, consultationId);
-    
-    if (response && response.evaluation_status === expectedStatus) {
-      return response;
-    }
-    await page.waitForTimeout(1000);
-  }
-  throw new Error(`Timeout waiting for evaluation status: ${expectedStatus}`);
-}
-
 // ──────────────────────────────────────────
 // E2E 测试用例
 // ──────────────────────────────────────────

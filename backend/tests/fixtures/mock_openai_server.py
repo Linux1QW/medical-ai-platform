@@ -16,7 +16,7 @@ import math
 import threading
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -102,20 +102,20 @@ def generate_deterministic_embedding(text: str, dim: int = 1024) -> list[float]:
     """使用 SHA-256 生成确定性 1024 维向量并 L2 normalize"""
     # 计算 SHA-256 hash
     hash_bytes = hashlib.sha256(text.encode("utf-8")).digest()
-    
+
     # 循环扩展到 dim 个字节
     expanded = []
     for i in range(dim):
         expanded.append(hash_bytes[i % len(hash_bytes)])
-    
+
     # 转换为 float 并 L2 normalize
     vec = [float(b) / 255.0 for b in expanded]
-    
+
     # L2 normalize
     l2_norm = math.sqrt(sum(x * x for x in vec))
     if l2_norm > 0:
         vec = [x / l2_norm for x in vec]
-    
+
     return vec
 
 
@@ -125,7 +125,7 @@ def generate_deterministic_embedding(text: str, dim: int = 1024) -> list[float]:
 def match_prompt(messages: list[dict]) -> tuple[str | None, str | None]:
     """
     匹配最后一条 user/system message 的关键词
-    
+
     Returns:
         (response_content, match_type) or (None, None) if unmatched
     """
@@ -135,20 +135,20 @@ def match_prompt(messages: list[dict]) -> tuple[str | None, str | None]:
         if msg.get("role") in ("user", "system"):
             last_content = msg.get("content", "")
             break
-    
+
     if not last_content:
         return None, None
-    
+
     # 精确匹配
     for trigger, response in PROMPT_RESPONSES:
         if trigger in last_content:
             return response, "exact"
-    
+
     # 前缀匹配
     for prefix, response in PREFIX_RESPONSES:
         if last_content.startswith(prefix) or prefix in last_content:
             return response, "prefix"
-    
+
     return None, None
 
 
@@ -186,7 +186,7 @@ async def health():
 async def create_embeddings(request: EmbeddingRequest):
     """生成确定性 embedding"""
     inputs = request.input if isinstance(request.input, list) else [request.input]
-    
+
     data = []
     for i, text in enumerate(inputs):
         embedding = generate_deterministic_embedding(text)
@@ -195,7 +195,7 @@ async def create_embeddings(request: EmbeddingRequest):
             "embedding": embedding,
             "index": i,
         })
-    
+
     return {
         "object": "list",
         "data": data,
@@ -208,23 +208,23 @@ async def create_embeddings(request: EmbeddingRequest):
 async def create_chat_completion(request: ChatCompletionRequest):
     """按 prompt 关键词路由 chat completion"""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
-    
+
     response_content, match_type = match_prompt(messages)
-    
+
     if response_content is None:
         # 未匹配 → 422
         with _counters_lock:
             _counters["unmatched"] += 1
-        
+
         # 计算 prompt SHA-256
         last_content = ""
         for msg in reversed(messages):
             if msg.get("role") in ("user", "system"):
                 last_content = msg.get("content", "")
                 break
-        
+
         prompt_sha = hashlib.sha256(last_content.encode("utf-8")).hexdigest()
-        
+
         return JSONResponse(
             status_code=422,
             content={
@@ -233,11 +233,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 "message": f"Mock server 未匹配 prompt，请检查 prompt 表格。SHA-256: {prompt_sha}",
             },
         )
-    
+
     # 匹配成功
     with _counters_lock:
         _counters["matched"] += 1
-    
+
     return {
         "id": "chatcmpl-mock",
         "object": "chat.completion",

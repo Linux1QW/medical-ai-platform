@@ -77,13 +77,13 @@ def _report_candidate_manifest(args) -> int:
     print(f"Candidate manifest: {manifest_path}")
     print(f"Total candidates: {len(candidates)}")
     print(f"Contains sensitive content: {sensitive_count}/{len(candidates)}")
-    print(f"\nReview reason distribution:")
+    print("\nReview reason distribution:")
     for reason, count in sorted(attribution_counts.items(), key=lambda x: -x[1]):
         print(f"  {reason}: {count}")
-    print(f"\nRetrieval status distribution:")
+    print("\nRetrieval status distribution:")
     for status, count in sorted(retrieval_counts.items(), key=lambda x: -x[1]):
         print(f"  {status}: {count}")
-    print(f"\nEvidence stance distribution:")
+    print("\nEvidence stance distribution:")
     for stance, count in sorted(stance_counts.items(), key=lambda x: -x[1]):
         print(f"  {stance}: {count}")
     print("\nNote: Candidates are NOT automatically used as gold cases.")

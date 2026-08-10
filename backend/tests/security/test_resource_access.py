@@ -7,7 +7,6 @@ from fastapi import HTTPException
 
 from app.core.access import require_evaluation_access, require_evaluation_run_access
 
-
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _user(user_id: int, role: str = "doctor"):

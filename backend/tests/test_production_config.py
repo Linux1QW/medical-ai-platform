@@ -5,9 +5,8 @@ TDD Phase 1: 这些测试在实现之前应该失败。
 """
 
 import os
-import pytest
-from unittest.mock import patch
 
+import pytest
 
 # ── 安全检查 ──────────────────────────────────────────────────────────────────
 

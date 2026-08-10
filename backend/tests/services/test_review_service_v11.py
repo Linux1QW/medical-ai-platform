@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,7 +23,6 @@ from app.models.evaluation import Evaluation
 from app.models.evaluation_lock import EvaluationLock
 from app.models.evaluation_run import EvaluationRun
 from app.models.review_record import ReviewRecord
-
 
 # ── 辅助工厂 ─────────────────────────────────────────────────────────────────
 
@@ -158,7 +156,7 @@ class TestSubmitReviewSuccess:
         adjustments = {"inquiry_score": 90.0, "diagnosis_score": 80.0}
 
         with patch("app.services.review_service._update_redis_checkpoint", new=AsyncMock()):
-            result = await submit_review(
+            await submit_review(
                 db=mock_db,
                 evaluation_id=1,
                 reviewer_id="admin-1",
@@ -199,7 +197,7 @@ class TestSubmitReviewSuccess:
         adjustments = {"inquiry_score": 90.0}
 
         with patch("app.services.review_service._update_redis_checkpoint", new=AsyncMock()):
-            result = await submit_review(
+            await submit_review(
                 db=mock_db,
                 evaluation_id=1,
                 reviewer_id="admin-1",
@@ -387,10 +385,9 @@ class TestScoreValidation:
     @pytest.mark.asyncio
     async def test_out_of_range_score_raises_422(self):
         """范围外分数触发 ValidationError"""
-        from app.services.review_service import submit_review
         from app.schemas.review import ScoreAdjustments
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             ScoreAdjustments(inquiry_score=150.0)
 
     @pytest.mark.asyncio
@@ -398,7 +395,7 @@ class TestScoreValidation:
         """负数分数触发 ValidationError"""
         from app.schemas.review import ScoreAdjustments
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             ScoreAdjustments(inquiry_score=-5.0)
 
 

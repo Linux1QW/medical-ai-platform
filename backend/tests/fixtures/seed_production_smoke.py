@@ -46,10 +46,10 @@ def check_environment():
 def seed_users():
     """幂等创建 admin_v11 和 doctor_v11 账号"""
     from passlib.context import CryptContext
-    
+
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     password_hash = pwd_context.hash(E2E_PASSWORD)
-    
+
     users = [
         {
             "username": E2E_ADMIN_USER,
@@ -68,7 +68,7 @@ def seed_users():
             "password_hash": password_hash,
         },
     ]
-    
+
     print(f"[seed] Users: {E2E_ADMIN_USER} (admin), {E2E_DOCTOR_USER} (doctor)")
     return users
 
@@ -89,12 +89,12 @@ def seed_patient_and_consultation():
         "system_prompt": "这是E2E测试合成患者，非真实患者信息。",
         "expected_diagnosis": "普通感冒",
     }
-    
+
     consultation = {
         "status": "ended",
         "max_rounds": 20,
     }
-    
+
     messages = [
         {"role": "doctor", "content": "您好，请描述一下您的症状。", "sequence": 1},
         {"role": "patient", "content": "我头痛已经三天了，伴有低热。", "sequence": 2},
@@ -102,7 +102,7 @@ def seed_patient_and_consultation():
         {"role": "patient", "content": "持续性的，没有恶心呕吐。", "sequence": 4},
         {"role": "doctor", "content": "好的，建议做一下血常规检查。", "sequence": 5},
     ]
-    
+
     print(f"[seed] Patient: {patient['name']}, Consultation: {consultation['status']}, Messages: {len(messages)}")
     return patient, consultation, messages
 
@@ -113,7 +113,7 @@ def seed_patient_and_consultation():
 def seed_low_evidence_index():
     """
     幂等创建低证据索引 fixture
-    
+
     ACTIVE_INDEX_VERSION=e2e-low-evidence-v1
     只含 1 个明确标记为合成测试的 chunk
     """
@@ -130,11 +130,11 @@ def seed_low_evidence_index():
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     }
-    
+
     # Manifest
     chunk_json = json.dumps(synthetic_chunk, sort_keys=True, ensure_ascii=False)
     checksum = hashlib.sha256(chunk_json.encode()).hexdigest()
-    
+
     manifest = {
         "version": E2E_INDEX_VERSION,
         "schema_version": "1.0",
@@ -149,11 +149,11 @@ def seed_low_evidence_index():
         ],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     print(f"[seed] Low-evidence index: {E2E_INDEX_VERSION}")
     print(f"[seed]   candidate_count={manifest['candidate_count']}, source_count={manifest['source_count']}")
-    print(f"[seed]   confidence=low (single synthetic chunk)")
-    
+    print("[seed]   confidence=low (single synthetic chunk)")
+
     return synthetic_chunk, manifest
 
 
@@ -173,31 +173,31 @@ def cleanup_e2e_data():
 def main():
     """主入口：幂等创建所有 E2E 测试数据"""
     check_environment()
-    
+
     print("=" * 60)
     print("E2E Production Smoke Seed")
     print(f"ENVIRONMENT: {os.environ.get('ENVIRONMENT')}")
     print(f"INDEX_VERSION: {E2E_INDEX_VERSION}")
     print("=" * 60)
-    
+
     # 1. 用户
     users = seed_users()
-    
+
     # 2. 患者和问诊
     patient, consultation, messages = seed_patient_and_consultation()
-    
+
     # 3. 低证据索引
     chunk, manifest = seed_low_evidence_index()
-    
+
     # 验证
     assert manifest["candidate_count"] == 1
     assert manifest["source_count"] == 1
     assert len(messages) >= 4
-    
+
     print("=" * 60)
     print("Seed complete. All assertions passed.")
     print("=" * 60)
-    
+
     return {
         "users": users,
         "patient": patient,

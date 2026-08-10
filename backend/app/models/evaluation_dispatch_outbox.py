@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Index, Integer, JSON, String, Text, ForeignKey
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base

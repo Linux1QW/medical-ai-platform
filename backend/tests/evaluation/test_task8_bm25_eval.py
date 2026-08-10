@@ -3,9 +3,6 @@
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 from scripts.eval import evaluate_bm25
 

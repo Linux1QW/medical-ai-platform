@@ -11,7 +11,6 @@
 - 用户不存在 → AuthenticationError 401 AUTH_USER_NOT_FOUND
 - 有效但没有 jti 的 token + blacklist 启用 → AuthenticationError 401 AUTH_INVALID_TOKEN
 """
-import logging
 import warnings
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.user import User
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,7 +100,11 @@ class TestAuthenticateAccessToken:
     @pytest.mark.asyncio
     async def test_redis_exists_error_fail_closed_raises_503(self):
         """Redis exists 异常 + fail-closed → 503 AUTH_REVOCATION_UNAVAILABLE"""
-        from app.core.authentication import AuthenticationError, TokenRevocationStoreUnavailable, authenticate_access_token
+        from app.core.authentication import (
+            AuthenticationError,
+            TokenRevocationStoreUnavailable,
+            authenticate_access_token,
+        )
 
         token = _make_token()
         db = MagicMock(spec=AsyncSession)
@@ -119,7 +121,11 @@ class TestAuthenticateAccessToken:
     @pytest.mark.asyncio
     async def test_redis_unavailable_fail_closed_raises_503(self):
         """Redis 连接为空 + fail-closed → 503 AUTH_REVOCATION_UNAVAILABLE"""
-        from app.core.authentication import AuthenticationError, TokenRevocationStoreUnavailable, authenticate_access_token
+        from app.core.authentication import (
+            AuthenticationError,
+            TokenRevocationStoreUnavailable,
+            authenticate_access_token,
+        )
 
         token = _make_token()
         db = MagicMock(spec=AsyncSession)
@@ -237,9 +243,10 @@ class TestLogoutBlacklistFailure:
     def test_logout_blacklist_write_failure_returns_503(self):
         """blacklist_token() 返回 False → 503"""
         from fastapi.testclient import TestClient
-        from app.main import app
-        from app.db.session import get_db
+
         from app.core.deps import get_current_user
+        from app.db.session import get_db
+        from app.main import app
 
         fake_user = _fake_user(1)
 
@@ -266,9 +273,10 @@ class TestLogoutBlacklistFailure:
     def test_logout_success_returns_200(self):
         """blacklist_token() 返回 True → 200"""
         from fastapi.testclient import TestClient
-        from app.main import app
-        from app.db.session import get_db
+
         from app.core.deps import get_current_user
+        from app.db.session import get_db
+        from app.main import app
 
         fake_user = _fake_user(1)
 

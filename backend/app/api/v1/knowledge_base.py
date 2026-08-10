@@ -10,7 +10,7 @@ try:
     from celery.result import AsyncResult
 except ModuleNotFoundError:  # pragma: no cover - dependency-light test fallback
     from app.celery_app import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.celery_app import celery_app

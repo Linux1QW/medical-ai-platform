@@ -5,12 +5,7 @@
 """
 
 import io
-import json
 import logging
-from unittest.mock import patch
-
-import pytest
-
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
@@ -100,7 +95,7 @@ class TestProductionLoggingPrivacy:
 
     def test_safe_event_preserves_allowlist_fields(self):
         """safe_log_event 保留 allowlist 字段"""
-        from app.core.logging import safe_log_event, ProductionLogFilter, SafeStructuredFormatter
+        from app.core.logging import ProductionLogFilter, SafeStructuredFormatter, safe_log_event
 
         buf = io.StringIO()
         handler = logging.StreamHandler(buf)
@@ -136,7 +131,7 @@ class TestProductionLoggingPrivacy:
 
     def test_can_locate_by_trace_id_and_run_id(self):
         """safe_log_event 输出中可以通过 trace_id/run_id 定位"""
-        from app.core.logging import safe_log_event, ProductionLogFilter, SafeStructuredFormatter
+        from app.core.logging import ProductionLogFilter, SafeStructuredFormatter, safe_log_event
 
         buf = io.StringIO()
         handler = logging.StreamHandler(buf)

@@ -2,7 +2,7 @@
 """知识库管理端点鉴权测试 — knowledge:manage 权限矩阵 + Celery FAILURE 安全输出"""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient

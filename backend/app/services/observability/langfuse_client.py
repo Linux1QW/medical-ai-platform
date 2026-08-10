@@ -119,9 +119,11 @@ class LangfuseTracer:
         }
         if ctx.consultation_id:
             # consultation_id 做 HMAC 处理，不原文上传
-            metadata["consultation_ref"] = summarize_sensitive_text(
+            _summary = summarize_sensitive_text(
                 str(ctx.consultation_id), self._hmac_key
-            )["hmac_sha256"][:16]
+            )
+            _hmac_val = _summary["hmac_sha256"]
+            metadata["consultation_ref"] = str(_hmac_val)[:16]
         if ctx.agent_name:
             metadata["agent_name"] = ctx.agent_name
         if ctx.tool_name:

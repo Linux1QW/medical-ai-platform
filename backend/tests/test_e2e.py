@@ -10,11 +10,7 @@
 这些测试不依赖 app 模块，仅验证测试基础设施和数据契约。
 """
 
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
-
 
 # ── 独立数据契约验证 ──────────────────────────────────────────────────────────
 
@@ -30,7 +26,7 @@ class TestDataContracts:
         db.rollback = AsyncMock()
         db.flush = AsyncMock()
         db.delete = MagicMock()
-        
+
         assert hasattr(db, 'add')
         assert hasattr(db, 'commit')
         assert hasattr(db, 'refresh')
@@ -48,14 +44,14 @@ class TestDataContracts:
             "treatment_score": 70,
             "total_score": 80,
         }
-        
+
         for field, value in scores.items():
             assert 0 <= value <= 100, f"{field}={value} out of range [0, 100]"
 
     def test_consultation_status_values(self):
         """问诊状态值有效"""
         valid_statuses = ["in_progress", "ended", "cancelled"]
-        
+
         for status in valid_statuses:
             assert isinstance(status, str)
             assert len(status) > 0
@@ -63,7 +59,7 @@ class TestDataContracts:
     def test_user_role_values(self):
         """用户角色值有效"""
         valid_roles = ["doctor", "admin", "patient"]
-        
+
         for role in valid_roles:
             assert isinstance(role, str)
             assert len(role) > 0
@@ -76,7 +72,7 @@ class TestDataContracts:
             {"role": "doctor", "sequence": 3},
             {"role": "patient", "sequence": 4},
         ]
-        
+
         sequences = [m["sequence"] for m in messages]
         assert sequences == sorted(sequences)
         assert len(set(sequences)) == len(sequences)  # 唯一
@@ -89,17 +85,17 @@ class TestMockProviderContract:
         """Embedding 维度为 1024"""
         import hashlib
         import math
-        
+
         text = "test"
         hash_bytes = hashlib.sha256(text.encode()).digest()
         dim = 1024
-        
+
         expanded = [hash_bytes[i % len(hash_bytes)] for i in range(dim)]
         vec = [float(b) / 255.0 for b in expanded]
-        
+
         l2_norm = math.sqrt(sum(x * x for x in vec))
         vec = [x / l2_norm for x in vec]
-        
+
         assert len(vec) == 1024
         assert abs(sum(x * x for x in vec) - 1.0) < 1e-6
 
@@ -110,7 +106,7 @@ class TestMockProviderContract:
             "请对医生的诊断结果进行评估。",
             "请生成综合评估摘要。",
         ]
-        
+
         for prompt in prompts:
             # 同一 prompt 两次匹配应返回相同结果
             assert prompt == prompt

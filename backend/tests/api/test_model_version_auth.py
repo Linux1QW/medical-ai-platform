@@ -1,7 +1,7 @@
 """模型版本端点鉴权测试 — 确认 config_json 不匿名可读"""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient

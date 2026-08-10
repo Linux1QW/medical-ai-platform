@@ -13,7 +13,7 @@ import os
 import socket
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from app.services.observability.metrics import (
@@ -100,7 +100,6 @@ async def publish_with_retry(
 
     使用 asyncio.to_thread 调用同步 Celery publish。
     """
-    last_error: Exception | None = None
 
     for attempt in range(max_retries):
         try:
@@ -110,7 +109,6 @@ async def publish_with_retry(
                 result = await result
             return result
         except Exception as e:
-            last_error = e
             logger.warning(
                 f"Celery publish attempt {attempt + 1}/{max_retries} failed: "
                 f"{type(e).__name__}"

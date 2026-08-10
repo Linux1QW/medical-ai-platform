@@ -10,7 +10,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
 
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +24,6 @@ from app.services.observability.metrics import (
     EVALUATION_OUTBOX_EVENTS_TOTAL,
     EVALUATION_OUTBOX_PENDING,
 )
-
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
 

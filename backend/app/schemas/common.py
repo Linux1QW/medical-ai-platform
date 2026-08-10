@@ -1,5 +1,6 @@
 """Common schema for V1.1 error responses."""
 from typing import Any
+
 from pydantic import BaseModel
 
 

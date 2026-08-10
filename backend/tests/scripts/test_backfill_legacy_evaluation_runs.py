@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── 辅助工厂 ─────────────────────────────────────────────────────────────────
 
 
@@ -207,7 +206,7 @@ class TestBackfillConflictExit:
         """多个候选 run 时写入 conflict manifest"""
         from scripts.backfill_legacy_evaluation_runs import backfill_evaluations
 
-        eval_row = _make_eval_row(eval_id=1, run_id=None)
+        _eval_row = _make_eval_row(eval_id=1, run_id=None)
         # 模拟两个候选 run（raw SQL fetchall 返回 tuple-like rows）
         run1 = (str(uuid.uuid4()), 100, "completed")
         run2 = (str(uuid.uuid4()), 100, "completed")

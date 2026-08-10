@@ -26,7 +26,6 @@ from app.services.observability.metrics import (
     EVALUATION_RUNS_TOTAL,
 )
 
-
 # ── Exceptions ───────────────────────────────────────────────────────────────
 
 
@@ -164,8 +163,9 @@ async def claim_run(
         if lease_valid:
             # 同 task_id → ACTIVE_SAME_TASK
             if run.execution_task_id == celery_task_id:
+                _lease_exp = run.lease_expires_at  # type: datetime, guaranteed by lease_valid
                 remaining = math.ceil(
-                    (run.lease_expires_at - now).total_seconds()
+                    (_lease_exp - now).total_seconds()  # type: ignore[operator]
                 ) + 1
                 return RunClaimResult(
                     disposition=RunClaimDisposition.ACTIVE_SAME_TASK,
@@ -309,7 +309,8 @@ async def mark_run_terminal(
     EVALUATION_RUNS_TOTAL.labels(status=status, error_code=_ec).inc()
     EVALUATION_ACTIVE_RUNS.labels(status="running").dec()
     if run.started_at is not None:
-        dur = ((now or datetime.utcnow()) - run.started_at).total_seconds()
+        _now = now or datetime.utcnow()
+        dur = (_now - run.started_at).total_seconds()
         EVALUATION_RUN_DURATION.labels(status=status).observe(max(dur, 0))
 
 

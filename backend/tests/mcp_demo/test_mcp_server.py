@@ -1,12 +1,23 @@
-"""Tests for the read-only MCP demo server."""
+"""Tests for the read-only MCP demo server.
+
+Includes:
+- Direct API tests (list_tools, call_tool)
+- Subprocess JSON-RPC protocol tests (initialize, tools/list, tools/call)
+- Malformed args and unknown tool handling
+- PII safety check
+"""
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from app.mcp_demo.server import DEMO_FIXTURES, MCPDemoServer
+from app.mcp_demo.server import DEMO_FIXTURES, MCPDemoServer, handle_jsonrpc_message
 
 
 @pytest.fixture()
@@ -135,3 +146,129 @@ def test_no_patient_data_in_fixtures() -> None:
     for pattern in _PII_PATTERNS:
         match = pattern.search(raw)
         assert match is None, f"Potential PII found in fixtures: {match.group()!r}"
+
+
+# ---------------------------------------------------------------------------
+# 10. Malformed arguments
+# ---------------------------------------------------------------------------
+
+
+def test_missing_required_argument(server: MCPDemoServer) -> None:
+    """Missing 'query' (required) should return an error."""
+    result = server.call_tool("search_medical_kb", {})
+    assert "error" in result
+    assert "Missing required" in result["error"] or "query" in result["error"]
+
+
+def test_wrong_type_argument(server: MCPDemoServer) -> None:
+    """query must be string, not integer."""
+    result = server.call_tool("search_medical_kb", {"query": 123})
+    assert "error" in result
+    assert "must be a string" in result["error"]
+
+
+def test_invalid_enum_value(server: MCPDemoServer) -> None:
+    """stage must be one of the allowed enum values."""
+    result = server.call_tool(
+        "search_teaching_rubric",
+        {"query": "test", "stage": "invalid_stage"},
+    )
+    assert "error" in result
+    assert "must be one of" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# 11. JSON-RPC protocol (subprocess)
+# ---------------------------------------------------------------------------
+
+# Backend directory for subprocess cwd: resolve from this file's location
+# tests/mcp_demo/test_mcp_server.py → parent.parent.parent = backend/
+_BACKEND_DIR = str(Path(__file__).resolve().parent.parent.parent)
+
+
+def _run_jsonrpc(messages: list[dict]) -> list[dict]:
+    """Send JSON-RPC messages to the MCP demo server subprocess and collect responses."""
+    input_data = "\n".join(json.dumps(m) for m in messages) + "\n"
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.mcp_demo"],
+        input=input_data,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=_BACKEND_DIR,
+    )
+    responses = []
+    for line in proc.stdout.strip().split("\n"):
+        if line.strip():
+            responses.append(json.loads(line))
+    return responses
+
+
+class TestSubprocessProtocol:
+    """Test the JSON-RPC protocol via subprocess."""
+
+    def test_initialize(self) -> None:
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        responses = _run_jsonrpc([msg])
+        assert len(responses) >= 1
+        resp = responses[0]
+        assert resp["jsonrpc"] == "2.0"
+        assert resp["id"] == 1
+        assert "result" in resp
+        assert resp["result"]["protocolVersion"] == "2024-11-05"
+
+    def test_tools_list(self) -> None:
+        msgs = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ]
+        responses = _run_jsonrpc(msgs)
+        # Find the tools/list response
+        list_resp = next(r for r in responses if r.get("id") == 2)
+        tools = list_resp["result"]["tools"]
+        assert len(tools) == 2
+        names = {t["name"] for t in tools}
+        assert "search_teaching_rubric" in names
+        assert "search_medical_kb" in names
+
+    def test_tools_call(self) -> None:
+        msgs = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "search_medical_kb", "arguments": {"query": "diabetes"}},
+            },
+        ]
+        responses = _run_jsonrpc(msgs)
+        call_resp = next(r for r in responses if r.get("id") == 2)
+        assert "result" in call_resp
+        content = call_resp["result"]["content"]
+        assert len(content) >= 1
+        data = json.loads(content[0]["text"])
+        assert "data" in data
+
+    def test_unknown_method(self) -> None:
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "unknown/method", "params": {}}
+        responses = _run_jsonrpc([msg])
+        resp = responses[0]
+        assert "error" in resp
+        assert resp["error"]["code"] == -32601
+
+    def test_malformed_json(self) -> None:
+        """Sending invalid JSON should return a parse error."""
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.mcp_demo"],
+            input="not valid json\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=_BACKEND_DIR,
+        )
+        responses = []
+        for line in proc.stdout.strip().split("\n"):
+            if line.strip():
+                responses.append(json.loads(line))
+        assert len(responses) >= 1
+        assert responses[0]["error"]["code"] == -32700

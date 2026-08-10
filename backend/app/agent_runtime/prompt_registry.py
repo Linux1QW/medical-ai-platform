@@ -4,7 +4,12 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.audit import record_audit_log
+from app.repositories.prompt_registry import PromptRegistryRepository
 
 RolloutStage = Literal["canary_0", "canary_5", "canary_25", "full_100"]
 
@@ -17,24 +22,32 @@ ROLLOUT_PERCENTAGES: dict[RolloutStage, int] = {
 
 
 @dataclass(frozen=True)
-class PromptBundle:
-    """An immutable prompt bundle."""
+class PromptBundleView:
+    """A read-only view of a prompt bundle."""
     bundle_id: str
     name: str
     version: str
     system_prompt: str
-    safety_policy: str
     content_hash: str
+    status: str
+    source_commit: str
+    author: str
 
     @staticmethod
-    def compute_hash(system_prompt: str, safety_policy: str) -> str:
-        content = f"{system_prompt}||{safety_policy}"
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    def compute_hash(system_prompt: str, node_prompts: dict | None = None) -> str:
+        import json
+        content_parts = {
+            "system_prompt": system_prompt,
+            "node_prompts": node_prompts,
+        }
+        return hashlib.sha256(
+            json.dumps(content_parts, sort_keys=True).encode()
+        ).hexdigest()
 
 
 @dataclass
-class Experiment:
-    """A prompt experiment with staged rollout."""
+class ExperimentView:
+    """A read-only view of an experiment."""
     experiment_id: str
     name: str
     baseline_bundle_id: str
@@ -47,74 +60,133 @@ class Experiment:
     def rollout_percentage(self) -> int:
         return ROLLOUT_PERCENTAGES[self.stage]
 
-    def advance_stage(self) -> RolloutStage:
-        stages: list[RolloutStage] = ["canary_0", "canary_5", "canary_25", "full_100"]
-        current_idx = stages.index(self.stage)
-        if current_idx < len(stages) - 1:
-            self.stage = stages[current_idx + 1]
-        return self.stage
 
-    def should_rollback(self, *, hidden_leak: bool, unsafe_suggestion: bool, error_rate: float) -> bool:
-        if hidden_leak or unsafe_suggestion:
-            self.auto_rollback_triggered = True
-            return True
-        if error_rate > 0.05:
-            self.auto_rollback_triggered = True
-            return True
-        return False
-
-
-def deterministic_assign(doctor_id: int, experiment_id: str, percentage: int) -> bool:
-    """Deterministic assignment based on doctor_id hash."""
-    hash_input = f"{doctor_id}:{experiment_id}"
+def deterministic_assign(subject_id: str, experiment_id: str, percentage: int) -> bool:
+    """Deterministic assignment based on subject_id hash."""
+    hash_input = f"{subject_id}:{experiment_id}"
     hash_value = int(hashlib.sha256(hash_input.encode("utf-8")).hexdigest(), 16)
     bucket = hash_value % 100
     return bucket < percentage
 
 
 class PromptRegistry:
-    """Registry of immutable prompt bundles and experiments."""
+    """Registry of immutable prompt bundles and experiments with DB persistence.
 
-    def __init__(self) -> None:
-        self._bundles: dict[str, PromptBundle] = {}
-        self._experiments: dict[str, Experiment] = {}
-        self._counter = 0
+    Key invariants:
+    - Active bundles cannot be edited (immutable once active)
+    - Registration records source commit and authenticated author
+    - Assignment is deterministic and persisted once per (experiment_id, subject_id)
+    """
 
-    def register_bundle(self, *, name: str, version: str, system_prompt: str, safety_policy: str) -> PromptBundle:
-        self._counter += 1
-        bundle_id = f"bundle_{self._counter:06d}"
-        content_hash = PromptBundle.compute_hash(system_prompt, safety_policy)
-        bundle = PromptBundle(bundle_id=bundle_id, name=name, version=version,
-                              system_prompt=system_prompt, safety_policy=safety_policy, content_hash=content_hash)
-        self._bundles[bundle_id] = bundle
+    def __init__(self, db: AsyncSession) -> None:
+        self._repo = PromptRegistryRepository(db)
+        self._db = db
+
+    async def register_bundle(
+        self,
+        *,
+        name: str,
+        version: str,
+        system_prompt: str,
+        source_commit: str,
+        author: str,
+        node_prompts: Optional[dict] = None,
+        output_schemas: Optional[dict] = None,
+        model_config: Optional[dict] = None,
+    ):
+        """Register a new prompt bundle.
+
+        Records source commit and authenticated author.
+        Active bundles cannot be edited - this creates a new bundle.
+        """
+        # Check if a bundle with same name/version already exists
+        existing = await self._repo.get_bundle(name, version)
+        if existing is not None:
+            raise ValueError(f"Bundle {name} v{version} already exists")
+
+        bundle = await self._repo.create_bundle(
+            name=name,
+            version=version,
+            system_prompt=system_prompt,
+            source_commit=source_commit,
+            author=author,
+            node_prompts=node_prompts,
+            output_schemas=output_schemas,
+            model_config=model_config,
+            status="draft",
+        )
+
+        await record_audit_log(
+            self._db,
+            user_id=None,  # Author is recorded in bundle, not as user_id
+            action="register_prompt_bundle",
+            resource_id=str(bundle.id),
+            detail=f"Registered bundle {name} v{version} by {author} (commit: {source_commit})",
+        )
         return bundle
 
-    def get_bundle(self, bundle_id: str) -> PromptBundle | None:
-        return self._bundles.get(bundle_id)
+    async def get_bundle(self, name: str, version: str):
+        """Get a specific bundle by name and version."""
+        return await self._repo.get_bundle(name, version)
 
-    def create_experiment(self, *, name: str, baseline_bundle_id: str, treatment_bundle_id: str) -> Experiment:
-        if baseline_bundle_id not in self._bundles:
-            raise KeyError(f"Baseline bundle {baseline_bundle_id} not found")
-        if treatment_bundle_id not in self._bundles:
-            raise KeyError(f"Treatment bundle {treatment_bundle_id} not found")
-        self._counter += 1
-        experiment_id = f"exp_{self._counter:06d}"
-        experiment = Experiment(experiment_id=experiment_id, name=name,
-                                baseline_bundle_id=baseline_bundle_id, treatment_bundle_id=treatment_bundle_id)
-        self._experiments[experiment_id] = experiment
-        return experiment
+    async def get_active_bundle(self, name: str):
+        """Get the active bundle for a given name."""
+        return await self._repo.get_active_bundle(name)
 
-    def assign_bundle(self, experiment_id: str, doctor_id: int) -> str:
-        experiment = self._experiments.get(experiment_id)
-        if experiment is None:
-            raise KeyError(f"Experiment {experiment_id} not found")
-        if experiment.auto_rollback_triggered:
-            return experiment.baseline_bundle_id
-        in_treatment = deterministic_assign(doctor_id, experiment_id, experiment.rollout_percentage)
-        return experiment.treatment_bundle_id if in_treatment else experiment.baseline_bundle_id
+    async def activate_bundle(self, name: str, version: str):
+        """Set a bundle to active status.
 
-    def get_experiment(self, experiment_id: str) -> Experiment | None:
-        return self._experiments.get(experiment_id)
+        Once active, a bundle cannot be edited (immutability invariant).
+        """
+        bundle = await self._repo.activate_bundle(name, version)
+        if bundle is None:
+            raise KeyError(f"Bundle {name} v{version} not found")
 
-    def list_experiments(self) -> list[Experiment]:
-        return list(self._experiments.values())
+        await record_audit_log(
+            self._db,
+            user_id=None,
+            action="activate_prompt_bundle",
+            resource_id=str(bundle.id),
+            detail=f"Activated bundle {name} v{version}",
+        )
+        return bundle
+
+    async def list_bundles(
+        self,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list:
+        """List bundles, optionally filtered by name and/or status."""
+        return await self._repo.list_bundles(name=name, status=status)
+
+    async def assign_bundle(
+        self,
+        experiment_id: str,
+        subject_id: str,
+        *,
+        baseline_name: str,
+        treatment_name: str,
+        rollout_pct: int,
+    ) -> str:
+        """Assign a subject to an experiment variant.
+
+        Assignment is deterministic and persisted once per (experiment_id, subject_id).
+        If already assigned, returns the existing assignment.
+        """
+        # Check for existing assignment (persisted once)
+        existing = await self._repo.get_experiment_variant(experiment_id, subject_id)
+        if existing is not None:
+            return existing.variant
+
+        # Deterministic assignment
+        in_treatment = deterministic_assign(subject_id, experiment_id, rollout_pct)
+        variant = treatment_name if in_treatment else baseline_name
+
+        # Persist the assignment
+        await self._repo.assign_experiment(
+            experiment_id=experiment_id,
+            subject_id=subject_id,
+            variant=variant,
+            rollout_pct=rollout_pct,
+        )
+        return variant

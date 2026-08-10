@@ -29,6 +29,7 @@ from app.agent_runtime.state import CoachGraphState
 
 # Re-export for backward compatibility
 __all__ = [
+    "CoachGraph",
     "CoachDependencies",
     "build_coach_graph",
     "invoke_coach_graph",
@@ -112,7 +113,7 @@ def _state_from_dict(d: dict[str, Any]) -> CoachGraphState:
 
 
 def _make_wrapper(node_fn: Any, deps: CoachDependencies) -> Any:
-    """Create a LangGraph-compatible async wrapper for a node function.
+    """Create a LangGraph async wrapper for a node function.
 
     Inspects the node function signature to only pass accepted kwargs.
     """
@@ -228,6 +229,27 @@ def build_coach_graph(
     graph.add_edge("persist", END)
 
     return graph.compile(checkpointer=checkpointer)
+
+
+# ── CoachGraph class wrapper ─────────────────────────────────────────────────
+
+
+class CoachGraph:
+    """Wrapper class for backward compatibility.
+
+    coach_service.py imports CoachGraph as a class.
+    This wraps build_coach_graph() to provide a class-based interface.
+    """
+
+    def __init__(self, checkpointer: Any = None, dependencies: CoachDependencies | None = None):
+        self._compiled = build_coach_graph(checkpointer=checkpointer, dependencies=dependencies)
+
+    async def ainvoke(self, state: dict[str, Any], config: Any = None) -> dict[str, Any]:
+        return await self._compiled.ainvoke(state, config=config)
+
+    @property
+    def compiled(self) -> CompiledStateGraph:
+        return self._compiled
 
 
 # ── High-level invoke with hard timeout ──────────────────────────────────────

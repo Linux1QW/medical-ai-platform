@@ -1,13 +1,29 @@
 """Read-only MCP demo server with deidentified clinical fixtures.
 
-This server is for development/demo purposes only.
-It serves static, deidentified clinical data via the MCP protocol.
+Implements a JSON-RPC 2.0 stdio transport compatible with the MCP protocol.
+Exposes only static, deidentified clinical data.
+
+Usage:
+    python -m app.mcp_demo
+
+This server:
+- Reads JSON-RPC requests from stdin (one per line)
+- Writes JSON-RPC responses to stdout
+- Handles: initialize, tools/list, tools/call
+- Does NOT bind any network port
+- Does NOT connect to production databases
 """
 from __future__ import annotations
 
+import json
+import logging
+import sys
 from typing import Any
 
-# Deidentified demo fixtures
+logger = logging.getLogger(__name__)
+
+# ── Deidentified demo fixtures ─────────────────────────────────────────────────
+
 DEMO_FIXTURES: dict[str, list[dict[str, Any]]] = {
     "teaching_rubrics": [
         {
@@ -48,6 +64,103 @@ DEMO_FIXTURES: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+# ── Tool schemas ───────────────────────────────────────────────────────────────
+
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "search_teaching_rubric",
+        "description": "Search teaching rubric for clinical interview guidelines",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "maxLength": 200},
+                "stage": {
+                    "type": "string",
+                    "enum": [
+                        "rapport",
+                        "chief_complaint",
+                        "history_present_illness",
+                        "past_medical_history",
+                        "medication_allergy",
+                        "closing",
+                    ],
+                },
+                "top_k": {"type": "integer", "default": 3, "maximum": 5},
+            },
+            "required": ["query"],
+        },
+        "readOnly": True,
+    },
+    {
+        "name": "search_medical_kb",
+        "description": "Search medical knowledge base for clinical information",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "maxLength": 300},
+                "topic": {"type": "string"},
+                "top_k": {"type": "integer", "default": 3, "maximum": 5},
+            },
+            "required": ["query"],
+        },
+        "readOnly": True,
+    },
+]
+
+
+# ── Argument validation ────────────────────────────────────────────────────────
+
+
+def _validate_arguments(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    """Validate arguments against tool schema. Returns error message or None."""
+    schema = next((t for t in TOOL_SCHEMAS if t["name"] == tool_name), None)
+    if schema is None:
+        return f"Unknown tool: {tool_name}"
+
+    input_schema = schema["inputSchema"]
+    required = input_schema.get("required", [])
+    properties = input_schema.get("properties", {})
+
+    # Check required fields
+    for field_name in required:
+        if field_name not in arguments:
+            return f"Missing required argument: '{field_name}'"
+
+    # Check types and constraints
+    for key, value in arguments.items():
+        if key not in properties:
+            continue  # Extra args are ignored
+        prop = properties[key]
+        expected_type = prop.get("type")
+
+        if expected_type == "string" and not isinstance(value, str):
+            return f"Argument '{key}' must be a string"
+        if expected_type == "integer" and not isinstance(value, int):
+            return f"Argument '{key}' must be an integer"
+
+        # maxLength
+        max_length = prop.get("maxLength")
+        if max_length and isinstance(value, str) and len(value) > max_length:
+            return f"Argument '{key}' exceeds maxLength ({max_length})"
+
+        # maximum — for top_k, clamp silently (backward compat); others error
+        maximum = prop.get("maximum")
+        if maximum and isinstance(value, int) and value > maximum:
+            if key == "top_k":
+                arguments[key] = maximum  # clamp in-place
+            else:
+                return f"Argument '{key}' exceeds maximum ({maximum})"
+
+        # enum
+        enum_values = prop.get("enum")
+        if enum_values and value not in enum_values:
+            return f"Argument '{key}' must be one of {enum_values}"
+
+    return None
+
+
+# ── MCPDemoServer (sync API for direct use) ────────────────────────────────────
+
 
 class MCPDemoServer:
     """Read-only MCP demo server.
@@ -68,49 +181,15 @@ class MCPDemoServer:
 
     def list_tools(self) -> list[dict[str, Any]]:
         """List available MCP tools."""
-        return [
-            {
-                "name": "search_teaching_rubric",
-                "description": "Search teaching rubric for clinical interview guidelines",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "maxLength": 200},
-                        "stage": {
-                            "type": "string",
-                            "enum": [
-                                "rapport",
-                                "chief_complaint",
-                                "history_present_illness",
-                                "past_medical_history",
-                                "medication_allergy",
-                                "closing",
-                            ],
-                        },
-                        "top_k": {"type": "integer", "default": 3, "maximum": 5},
-                    },
-                    "required": ["query"],
-                },
-                "readOnly": True,
-            },
-            {
-                "name": "search_medical_kb",
-                "description": "Search medical knowledge base for clinical information",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "maxLength": 300},
-                        "topic": {"type": "string"},
-                        "top_k": {"type": "integer", "default": 3, "maximum": 5},
-                    },
-                    "required": ["query"],
-                },
-                "readOnly": True,
-            },
-        ]
+        return TOOL_SCHEMAS
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Call an MCP tool. All outputs are read-only and deidentified."""
+        # Validate arguments
+        error = _validate_arguments(tool_name, arguments)
+        if error:
+            return {"error": error, "data": None}
+
         handler = self._tools.get(tool_name)
         if handler is None:
             return {"error": f"Unknown tool: {tool_name}", "data": None}
@@ -156,3 +235,85 @@ class MCPDemoServer:
 
         results.sort(key=lambda r: r["_score"], reverse=True)
         return {"data": results[:top_k], "total": len(results)}
+
+
+# ── JSON-RPC stdio handler ─────────────────────────────────────────────────────
+
+
+def _make_response(request_id: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _make_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def handle_jsonrpc_message(message: dict[str, Any], server: MCPDemoServer) -> dict[str, Any]:
+    """Handle a single JSON-RPC 2.0 message and return a response."""
+    jsonrpc = message.get("jsonrpc")
+    if jsonrpc != "2.0":
+        return _make_error(message.get("id"), -32600, "Invalid JSON-RPC version")
+
+    request_id = message.get("id")
+    method = message.get("method", "")
+    params = message.get("params", {})
+
+    if method == "initialize":
+        return _make_response(request_id, {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {
+                "name": "medical-mcp-demo",
+                "version": "1.0.0",
+            },
+        })
+
+    if method == "notifications/initialized":
+        # Notification, no response needed
+        return {}
+
+    if method == "tools/list":
+        return _make_response(request_id, {"tools": server.list_tools()})
+
+    if method == "tools/call":
+        tool_name = params.get("name", "")
+        arguments = params.get("arguments", {})
+
+        if not isinstance(arguments, dict):
+            return _make_error(request_id, -32602, "Arguments must be an object")
+
+        result = server.call_tool(tool_name, arguments)
+
+        if "error" in result and result.get("data") is None:
+            return _make_response(request_id, {
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "isError": True,
+            })
+
+        return _make_response(request_id, {
+            "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+        })
+
+    return _make_error(request_id, -32601, f"Method not found: {method}")
+
+
+def run_stdio_server() -> None:
+    """Run the MCP demo server reading from stdin and writing to stdout."""
+    server = MCPDemoServer()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            response = _make_error(None, -32700, "Parse error")
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+            continue
+
+        response = handle_jsonrpc_message(message, server)
+        if response:  # Skip empty responses (notifications)
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()

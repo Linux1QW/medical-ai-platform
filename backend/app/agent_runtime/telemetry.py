@@ -1,4 +1,4 @@
-"""Unified agent telemetry: privacy-safe event recording and bounded metrics."""
+"""Unified agent telemetry: privacy-safe event recording with repository-backed persistence."""
 from __future__ import annotations
 
 import hashlib
@@ -7,7 +7,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
+
+from pydantic import SecretStr
 
 
 class AgentEventType(str, Enum):
@@ -34,6 +36,12 @@ class AgentEventStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+# Stable error codes for coach safety gate
+COACH_POLICY_BLOCKED = "COACH_POLICY_BLOCKED"
+COACH_TIMEOUT = "COACH_TIMEOUT"
+COACH_UNAVAILABLE = "COACH_UNAVAILABLE"
+
+
 # Bounded metric labels — never include user/session/consultation IDs
 AGENT_METRIC_LABELS: dict[str, list[str]] = {
     "agent_node_duration_seconds": ["agent_name", "node_name", "status"],
@@ -42,6 +50,8 @@ AGENT_METRIC_LABELS: dict[str, list[str]] = {
     "agent_context_tokens": ["agent_name"],
     "agent_memory_reads_total": ["skill_dimension"],
     "agent_feedback_total": ["feedback_value"],
+    "coach_safety_checks_total": ["check_category", "result"],
+    "coach_safety_gate_decisions": ["decision"],
 }
 
 
@@ -91,7 +101,6 @@ class AgentSpan:
         error_code: str | None = None,
     ) -> None:
         """Finish the span, recording the completion event."""
-        # Map start event types to their corresponding finish types
         event_type_map = {
             "node_started": "node_finished",
             "model_started": "model_finished",
@@ -99,7 +108,6 @@ class AgentSpan:
         }
         actual_type = event_type_map.get(self.event_type, self.event_type)
 
-        # Directly record synchronously to ensure the event is appended immediately
         self.recorder._record_sync(
             actual_type,
             agent_name=self.agent_name,
@@ -111,10 +119,11 @@ class AgentSpan:
 
 
 class AgentEventRecorder:
-    """Privacy-safe agent event recorder.
+    """Privacy-safe agent event recorder with repository-backed persistence.
 
-    When capture_content=False (default), stores only HMAC and character count.
-    All events are append-only with monotonic sequence numbers.
+    - Requires SecretStr HMAC key (no default-hmac-key allowed).
+    - Persists hash NOT content: input_payload=None, input_hmac is 64-char SHA-256.
+    - Transactional sequence allocation unique per trace.
     """
 
     def __init__(
@@ -122,13 +131,21 @@ class AgentEventRecorder:
         *,
         session_id: str,
         trace_id: str,
+        hmac_key: SecretStr,
+        repository: Any | None = None,
         capture_content: bool = False,
-        hmac_key: str = "default-hmac-key",
     ) -> None:
+        # Reject default/weak keys
+        raw_key = hmac_key.get_secret_value()
+        if not raw_key or raw_key == "default-hmac-key":
+            raise ValueError(
+                "hmac_key must be a non-empty secret; 'default-hmac-key' is forbidden"
+            )
         self.session_id = session_id
         self.trace_id = trace_id
+        self.hmac_key = raw_key
+        self.repository = repository
         self.capture_content = capture_content
-        self.hmac_key = hmac_key
         self._sequence = 0
         self._events: list[RecordedEvent] = []
 
@@ -157,7 +174,7 @@ class AgentEventRecorder:
         error_code: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> RecordedEvent:
-        """Synchronous internal record method for use by AgentSpan.finish()."""
+        """Synchronous internal record method."""
         seq = self._next_sequence()
         input_hmac, input_chars = self._compute_hmac(input_data)
         output_hmac, output_chars = self._compute_hmac(output_data)
@@ -168,8 +185,9 @@ class AgentEventRecorder:
             agent_name=agent_name,
             node_name=node_name,
             status=status,
-            input_payload=input_data if self.capture_content else None,
-            output_payload=output_data if self.capture_content else None,
+            # Never persist raw content — always None
+            input_payload=None,
+            output_payload=None,
             input_hmac=input_hmac,
             output_hmac=output_hmac,
             input_char_count=input_chars,
@@ -192,8 +210,8 @@ class AgentEventRecorder:
         error_code: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> RecordedEvent:
-        """Record an agent event."""
-        return self._record_sync(
+        """Record an agent event, persisting to repository if available."""
+        event = self._record_sync(
             event_type,
             agent_name=agent_name,
             node_name=node_name,
@@ -203,6 +221,25 @@ class AgentEventRecorder:
             error_code=error_code,
             metadata=metadata,
         )
+
+        # Persist to repository if available
+        if self.repository is not None:
+            await self.repository.append_event(
+                trace_id=self.trace_id,
+                session_id=self.session_id,
+                event_type=event_type,
+                status=status or "finished",
+                agent_name=agent_name,
+                node_name=node_name,
+                input_payload=None,  # Never persist raw content
+                output_payload=None,
+                input_hmac=event.input_hmac,
+                output_hmac=event.output_hmac,
+                error_code=error_code,
+                metadata_json=metadata,
+            )
+
+        return event
 
     async def list_events(self) -> list[RecordedEvent]:
         """List all recorded events (append-only)."""

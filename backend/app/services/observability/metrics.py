@@ -280,3 +280,35 @@ CACHE_HIT_RATE = Gauge(
     "Cache hit rate",
     ["cache"],
 )
+
+# ── Coach 安全门控指标 ────────────────────────────────────────────────────────
+
+COACH_SAFETY_CHECKS_TOTAL = Counter(
+    "coach_safety_checks_total",
+    "Total coach safety checks performed",
+    ["check_category", "result"],
+)
+
+COACH_SAFETY_GATE_DECISIONS = Counter(
+    "coach_safety_gate_decisions_total",
+    "Total coach safety gate decisions",
+    ["decision", "risk_level"],
+)
+
+COACH_POLICY_BLOCKS_TOTAL = Counter(
+    "coach_policy_blocks_total",
+    "Total coach policy blocks",
+    ["reason"],
+)
+
+COACH_EVENTS_TOTAL = Counter(
+    "coach_events_total",
+    "Total coach lifecycle events",
+    ["event_type", "status"],
+)
+
+COACH_SUGGESTION_DURATION = Histogram(
+    "coach_suggestion_duration_seconds",
+    "Coach suggestion generation duration",
+    ["agent_name"],
+)

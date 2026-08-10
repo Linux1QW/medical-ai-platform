@@ -1,6 +1,7 @@
 """Tests for agent telemetry."""
 
 import pytest
+from pydantic import SecretStr
 
 from app.agent_runtime.telemetry import (
     AgentEventRecorder,
@@ -16,6 +17,7 @@ def recorder():
         session_id="test-session",
         trace_id="test-trace",
         capture_content=False,
+        hmac_key=SecretStr("test-hmac-key-for-testing"),
     )
 
 

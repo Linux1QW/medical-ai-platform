@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "minimum_cases": 40,
+  "required_categories": [
+    "disease_alias",
+    "drug_dose",
+    "gene_variant",
+    "lab_unit",
+    "negation",
+    "icd_code"
+  ],
+  "metrics": {
+    "overall_recall@10": {"operator": "ge", "threshold": null, "description": "Must not decrease from baseline"},
+    "overall_ndcg@10": {"operator": "ge", "threshold": null, "description": "Must not decrease from baseline"},
+    "exact_term_recall@10": {"operator": "ge", "threshold": null, "description": "Must not decrease from baseline"}
+  },
+  "performance": {
+    "cold_load_seconds": {"operator": "le", "threshold": 10.0},
+    "search_p95_ms": {"operator": "le", "threshold": 5.0}
+  },
+  "consistency": {
+    "generation_mismatch_count": {"operator": "eq", "threshold": 0},
+    "stale_cache_hit_count": {"operator": "eq", "threshold": 0}
+  }
+}

@@ -1,0 +1,134 @@
+# Prometheus Alert Rules — Medical AI Platform V1.1
+# 挂载到 Prometheus rule_files 目录
+
+groups:
+  - name: evaluation_runtime
+    rules:
+      # ── 队列积压 ──────────────────────────────────────────────────────────
+      - alert: EvaluationOutboxBacklog
+        expr: evaluation_outbox_pending > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox 队列积压超过 10 条，持续 5 分钟"
+          description: "当前 pending outbox 数量: {{ $value }}。检查 dispatcher 是否存活、broker 是否可达。"
+
+      - alert: EvaluationOutboxStale
+        expr: evaluation_outbox_oldest_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "最老 pending outbox 事件超过 60 秒"
+          description: " oldest pending event age: {{ $value }}s。dispatcher 可能停滞或 broker 不可达。"
+
+      # ── Dead Letter ──────────────────────────────────────────────────────
+      - alert: EvaluationDeadLetter
+        expr: evaluation_dispatch_dead_letter_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dispatch 进入 dead letter"
+          description: "dead letter 总数: {{ $value }}。检查 broker 连接和 outbox 行错误原因。"
+
+      # ── Circuit Breaker ──────────────────────────────────────────────────
+      - alert: EvaluationDispatchBreakerOpen
+        expr: evaluation_dispatch_breaker_open > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dispatch circuit breaker 持续 open"
+          description: "breaker 已 open 超过 2 分钟。broker 可能不可达。"
+
+      # ── 取消失败率 ────────────────────────────────────────────────────────
+      - alert: EvaluationCancelNudgeHigh
+        expr: rate(evaluation_cancellations_total{phase="running"}[1m]) * 60 > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Running 状态取消请求超过 3 次/分钟"
+          description: "取消速率: {{ $value }}/min。检查 worker 心跳和 cancel nudge 机制。"
+
+      # ── Worker 心跳停滞 ──────────────────────────────────────────────────
+      - alert: EvaluationStaleRun
+        expr: rate(evaluation_stale_runs_total[5m]) > 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "检测到 stale run（worker 心跳停滞）"
+          description: "stale run 速率: {{ $value }}/s。检查 worker 进程是否存活。"
+
+      - alert: EvaluationLeaseLost
+        expr: rate(evaluation_run_lease_lost_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Run lease lost 事件"
+          description: "lease lost 速率: {{ $value }}/s。worker 可能被 kill 或 GC 暂停。"
+
+      # ── 进度投递失败率 ────────────────────────────────────────────────────
+      - alert: EvaluationProgressPublishFailures
+        expr: rate(evaluation_progress_publish_total{result="failed"}[5m]) / rate(evaluation_progress_publish_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "进度投递失败率超过 5%"
+          description: "失败率: {{ $value | humanizePercentage }}。检查 redis-state 连接。"
+
+      # ── Redis 依赖 ───────────────────────────────────────────────────────
+      - alert: RedisStateDegraded
+        expr: redis_dependency_status{role="state"} < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "redis-state 不可达或降级"
+          description: "redis-state 状态: {{ $value }}。进度总线和状态缓存受影响。"
+
+      - alert: RedisCacheDegraded
+        expr: redis_dependency_status{role="cache"} < 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "redis-cache 降级"
+          description: "redis-cache 状态: {{ $value }}。RAG 缓存和检索缓存受影响，仅 cache miss 增加。"
+
+      # ── 备份 ─────────────────────────────────────────────────────────────
+      - alert: BackupStale
+        expr: (time() - backup_last_success_timestamp_seconds) > 54000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "备份超过 15 小时未成功"
+          description: "距上次备份: {{ $value | humanizeDuration }}。检查 backup timer 和 rclone 配置。"
+
+      # ── 复核队列 ─────────────────────────────────────────────────────────
+      - alert: ReviewQueueBacklog
+        expr: review_queue_depth > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "人工复核队列积压"
+          description: "当前队列深度: {{ $value }}。需要管理员介入处理。"
+
+  - name: http_slos
+    rules:
+      # ── HTTP 错误率 ──────────────────────────────────────────────────────
+      - alert: HttpErrorRateHigh
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.01
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP 5xx 错误率超过 1%"
+          description: "错误率: {{ $value | humanizePercentage }}。"

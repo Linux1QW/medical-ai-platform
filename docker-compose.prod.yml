@@ -4,11 +4,28 @@
 # 使用方式: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # ============================================
 
+x-backend-image: &backend-image
+  image: ghcr.io/${REPO}/backend:${IMAGE_TAG}
+
 services:
+  # ── MySQL（生产仅绑定 127.0.0.1 供受控备份）──
+  mysql:
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+
+  # ── Backend API ──────────────────────────────
   backend:
-    image: ghcr.io/${REPO}/backend:latest
+    <<: *backend-image
     build: !reset null
-    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      ENVIRONMENT: production
+      JWT_BLACKLIST_FAIL_CLOSED: "true"
+      OBSERVABILITY_CAPTURE_CONTENT: "false"
+      LOG_LEVEL: WARNING
+      WEB_CONCURRENCY: 2
+    volumes:
+      - ./.deploy/backup-status:/var/run/medical-ai-backup:ro
     deploy:
       resources:
         limits:
@@ -19,10 +36,76 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    environment:
-      - ENVIRONMENT=production
-      - LOG_LEVEL=WARNING
 
-  frontend:
-    image: ghcr.io/${REPO}/frontend:latest
+  # ── Evaluation Dispatcher ────────────────────
+  evaluation-dispatcher:
+    <<: *backend-image
     build: !reset null
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # ── Celery Worker（生产默认 concurrency=2）────
+  celery-worker:
+    <<: *backend-image
+    build: !reset null
+    command: celery -A app.celery_app worker --loglevel=warning --concurrency=2
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Celery Beat ──────────────────────────────
+  celery-beat:
+    <<: *backend-image
+    build: !reset null
+
+  # ── Migrate ──────────────────────────────────
+  migrate:
+    <<: *backend-image
+    build: !reset null
+
+  # ── Redis 生产内存预算（经容量评估）──────────
+  redis-state:
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - ${REDIS_STATE_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_STATE_MEMORY_LIMIT:-768M}
+
+  redis-cache:
+    command:
+      - redis-server
+      - --maxmemory
+      - ${REDIS_CACHE_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_CACHE_MEMORY_LIMIT:-384M}
+
+  # ── Frontend ─────────────────────────────────
+  frontend:
+    image: ghcr.io/${REPO}/frontend:${IMAGE_TAG}
+    build: !reset null
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_SSL_PORT:-443}:443"

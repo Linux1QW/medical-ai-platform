@@ -2,6 +2,7 @@
 
 > 冻结日期：2026-08-01  
 > 提交：24e89c8（fix(eval-regression): 小样本报告不作为 pre-push 门禁）  
+> 更新：v1.1.0 (2026-08-10) — 分支 `codex/v1.1-a-runtime`
 > 目的：固定当前行为语义，后续迭代不得破坏本文档记录的不变量。
 
 ---
@@ -123,3 +124,29 @@
 | 复核无状态机，可覆盖原结果 | Task 6 |
 | citation ID 依赖列表 index | Task 7 |
 | 无 Claim-Evidence 链路 | Task 8 |
+
+## 9. 复核反馈数据飞轮（Task 13）
+
+### 闭环流程
+
+1. 生产 `ReviewRecord` 形成结构化人类反馈
+2. 定期导出去标识 candidate manifest：`python -m scripts.export_review_feedback --output candidates.jsonl`
+3. 人工选择候选，补齐 gold query/doc/citation/stance，生成新的 `RagGoldCase(split="regression")`
+4. 运行 `python -m evaluation.rag_eval --mode both --split regression --fail-on-threshold`
+5. 仅当指标门禁无回退，才允许 Prompt/检索配置随下一版本发布
+
+### 人工 promotion checklist
+
+- [ ] 候选样本已通过 `export_review_feedback.py` 导出并脱敏
+- [ ] 每条候选已人工标注 gold_queries / gold_doc_ids / gold_citation_ids / expected_stance
+- [ ] 标注后的 gold case 写入 `split="regression"` JSONL
+- [ ] 运行 `rag_eval --split regression --fail-on-threshold` 无回退
+- [ ] 禁止将未标注 candidate 自动当作 gold case 训练或评测
+
+### 安全约束
+
+- 默认导出只含去标识元数据、分数、反馈脱敏文本，不含完整问诊
+- consultation_id / user_id 使用 HMAC-SHA256，不可反查
+- 含完整问诊的导出需同时提供 `--include-content --acknowledge-sensitive-data`
+- 受限内容写入 `backend/evaluation/private_feedback/`，已 gitignore
+- 禁止自动训练：candidate 必须经人工标注才能进入 gold case 集合

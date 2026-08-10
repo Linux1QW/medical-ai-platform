@@ -1,114 +1,146 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Card, Table, Tag, Typography, Button, Select, Form, Input, Space,
+  Card, Table, Tag, Typography, Button, Form, Input, Space,
   Modal, Descriptions, Alert, message,
 } from 'antd';
 import {
-  ExclamationCircleOutlined, EyeOutlined,
+  ExclamationCircleOutlined, EyeOutlined, ReloadOutlined,
 } from '@ant-design/icons';
-import type { RubricItem, RiskFinding, ClinicalClaim } from '../../types';
+import type { ColumnsType } from 'antd/es/table';
+import type { PendingReviewItem, Evaluation, ScoreAdjustments } from '../../types';
+import { listPendingReviews, submitReview } from '../../api/review';
+import { getEvaluation } from '../../api/evaluation';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
-
-/** 复核状态 */
-type ReviewStatus = 'pending_review' | 'in_review' | 'approved' | 'rejected' | 'returned';
-
-/** 复核队列项 */
-interface ReviewQueueItem {
-  id: number;
-  consultation_id: number;
-  status: ReviewStatus;
-  risk_level: 'high' | 'medium' | 'low';
-  priority: number;
-  created_at: string;
-  reason: string;
-  department?: string;
-  model_version?: string;
-  rubric_items?: RubricItem[];
-  risk_findings?: RiskFinding[];
-  claims?: ClinicalClaim[];
-  original_scores: Record<string, number>;
-}
-
-/** 复核决策 */
-interface ReviewDecision {
-  evaluation_id: number;
-  status: 'approved' | 'rejected' | 'returned';
-  reason_code: string;
-  feedback: string;
-  adjusted_items?: Array<{ item_id: string; new_verdict: string; new_score: number | null }>;
-}
-
-const STATUS_LABELS: Record<ReviewStatus, { text: string; color: string }> = {
-  pending_review: { text: '待复核', color: 'orange' },
-  in_review: { text: '复核中', color: 'blue' },
-  approved: { text: '已批准', color: 'green' },
-  rejected: { text: '已拒绝', color: 'red' },
-  returned: { text: '已退回', color: 'default' },
-};
-
-const RISK_COLORS: Record<string, string> = { high: 'red', medium: 'orange', low: 'green' };
 
 /**
  * AdminReviews — 人工复核工作台
  *
  * 功能：
- * - 按 risk_level、priority、created_at 排序
- * - 按原因、科室、模型版本筛选
- * - 展示原始回答、风险红旗、证据链
- * - 支持 rubric item 级调整
- * - 强制填写 review reason code 和 feedback
- * - 展示调整前后差异
+ * - 展示待复核列表（从后端 API 获取）
+ * - 查看评估详情（分数、引用、检索状态）
+ * - 可选五维分数调整
+ * - 提交复核反馈
  */
 const AdminReviews: React.FC = () => {
-  const [queue] = useState<ReviewQueueItem[]>([]);
-  const [loading] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<ReviewQueueItem | null>(null);
-  const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<string>('priority');
-  const [filterRisk, setFilterRisk] = useState<string>('');
-  const [filterDept, setFilterDept] = useState<string>('');
-  const [reviewForm] = Form.useForm<ReviewDecision>();
+  const [queue, setQueue] = useState<PendingReviewItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<PendingReviewItem | null>(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [conflictError, setConflictError] = useState<string | null>(null);
+  const [reviewForm] = Form.useForm<{ feedback: string; inquiry_score?: string; knowledge_score?: string; humanistic_score?: string; diagnosis_score?: string; treatment_score?: string }>();
 
-  // 排序和筛选后的队列
-  const filteredQueue = queue
-    .filter(item => !filterRisk || item.risk_level === filterRisk)
-    .filter(item => !filterDept || item.department === filterDept)
-    .sort((a, b) => {
-      if (sortBy === 'priority') return b.priority - a.priority;
-      if (sortBy === 'risk_level') {
-        const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
-        return (order[a.risk_level] ?? 3) - (order[b.risk_level] ?? 3);
+  const fetchQueue = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await listPendingReviews();
+      setQueue(res.items);
+    } catch {
+      setLoadError('加载失败，请重试');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchQueue();
+  }, [fetchQueue]);
+
+  const handleViewDetail = async (item: PendingReviewItem) => {
+    setSelectedItem(item);
+    setDetailModalOpen(true);
+    setConflictError(null);
+    setDetailLoading(true);
+    try {
+      const evalData = await getEvaluation(item.consultation_id);
+      setEvaluation(evalData);
+    } catch {
+      message.error('获取评估详情失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleReviewSubmit = async () => {
+    if (!selectedItem || !evaluation) return;
+
+    try {
+      const values = await reviewForm.validateFields();
+
+      // 前端校验：反馈至少 2 字
+      if (!values.feedback || values.feedback.trim().length < 2) {
+        message.error('反馈意见至少需要 2 个字');
+        return;
       }
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
 
-  const columns = [
-    {
-      title: '风险',
-      dataIndex: 'risk_level',
-      key: 'risk_level',
-      render: (level: string) => <Tag color={RISK_COLORS[level]}>{level}</Tag>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: ReviewStatus) => {
-        const cfg = STATUS_LABELS[status] || { text: status, color: 'default' };
-        return <Tag color={cfg.color}>{cfg.text}</Tag>;
-      },
-    },
-    { title: '优先级', dataIndex: 'priority', key: 'priority' },
+      setSubmitting(true);
+      setConflictError(null);
+
+      // 构建分数调整（可选）
+      const scoreAdjustments: ScoreAdjustments = {};
+      const dimFields: (keyof ScoreAdjustments)[] = [
+        'inquiry_score', 'knowledge_score', 'humanistic_score',
+        'diagnosis_score', 'treatment_score',
+      ];
+      let hasAdjustments = false;
+      const valuesRecord = values as Record<string, unknown>;
+      for (const field of dimFields) {
+        const val = valuesRecord[field];
+        if (val !== undefined && val !== null && val !== '') {
+          scoreAdjustments[field] = Number(val);
+          hasAdjustments = true;
+        }
+      }
+
+      await submitReview(evaluation.id, {
+        feedback: values.feedback.trim(),
+        score_adjustments: hasAdjustments ? scoreAdjustments : undefined,
+      });
+
+      message.success('复核已提交');
+      setDetailModalOpen(false);
+      reviewForm.resetFields();
+      setEvaluation(null);
+      setSelectedItem(null);
+      // 刷新队列
+      fetchQueue();
+    } catch (err: unknown) {
+      const error = err as { response?: { status?: number; data?: { error_code?: string; message?: string } } };
+      if (error.response?.status === 409) {
+        setConflictError('已被其他管理员复核');
+        fetchQueue();
+      } else if (error.response?.data?.message) {
+        message.error(error.response.data.message);
+      } else if (!(err as { errorFields?: unknown })?.errorFields) {
+        // 非表单校验错误
+        message.error('提交失败，请重试');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const columns: ColumnsType<PendingReviewItem> = [
     { title: '问诊ID', dataIndex: 'consultation_id', key: 'consultation_id' },
-    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
-    { title: '科室', dataIndex: 'department', key: 'department' },
+    { title: '医生', dataIndex: 'doctor_username', key: 'doctor_username' },
+    { title: '患者', dataIndex: 'patient_name', key: 'patient_name' },
+    {
+      title: '复核原因',
+      dataIndex: 'review_reason',
+      key: 'review_reason',
+      ellipsis: true,
+    },
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
     {
       title: '操作',
       key: 'action',
-      render: (_: unknown, record: ReviewQueueItem) => (
+      render: (_: unknown, record: PendingReviewItem) => (
         <Button type="link" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>
           查看
         </Button>
@@ -116,26 +148,11 @@ const AdminReviews: React.FC = () => {
     },
   ];
 
-  const handleViewDetail = (item: ReviewQueueItem) => {
-    setSelectedItem(item);
-    setReviewModalOpen(true);
-  };
-
-  const handleReviewSubmit = async () => {
-    try {
-      const values = await reviewForm.validateFields();
-      // 验证：高风险 approve 必须有 reason_code
-      if (selectedItem?.risk_level === 'high' && values.status === 'approved' && !values.reason_code) {
-        message.error('高风险批准必须填写原因代码');
-        return;
-      }
-      message.success('复核决策已提交');
-      setReviewModalOpen(false);
-      reviewForm.resetFields();
-    } catch {
-      message.error('请检查表单填写');
-    }
-  };
+  const renderRetryButton = () => (
+    <Button icon={<ReloadOutlined />} onClick={fetchQueue}>
+      重试
+    </Button>
+  );
 
   return (
     <div style={{ padding: 24 }}>
@@ -144,35 +161,22 @@ const AdminReviews: React.FC = () => {
         人工复核工作台
       </Title>
 
-      {/* 筛选栏 */}
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <span>排序：</span>
-          <Select value={sortBy} onChange={setSortBy} style={{ width: 140 }}>
-            <Select.Option value="priority">优先级</Select.Option>
-            <Select.Option value="risk_level">风险等级</Select.Option>
-            <Select.Option value="created_at">创建时间</Select.Option>
-          </Select>
-          <span>风险等级：</span>
-          <Select value={filterRisk} onChange={setFilterRisk} style={{ width: 120 }} allowClear placeholder="全部">
-            <Select.Option value="high">高</Select.Option>
-            <Select.Option value="medium">中</Select.Option>
-            <Select.Option value="low">低</Select.Option>
-          </Select>
-          <span>科室：</span>
-          <Select value={filterDept} onChange={setFilterDept} style={{ width: 140 }} allowClear placeholder="全部">
-            <Select.Option value="cardiology">心内科</Select.Option>
-            <Select.Option value="neurology">神经内科</Select.Option>
-            <Select.Option value="emergency">急诊科</Select.Option>
-          </Select>
-        </Space>
-      </Card>
+      {/* 加载失败提示 */}
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          message={loadError}
+          action={renderRetryButton()}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {/* 队列表格 */}
       <Table
-        dataSource={filteredQueue}
+        dataSource={queue}
         columns={columns}
-        rowKey="id"
+        rowKey="evaluation_id"
         loading={loading}
         pagination={{ pageSize: 20 }}
       />
@@ -180,74 +184,129 @@ const AdminReviews: React.FC = () => {
       {/* 复核详情弹窗 */}
       <Modal
         title="复核详情"
-        open={reviewModalOpen}
-        onCancel={() => { setReviewModalOpen(false); reviewForm.resetFields(); }}
+        open={detailModalOpen}
+        onCancel={() => {
+          setDetailModalOpen(false);
+          reviewForm.resetFields();
+          setEvaluation(null);
+          setSelectedItem(null);
+          setConflictError(null);
+        }}
         width={800}
         footer={[
-          <Button key="cancel" onClick={() => setReviewModalOpen(false)}>取消</Button>,
-          <Button key="submit" type="primary" onClick={handleReviewSubmit}>提交决策</Button>,
+          <Button
+            key="cancel"
+            onClick={() => {
+              setDetailModalOpen(false);
+              reviewForm.resetFields();
+              setEvaluation(null);
+              setSelectedItem(null);
+              setConflictError(null);
+            }}
+          >
+            取消
+          </Button>,
+          <Button key="submit" type="primary" loading={submitting} onClick={handleReviewSubmit}>
+            完成复核
+          </Button>,
         ]}
       >
         {selectedItem && (
           <div>
-            {/* 风险红旗 */}
-            {selectedItem.risk_findings && selectedItem.risk_findings.length > 0 && (
+            {/* 冲突错误提示 */}
+            {conflictError && (
               <Alert
-                type={selectedItem.risk_level === 'high' ? 'error' : 'warning'}
+                type="warning"
                 showIcon
+                message={conflictError}
                 style={{ marginBottom: 16 }}
-                message={`发现 ${selectedItem.risk_findings.length} 项风险`}
-                description={
-                  <ul style={{ margin: 0, paddingLeft: 20 }}>
-                    {selectedItem.risk_findings.map((f, i) => (
-                      <li key={i}>{f.description} <Tag color={RISK_COLORS[f.severity]}>{f.severity}</Tag></li>
-                    ))}
-                  </ul>
-                }
               />
             )}
 
-            {/* 原始分数 */}
-            <Descriptions title="原始评分" size="small" bordered column={2} style={{ marginBottom: 16 }}>
-              {Object.entries(selectedItem.original_scores).map(([dim, score]) => (
-                <Descriptions.Item key={dim} label={dim}>{score}</Descriptions.Item>
-              ))}
+            {/* 基本信息 */}
+            <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="医生">{selectedItem.doctor_username}</Descriptions.Item>
+              <Descriptions.Item label="患者">{selectedItem.patient_name}</Descriptions.Item>
+              <Descriptions.Item label="复核原因" span={2}>{selectedItem.review_reason}</Descriptions.Item>
             </Descriptions>
 
-            {/* Rubric Items */}
-            {selectedItem.rubric_items && selectedItem.rubric_items.length > 0 && (
-              <Card title="Rubric 明细" size="small" style={{ marginBottom: 16 }}>
-                {selectedItem.rubric_items.map((item, idx) => (
-                  <div key={idx} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-                    <Space>
-                      <Tag color={item.verdict === 'pass' ? 'green' : item.verdict === 'fail' ? 'red' : 'gold'}>
-                        {item.verdict}
-                      </Tag>
-                      <Text strong>{item.item_id}</Text>
-                      <Text type="secondary">{item.description}</Text>
-                      {item.severity === 'high' && <Tag color="red">高严重</Tag>}
-                    </Space>
-                  </div>
-                ))}
-              </Card>
-            )}
+            {detailLoading && <div style={{ textAlign: 'center', padding: 24 }}>加载中...</div>}
 
-            {/* 复核表单 */}
-            <Form form={reviewForm} layout="vertical">
-              <Form.Item name="status" label="决策" rules={[{ required: true }]}>
-                <Select>
-                  <Select.Option value="approved">批准</Select.Option>
-                  <Select.Option value="rejected">拒绝</Select.Option>
-                  <Select.Option value="returned">退回</Select.Option>
-                </Select>
-              </Form.Item>
-              <Form.Item name="reason_code" label="原因代码" rules={[{ required: true, message: '必须填写原因代码' }]}>
-                <Input placeholder="例如: evidence_insufficient, score_adjustment" />
-              </Form.Item>
-              <Form.Item name="feedback" label="反馈意见" rules={[{ required: true, message: '必须填写反馈意见' }]}>
-                <TextArea rows={3} placeholder="详细说明复核依据和调整理由..." />
-              </Form.Item>
-            </Form>
+            {evaluation && !detailLoading && (
+              <>
+                {/* 检索/证据状态 */}
+                <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
+                  <Descriptions.Item label="检索状态">
+                    <Tag color={evaluation.retrieval_status === 'sufficient' ? 'green' : 'orange'}>
+                      {evaluation.retrieval_status}
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="证据立场">
+                    <Tag>{evaluation.evidence_stance}</Tag>
+                  </Descriptions.Item>
+                </Descriptions>
+
+                {/* 五维原始评分 */}
+                <Descriptions title="原始评分" size="small" bordered column={2} style={{ marginBottom: 16 }}>
+                  <Descriptions.Item label="问诊">{evaluation.inquiry_score}</Descriptions.Item>
+                  <Descriptions.Item label="知识">{evaluation.knowledge_score ?? 'N/A'}</Descriptions.Item>
+                  <Descriptions.Item label="人文">{evaluation.humanistic_score}</Descriptions.Item>
+                  <Descriptions.Item label="诊断">{evaluation.diagnosis_score}</Descriptions.Item>
+                  <Descriptions.Item label="治疗">{evaluation.treatment_score}</Descriptions.Item>
+                  <Descriptions.Item label="总分">{evaluation.total_score ?? 'N/A'}</Descriptions.Item>
+                </Descriptions>
+
+                {/* 引用 */}
+                {evaluation.citation_data && evaluation.citation_data.length > 0 && (
+                  <Card title="引用" size="small" style={{ marginBottom: 16 }}>
+                    {evaluation.citation_data.map((cite, idx) => (
+                      <div key={cite.citation_id || idx} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                        <Space direction="vertical" size={0}>
+                          <Text strong>{cite.claim}</Text>
+                          <Text type="secondary">{cite.source} - {cite.heading_path}</Text>
+                          <Text type="secondary" style={{ fontSize: 12 }}>{cite.text_snippet}</Text>
+                        </Space>
+                      </div>
+                    ))}
+                  </Card>
+                )}
+
+                {/* 复核表单 */}
+                <Form form={reviewForm} layout="vertical">
+                  <Form.Item
+                    name="feedback"
+                    label="反馈意见"
+                    rules={[
+                      { required: true, message: '必须填写反馈意见' },
+                      { min: 2, message: '反馈意见至少 2 个字' },
+                    ]}
+                  >
+                    <TextArea rows={3} placeholder="详细说明复核依据和调整理由..." />
+                  </Form.Item>
+
+                  {/* 可选五维分数调整 */}
+                  <Card title="分数调整（可选）" size="small">
+                    <Space wrap>
+                      <Form.Item name="inquiry_score" label="问诊" style={{ marginBottom: 8 }}>
+                        <Input type="number" min={0} max={100} style={{ width: 80 }} placeholder="0-100" />
+                      </Form.Item>
+                      <Form.Item name="knowledge_score" label="知识" style={{ marginBottom: 8 }}>
+                        <Input type="number" min={0} max={100} style={{ width: 80 }} placeholder="0-100" />
+                      </Form.Item>
+                      <Form.Item name="humanistic_score" label="人文" style={{ marginBottom: 8 }}>
+                        <Input type="number" min={0} max={100} style={{ width: 80 }} placeholder="0-100" />
+                      </Form.Item>
+                      <Form.Item name="diagnosis_score" label="诊断" style={{ marginBottom: 8 }}>
+                        <Input type="number" min={0} max={100} style={{ width: 80 }} placeholder="0-100" />
+                      </Form.Item>
+                      <Form.Item name="treatment_score" label="治疗" style={{ marginBottom: 8 }}>
+                        <Input type="number" min={0} max={100} style={{ width: 80 }} placeholder="0-100" />
+                      </Form.Item>
+                    </Space>
+                  </Card>
+                </Form>
+              </>
+            )}
           </div>
         )}
       </Modal>

@@ -35,6 +35,9 @@ check_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as requiring real infrastructure (deselect with '-m \"not integration\"')",
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

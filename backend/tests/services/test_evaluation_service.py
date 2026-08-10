@@ -184,7 +184,7 @@ class TestRunEvaluationLegacy:
 
     @pytest.mark.asyncio
     @patch("app.services.evaluation_service.settings")
-    @patch("app.services.evaluation_service.manager")
+    @patch("app.services.evaluation_service.get_manager")
     @patch("app.services.evaluation_service.run_suggestion", new_callable=AsyncMock)
     @patch("app.services.evaluation_service.run_scoring", new_callable=AsyncMock)
     @patch("app.services.evaluation_service.run_treatment_evaluation", new_callable=AsyncMock)
@@ -201,7 +201,7 @@ class TestRunEvaluationLegacy:
         mock_treatment,
         mock_scoring,
         mock_suggestion,
-        mock_manager,
+        mock_get_manager,
         mock_settings,
         mock_db,
         sample_consultation,
@@ -215,8 +215,10 @@ class TestRunEvaluationLegacy:
         mock_settings.LANGGRAPH_ENABLED = False
         mock_settings.AGENT_TIMEOUT_SECONDS = 180  # settings 整体被 mock，需还原真实超时数值
 
-        # mock manager.send_progress 为异步方法
-        mock_manager.send_progress = AsyncMock()
+        # mock get_manager() 返回一个带 send_progress 的 mock
+        mock_mgr = MagicMock()
+        mock_mgr.send_progress = AsyncMock()
+        mock_get_manager.return_value = mock_mgr
 
         # mock 数据库查询
         mock_consult_result = MagicMock()
@@ -270,7 +272,7 @@ class TestRunEvaluationLegacy:
 
     @pytest.mark.asyncio
     @patch("app.services.evaluation_service.settings")
-    @patch("app.services.evaluation_service.manager")
+    @patch("app.services.evaluation_service.get_manager")
     @patch("app.services.evaluation_service.run_suggestion", new_callable=AsyncMock)
     @patch("app.services.evaluation_service.run_scoring", new_callable=AsyncMock)
     @patch("app.services.evaluation_service.run_treatment_evaluation", new_callable=AsyncMock)
@@ -287,7 +289,7 @@ class TestRunEvaluationLegacy:
         mock_treatment,
         mock_scoring,
         mock_suggestion,
-        mock_manager,
+        mock_get_manager,
         mock_settings,
         mock_db,
         sample_consultation,
@@ -300,8 +302,10 @@ class TestRunEvaluationLegacy:
         mock_settings.LANGGRAPH_ENABLED = False
         mock_settings.AGENT_TIMEOUT_SECONDS = 180  # settings 整体被 mock，需还原真实超时数值
 
-        # mock manager.send_progress 为异步方法
-        mock_manager.send_progress = AsyncMock()
+        # mock get_manager() 返回一个带 send_progress 的 mock
+        mock_mgr = MagicMock()
+        mock_mgr.send_progress = AsyncMock()
+        mock_get_manager.return_value = mock_mgr
 
         mock_consult_result = MagicMock()
         mock_consult_result.scalar_one.return_value = sample_consultation

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.failure_reasons import EvaluationCancelled, EvaluationDeadlineExceeded
 from app.core.run_context import current_run_id
-from app.core.websocket import manager
+from app.core.websocket import get_manager
 from app.models.consultation import Consultation, ConsultationMessage
 from app.models.evaluation import Evaluation
 from app.models.patient import VirtualPatient
@@ -72,7 +72,7 @@ async def _run_evaluation_graph(
     from sqlalchemy import select
 
     from app.core.config import settings
-    from app.core.websocket import manager
+    from app.core.websocket import get_manager as _get_mgr
     from app.models.consultation import Consultation, ConsultationMessage
     from app.models.evaluation_run import EvaluationRun
     from app.models.patient import VirtualPatient
@@ -81,8 +81,9 @@ async def _run_evaluation_graph(
     from app.orchestration.routes import build_submission_flags, get_consultation_type
     from app.orchestration.state import EvaluationContext, EvaluationState
 
+    mgr = _get_mgr()
     # 1. 加载数据
-    await manager.send_progress(consultation_id, 0, "正在初始化...")
+    await mgr.send_progress(run_id="pending", consultation_id=consultation_id, status="running", progress=0, message="正在初始化...")
 
     consultation_result = await db.execute(
         select(Consultation).where(Consultation.id == consultation_id)
@@ -189,7 +190,7 @@ async def _run_evaluation_graph(
 
         # 5. 发送进度事件
         progress_events = final_state.get("progress_events", [])
-        await send_progress_events(consultation_id, progress_events)
+        await send_progress_events(run_id, consultation_id, progress_events)
 
         # 6. 从 final_state 构建 Evaluation
         evaluation = _build_evaluation_from_state(final_state, consultation_id)
@@ -231,7 +232,7 @@ async def _run_evaluation_graph(
         eval_run.evaluation_id = evaluation.id
         await db.commit()
 
-        await manager.send_progress(consultation_id, 100, "评估完成")
+        await mgr.send_progress(run_id=run_id, consultation_id=consultation_id, status="completed", progress=100, message="评估完成")
         return evaluation
 
     except Exception as e:
@@ -537,7 +538,10 @@ def _build_disclosure_coverage_text(memory_state) -> str | None:
 
 async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Evaluation:
     """旧编排路径 — 保留原有代码作为回退"""
-    await manager.send_progress(consultation_id, 0, "正在初始化...")
+    import uuid as _uuid
+    _run_id = str(_uuid.uuid4())
+    mgr = get_manager()
+    await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=0, message="正在初始化...")
     consultation_result = await db.execute(
         select(Consultation).where(Consultation.id == consultation_id)
     )
@@ -589,7 +593,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             msg = f"{completed_name}评估完成，还有 {remaining} 项评估进行中..."
         else:
             msg = "五维评估全部完成，正在汇总..."
-        await manager.send_progress(consultation_id, progress, msg)
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=progress, message=msg)
         return result
 
     async def run_agent_safe(coro, agent_index: int):
@@ -608,10 +612,12 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             failed_agents.append(name)
             completed_agents["count"] += 1
             try:
-                await manager.send_progress(
-                    consultation_id,
-                    10 + completed_agents["count"] * 10,
-                    f"{name}评估失败，其余维度继续...",
+                await mgr.send_progress(
+                    run_id=_run_id,
+                    consultation_id=consultation_id,
+                    status="running",
+                    progress=10 + completed_agents["count"] * 10,
+                    message=f"{name}评估失败，其余维度继续...",
                 )
             except Exception:
                 pass
@@ -623,9 +629,9 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
 
     try:
         # 第一阶段：并行调用五个评估智能体
-        await manager.send_progress(consultation_id, 5, "正在启动五维评估智能体...")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=5, message="正在启动五维评估智能体...")
         await asyncio.sleep(0.1)  # 短暂延迟确保 WebSocket 消息发送
-        await manager.send_progress(consultation_id, 10, "病史采集、医学知识、沟通交流、诊断结果、治疗方案评估中...")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=10, message="病史采集、医学知识、沟通交流、诊断结果、治疗方案评估中...")
 
         (
             inquiry_result,
@@ -666,7 +672,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
             knowledge_score_value = None
 
         # 第二阶段：综合评分智能体
-        await manager.send_progress(consultation_id, 70, "综合评分计算中...")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=70, message="综合评分计算中...")
         scoring_result = await run_scoring(
             inquiry_score=inquiry_data.get("score", 0),
             inquiry_analysis=inquiry_data.get("analysis", ""),
@@ -682,7 +688,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         scoring_data = _extract_json(scoring_result["raw_response"])
 
         # 第三阶段：建议指导智能体
-        await manager.send_progress(consultation_id, 85, "生成改进建议中...")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=85, message="生成改进建议中...")
         suggestion_result = await run_suggestion(
             conversation_text=conversation_text,
             patient_info=patient_info,
@@ -692,7 +698,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         )
         suggestion_data = _extract_json(suggestion_result["raw_response"])
 
-        await manager.send_progress(consultation_id, 95, "正在保存评估结果...")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="running", progress=95, message="正在保存评估结果...")
 
         # 拒答时 total_score 也置为 None，并替换摘要避免分数矛盾
         total_score_value = scoring_data.get("total_score")
@@ -761,7 +767,7 @@ async def _run_evaluation_legacy(db: AsyncSession, consultation_id: int) -> Eval
         consultation.status = "evaluated"
         await db.commit()
         await db.refresh(evaluation)
-        await manager.send_progress(consultation_id, 100, "评估完成")
+        await mgr.send_progress(run_id=_run_id, consultation_id=consultation_id, status="completed", progress=100, message="评估完成")
         return evaluation
 
     except EvaluationValidationError as e:

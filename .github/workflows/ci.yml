@@ -5,8 +5,19 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # ============================================================================
+  # backend-test: Python 3.10, MySQL 8, Redis 7
+  # ============================================================================
   backend-test:
     runs-on: ubuntu-latest
     services:
@@ -31,9 +42,11 @@ jobs:
           --health-retries=5
 
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: actions/setup-python@v6
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -80,8 +93,6 @@ jobs:
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
           TESTING: 'true'
-        # mock 结果与 gold 期望对齐（绿路径），阈值门不过即失败：
-        # 防止评测框架/指标管道/阈值配置本身被后续改动改坏
         run: |
           cd backend
           python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold
@@ -107,6 +118,11 @@ jobs:
             tests/rag/test_task8_observability.py -q
           python -m pytest tests/rag -q
 
+      - name: Validate BM25 golden set structure (PR gate)
+        run: |
+          cd backend
+          python scripts/eval/evaluate_bm25.py --validate-golden-only
+
       - name: Run measured Task 8 gates when local artifacts are present
         shell: bash
         run: |
@@ -129,34 +145,26 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        # v5.0.0
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45
         with:
           files: ./backend/coverage.xml
           flags: backend
           fail_ci_if_error: false
 
-      - name: Install MySQL client
-        run: sudo apt-get update && sudo apt-get install -y mysql-client
-
-      - name: Verify database migrations
-        run: |
-          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -ptest --silent; do
-            sleep 2
-          done
-          mysql -h 127.0.0.1 -P 3306 -u root -ptest < database/init.sql
-          for f in database/migrate_v*.sql; do
-            echo "Applying $f..."
-            mysql -h 127.0.0.1 -P 3306 -u root -ptest medical_ai < "$f" || echo "Warning: $f had issues"
-          done
-
-  frontend-build:
+  # ============================================================================
+  # frontend-test: Node 22
+  # ============================================================================
+  frontend-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: actions/setup-node@v5
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -165,10 +173,19 @@ jobs:
           cd frontend
           npm ci
 
-      - name: Build frontend
+      - name: Run tests
+        run: |
+          cd frontend
+          npm test
+
+      - name: Run lint
         run: |
           cd frontend
           npm run lint
+
+      - name: Build frontend
+        run: |
+          cd frontend
           npm run build
 
       - name: Check build output
@@ -181,14 +198,79 @@ jobs:
             exit 1
           fi
 
+  # ============================================================================
+  # migration-gate: fresh DB + legacy fixture paths
+  # ============================================================================
+  migration-gate:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Wait for MySQL
+        run: |
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -ptest --silent; do
+            sleep 2
+          done
+
+      - name: Fresh DB migration test
+        run: |
+          cd backend
+          python scripts/migrate_v11.py
+          alembic check
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Legacy fixture migration test
+        run: |
+          # Test migration from legacy state
+          cd backend
+          mysql -h 127.0.0.1 -P 3306 -u root -ptest -e "DROP DATABASE IF EXISTS test_db; CREATE DATABASE test_db;"
+          python scripts/migrate_v11.py
+          alembic check
+
+  # ============================================================================
+  # code-quality: ruff + syntax check
+  # ============================================================================
   code-quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
 
@@ -211,87 +293,288 @@ jobs:
             git diff --check "${{ github.event.before }}...${{ github.sha }}"
           fi
 
-      # mypy 阻断门禁已移至 backend-test 作业（需完整依赖环境，与本地结果一致）
-
       - name: Check Python syntax
         run: |
           cd backend
           python -m compileall app/ -q
 
+  # ============================================================================
+  # security-scan: pip-audit, npm audit, Trivy, Gitleaks (blocking)
+  # ============================================================================
   security-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
 
-      # 安全扫描当前为告警模式（continue-on-error），存量漏洞清零后再改为阻断
       - name: pip-audit (backend dependencies)
-        continue-on-error: true
         run: |
           pip install pip-audit
           pip-audit -r backend/requirements.txt
 
-      - uses: actions/setup-node@v5
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: npm audit (frontend dependencies)
-        continue-on-error: true
         run: |
           cd frontend
+          npm ci
           npm audit --audit-level=high
 
       - name: Trivy filesystem scan
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
+        # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
         with:
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: '1'
 
-  docker-build:
-    needs: [backend-test, frontend-build]
+      - name: Gitleaks secret scan
+        # v8.18.0
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ============================================================================
+  # rag-pr-gate: BM25 golden structure + mock Agent (no external costs)
+  # ============================================================================
+  rag-pr-gate:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    permissions:
-      packages: write
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate BM25 golden set structure
+        run: |
+          cd backend
+          python scripts/eval/evaluate_bm25.py --validate-golden-only
+
+      - name: Run RAG mock gate
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold
+
+  # ============================================================================
+  # docker-build-candidate: build after all gates pass
+  # ============================================================================
+  docker-build-candidate:
+    needs: [backend-test, frontend-test, migration-gate, code-quality, security-scan, rag-pr-gate]
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set lowercase image repo
         run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
+      - name: Build Backend candidate image
+        run: |
+          docker build -t ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} -f Dockerfile.backend .
+          docker save ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} > backend-image.tar
+
+      - name: Build Frontend candidate image
+        run: |
+          docker build -t ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} -f Dockerfile.frontend .
+          docker save ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} > frontend-image.tar
+
+      - name: Generate SHA-256 manifest
+        run: |
+          sha256sum backend-image.tar > manifest.txt
+          sha256sum frontend-image.tar >> manifest.txt
+
+      - name: Upload candidate images as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docker-candidate-images
+          path: |
+            backend-image.tar
+            frontend-image.tar
+            manifest.txt
+          retention-days: 1
+
+  # ============================================================================
+  # compose-smoke: E2E smoke test with candidate images
+  # ============================================================================
+  compose-smoke:
+    needs: [docker-build-candidate]
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docker-candidate-images
+
+      - name: Load candidate images
+        run: |
+          docker load < backend-image.tar
+          docker load < frontend-image.tar
+
+      - name: Run compose smoke test
+        run: |
+          docker compose -f docker-compose.yml up -d --wait
+          # Basic health check
+          sleep 10
+          curl -f http://localhost:8000/health || exit 1
+          docker compose down -v
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: compose-smoke-logs
+          path: |
+            monitoring/logs/
+          retention-days: 7
+
+  # ============================================================================
+  # image-security-scan: Trivy scan on candidate images
+  # ============================================================================
+  image-security-scan:
+    needs: [docker-build-candidate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docker-candidate-images
+
+      - name: Load candidate images
+        run: |
+          docker load < backend-image.tar
+          docker load < frontend-image.tar
+
+      - name: Trivy image scan (backend)
+        # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Trivy image scan (frontend)
+        # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  # ============================================================================
+  # rag-measured-gate: only on master/tag/manual release
+  # ============================================================================
+  rag-measured-gate:
+    needs: [docker-build-candidate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run RAG measured gate
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          TESTING: 'true'
+        run: |
+          cd backend
+          if [[ -f evaluation_reports/bm25-v1.json ]]; then
+            python scripts/eval/evaluate_bm25.py \
+              --compare evaluation_reports/bm25-v1.json \
+              --fail-on-regression \
+              --policy evaluation/bm25_release_policy.json
+          else
+            echo "SKIP: no measured baseline available"
+            exit 1
+          fi
+
+  # ============================================================================
+  # publish/promote-release: only after all gates pass
+  # ============================================================================
+  publish-promote-release:
+    needs: [compose-smoke, image-security-scan, rag-measured-gate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      packages: write
+    environment: production
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set lowercase image repo
+        run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # v4.0.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Backend
-        uses: docker/build-push-action@v7
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          context: .
-          file: ./Dockerfile.backend
-          push: true
-          target: production
-          tags: |
-            ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          name: docker-candidate-images
 
-      - name: Build and push Frontend
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile.frontend
-          push: true
-          target: production
-          tags: |
-            ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest
+      - name: Load and push Backend
+        run: |
+          docker load < backend-image.tar
+          docker tag ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+
+      - name: Load and push Frontend
+        run: |
+          docker load < frontend-image.tar
+          docker tag ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+
+      - name: Promote to latest (tag only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          docker tag ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          docker tag ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest

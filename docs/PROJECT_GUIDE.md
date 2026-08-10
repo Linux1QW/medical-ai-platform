@@ -1,6 +1,6 @@
 # 项目总手册：基于多智能体的医生临床问诊评估平台
 
-本文是项目的权威说明，事实基线为分支 `codex/rag-bm25-optimization` 的当前代码。内容由代码、配置、FastAPI 路由、Docker Compose、SQLAlchemy/Alembic、前端调用、测试和 CI 交叉核对。其他文档如与本文冲突，应回到对应源码确认并同步本文。
+本文是项目的权威说明，事实基线为分支 `codex/v1.1-a-runtime` 的当前代码（v1.1.0）。内容由代码、配置、FastAPI 路由、Docker Compose、SQLAlchemy/Alembic、前端调用、测试和 CI 交叉核对。其他文档如与本文冲突，应回到对应源码确认并同步本文。
 
 ## 1. 项目定位、安全与边界
 
@@ -59,25 +59,105 @@ React SPA (5173 / Nginx 80,443)
 FastAPI (8000)
   ├─ Auth/RBAC/Audit/Rate limit/Security headers
   ├─ SQLAlchemy async ───────────── MySQL 8
-  ├─ LangGraph orchestration ────── Redis checkpoint db=1
-  ├─ cache/JWT/token/RAG pointers ─ Redis db=2/3 + shared instance
-  ├─ task submission ────────────── Celery broker db=4/result db=5
+  ├─ LangGraph orchestration ────── redis-state checkpoint db=1
+  ├─ cache/JWT/token/RAG pointers ─ redis-state db=2/3/6/7/8
+  ├─ task submission ────────────── redis-state broker db=4/result db=5
+  ├─ Outbox enqueue ─────────────── MySQL evaluation_dispatch_outbox
   └─ RAG retrieval
        ├─ Chroma Dense: backend/data/medical_kb
        ├─ BM25 artifacts: backend/data/rag_indexes/<generation>/bm25
        ├─ optional Sparse: .../<generation>/sparse
        └─ manifest + Redis active pointer + Pub/Sub switch
 
+Evaluation Dispatcher（独立进程）
+  └─ Outbox 轮询 → claim lease → Celery publish → acknowledge
+
 Celery Worker
   ├─ run_evaluation
   ├─ rebuild/add/replace/delete_rag_index
-  └─ per-process generation switch listener
+  ├─ per-process generation switch listener
+  └─ cleanup_expired_records
 
 Celery Beat ── daily cleanup_expired_records
 Prometheus/Grafana ── optional monitoring profile
 ```
 
+### 双 Redis 物理拓扑
+
+| 实例 | 策略 | 承载 | DB 分配 |
+|---|---|---|---|
+| `redis-state` | AOF + noeviction | checkpoint、broker、result、JWT 黑名单、progress bus、evaluation control | db=1 checkpoint, db=4 broker, db=5 result, db=6 progress, db=7 JWT blacklist, db=8 evaluation control |
+| `redis-cache` | allkeys-LRU | LLM 响应缓存、检索缓存 | db=0 LLM cache, db=1 retrieval cache |
+
+本地开发使用 `localhost:6379`（state）和 `localhost:6380`（cache）；Compose 使用 `redis-state` 和 `redis-cache` 服务名。
+
 FastAPI lifespan 会执行 `Base.metadata.create_all`、安全检查、Agent adapter 注册、Redis checkpointer 初始化和可选 Tool 健康探测。`LANGGRAPH_ENABLED=true` 且 Redis checkpointer 初始化失败时，服务会拒绝启动；若要显式使用旧评估路径，应设置 `LANGGRAPH_ENABLED=false`。
+
+### EvaluationRun 状态机
+
+评估 run 的生命周期由 `evaluation_run_service.py` 集中管理：
+
+```text
+         create_queued_run
+              │
+              ▼
+          ┌────────┐    claim_run     ┌─────────┐
+          │ queued │ ───────────────→ │ running │
+          └────────┘                  └─────────┘
+              ▲                           │    │
+              │   mark_run_retrying       │    │  mark_run_terminal
+              │  ◄────────────────────────┘    │
+          ┌──────────┐                         │
+          │ retrying │                         │
+          └──────────┘                         ▼
+                                    ┌──────────────────────┐
+                                    │ completed            │
+                                    │ needs_review         │
+                                    │ failed               │
+                                    │ cancelled            │
+                                    │ reviewed             │
+                                    └──────────────────────┘
+```
+
+- **claim_run**：queued/retrying → running，设置 execution_owner/task_id/lease，attempt+1
+- **mark_run_retrying**：running → retrying，清除执行租约，记录 error
+- **mark_run_terminal**：running → completed/needs_review/failed/cancelled，清空租约
+- **request_run_cancel**：设置 cancel_requested_at，协作式取消
+- 终态集合：`{completed, needs_review, reviewed, failed, cancelled}`
+- 非法转换抛 `InvalidRunTransition`，owner 不匹配抛 `RunLeaseLost`
+
+### Transactional Outbox 与 Dispatcher
+
+评估任务投递使用 Outbox 模式保证至少一次投递：
+
+1. **enqueue**：FastAPI 在同一 MySQL 事务中写入 `evaluation_runs` + `evaluation_dispatch_outbox`（status=pending）
+2. **Dispatcher 轮询**：独立进程每秒 `claim_dispatch_batch`，将 pending → leased（设置 lease_owner/lease_expires_at）
+3. **Publish**： leased 行通过 `Celery.send_task` 投递，成功后 acknowledge → published
+4. **重试**：失败时 reject_dispatch，根据 attempt/age 决定 retry（pending + next_attempt_at）或 dead_letter
+5. **Reconciliation**：`evaluation_reconciliation.py` 定时扫描过期 lease、stale published、retrying 超时
+
+Outbox 状态：`pending → leased → published → cancelled/dead_letter`
+
+配置（`config.py`）：
+- `DISPATCH_POLL_INTERVAL_SECONDS=1`：轮询间隔
+- `DISPATCH_BATCH_SIZE=20`：每批 claim 数量
+- `DISPATCH_LEASE_SECONDS=30`：租约时长
+- `DISPATCH_MAX_ATTEMPTS=1500`：最大重试
+- `DISPATCH_MAX_AGE_SECONDS=86400`：24h 后 dead letter
+- `DISPATCH_RETENTION_DAYS=7`：终态 outbox 7 天后清理
+- `UNREPORTED_RUN_RETENTION_DAYS=180`：无报告 failed/cancelled run 180 天
+
+### 默认数据清理策略
+
+| 数据类型 | 默认保留 | 说明 |
+|---|---|---|
+| Dispatch 终态（published/cancelled/dead_letter outbox） | 7 天 | `DISPATCH_RETENTION_DAYS` |
+| 无报告的 failed/cancelled run | 180 天 | `UNREPORTED_RUN_RETENTION_DAYS` |
+| LLM cache / retrieval cache | 24h / 1h | TTL 自动过期 |
+| Progress bus 事件 | 1h | `PROGRESS_EVENT_TTL_SECONDS=3600` |
+| 审计日志 | **auto-delete 默认关闭** | `AUDIT_LOG_AUTO_DELETE_ENABLED=false` |
+
+**重要**：报告关联的 run、Evaluation、ReviewRecord 和 AuditLog **不**由默认通用 cleanup 删除。其保留/删除周期由部署组织的数据治理策略、`DATA_RETENTION_POLICY_ID` 与审批流程决定。
 
 ## 4. 目录与模块职责
 
@@ -91,6 +171,12 @@ FastAPI lifespan 会执行 `Base.metadata.create_all`、安全检查、Agent ada
 | `backend/app/orchestration/` | LangGraph state、route plan、graph、adapter、checkpointer |
 | `backend/app/services/rag/` | 检索、索引、artifact、generation、cache、rerank、OCR |
 | `backend/app/tasks/`、`celery_app.py` | 评估、索引、清理任务和 Worker 生命周期 |
+| `backend/app/tasks/evaluation_dispatcher.py` | Outbox → Celery 派发循环（独立进程） |
+| `backend/app/tasks/evaluation_reconciliation.py` | 定时对账：过期 lease 释放、stale dispatch 重投、dead letter |
+| `backend/app/services/evaluation_run_service.py` | EvaluationRun 状态机：创建/claim/续期/重试/终态/取消 |
+| `backend/app/services/evaluation_dispatch_service.py` | Outbox enqueue/claim/acknowledge/reject/cancel/purge |
+| `backend/app/models/evaluation_dispatch_outbox.py` | Outbox ORM 模型 |
+| `backend/app/models/evaluation_run.py` | EvaluationRun ORM 模型 |
 | `backend/evaluation/`、`backend/scripts/eval/` | Gold cases、指标、报告、A/B、BM25 评测和调参 |
 | `backend/alembic/` | 权威迁移链 |
 | `database/` | Compose 初始化 SQL 和演示数据；不等价于完整迁移链 |
@@ -216,38 +302,42 @@ Vite 固定代理 `/api` 到 `http://localhost:8000`；Axios 固定 `baseURL=/ap
 
 ### 7.2 Compose 服务与端口
 
-`docker-compose.yml` 定义：MySQL 3306、Redis 6379、FastAPI 8000、Nginx 80/443、Celery Worker、Celery Beat；monitoring profile 增加 Prometheus 9090 和 Grafana 3000。端口均可由同名 Compose 变量覆盖。
+`docker-compose.yml` 定义：MySQL 3306、redis-state 6379、redis-cache 6380、FastAPI 8000、Evaluation Dispatcher、Celery Worker、Celery Beat、Nginx 80/443；monitoring profile 增加 Prometheus 9090 和 Grafana 3000。端口均可由同名 Compose 变量覆盖。
+
+V1.1 新增服务：`redis-cache`（独立缓存实例）、`evaluation-dispatcher`（Outbox 派发循环）、`migrate`（一次性 Alembic 迁移）。`backend` 使用 YAML anchor `x-backend-environment` 统一环境变量，已包含正确的容器内 Celery broker/result URL。
 
 ```powershell
 docker compose up -d
 docker compose ps
-docker compose logs -f backend celery-worker
+docker compose logs -f backend celery-worker evaluation-dispatcher
 docker compose --profile monitoring up -d
 ```
 
-当前 Compose 必须在部署前修正或外部覆盖：
+V1.1 已修正的历史差异：
 
-1. `backend` 没有注入 `CELERY_BROKER_URL=redis://redis:6379/4` 和 `CELERY_RESULT_BACKEND=redis://redis:6379/5`，API `.delay()` 会使用代码默认的容器内 `localhost`。
-2. `builder.PDF_DIR` 在容器中解析为 `/app/data`；Compose 当前把 `./data` 挂到 `/app/backend/data/medical_pdfs`。RAG Worker 需要可读的 `/app/data`，且 FastAPI 与所有 Worker 必须共享同一 source、Chroma 和 artifact 存储。
-3. `database/init.sql` 不是当前 ORM/Alembic 的完整等价物，见下一节。
-4. `container_name` 会限制 `docker compose --scale celery-worker=N`；多容器 Worker 部署前应调整编排，但 Beat 仍只能一个。
+1. ✅ `backend` 已通过 `x-backend-environment` 注入 `CELERY_BROKER_URL=redis://redis-state:6379/4` 和 `CELERY_RESULT_BACKEND=redis://redis-state:6379/5`。
+2. ✅ RAG 源文件挂载已修正为 `./data:/app/data:ro`，与代码 `PDF_DIR=/app/data` 一致。
+3. ✅ `migrate` 服务在启动时自动执行 Alembic 迁移，`backend` 依赖 `migrate` 成功后才启动。
+4. ⚠️ `database/init.sql` 仍不是当前 ORM/Alembic 的完整等价物，见下一节。
 
-`docker-compose.prod.yml` 和 `staging.yml` 使用 GHCR 镜像并将 Uvicorn workers 改为 4/2；`REPO` 必须配置。部署工作流仅执行 SSH pull/up，不自动执行 Alembic，因此迁移必须成为发布前明确步骤。
+`docker-compose.prod.yml` 和 `staging.yml` 使用 GHCR 镜像并将 Uvicorn workers 改为 4/2；`REPO` 必须配置。
 
 ### 7.3 TLS、备份和持久化
 
 前端容器检测 `certs/server.crt` 与 `certs/server.key`；存在时启用 443 并把 80 重定向到 HTTPS，否则仅 HTTP。生产必须使用可信证书、外部密钥管理和定期恢复演练。
 
-Compose 命名卷：`mysql_data`、`redis_data`、`chroma_data`、`prometheus_data`、`grafana_data`。RAG generation 的 Chroma、BM25/Sparse artifact 必须一起备份；只备份一个组件无法恢复可验证 generation。
+Compose 命名卷：`mysql_data`、`redis_state_data`、`redis_cache_data`、`chroma_data`、`prometheus_data`、`grafana_data`。RAG generation 的 Chroma、BM25/Sparse artifact 必须一起备份；只备份一个组件无法恢复可验证 generation。
 
 ## 8. 数据库与迁移
 
 ### 8.1 权威迁移链
 
-当前 Alembic head 为 `1a2b3c4d5e6f`：
+当前 Alembic head 为 `3c4d5e6f7a8b`：
 
 - `0c1dfb4fea5f`：当前模型 baseline，创建 audit、checkpoint、model version、review、user、patient、consultation、lock、run、evaluation、node result 等表。
 - `1a2b3c4d5e6f`：增加 `virtual_patients.case_id` 唯一索引，以及 `(consultation_id, sequence)` 消息唯一约束。
+- `2b3c4d5e6f7a`：V1.1 新增 `evaluation_dispatch_outbox` 表（Transactional Outbox），含 run_id 唯一约束和重复检查。
+- `3c4d5e6f7a8b`：V1.1 新增 review/audit 查询优化索引。
 
 空数据库从 `backend/` 执行：
 
@@ -283,6 +373,7 @@ Compose 命名卷：`mysql_data`、`redis_data`、`chroma_data`、`prometheus_da
 | `evaluation_checkpoints` | 旧/兼容数据库 checkpoint 模型；当前主 checkpointer 为 Redis |
 | `review_records` | 人工复核意见与评分调整 |
 | `model_versions` | 模型版本登记状态，不自动改变 Provider 配置 |
+| `evaluation_dispatch_outbox` | Outbox 派发：event_id、run_id、状态、task_name、payload、attempt、lease、错误追踪 |
 | `audit_logs` | 用户、动作、资源、来源请求信息和脱敏详情 |
 
 问诊状态主要为 `in_progress/completed/evaluated`；评估涉及 `pending/running/completed/needs_review/reviewed/failed` 等上下文状态，调用方应按具体响应字段处理，不要把所有状态混成一个枚举。
@@ -601,6 +692,19 @@ CI 在 push/PR 到 `main/master` 时执行：
 - 告警模式依赖/文件系统安全扫描；
 - master 上构建并推送 GHCR 镜像。
 
+测试目录结构：
+
+| 目录 | 覆盖范围 |
+|---|---|
+| `tests/api/` | REST/WS 路由集成测试 |
+| `tests/security/` | JWT、RBAC、限流、安全头 |
+| `tests/services/` | 业务逻辑：dispatch service、run service、lock service |
+| `tests/tasks/` | Celery 任务：dispatcher、reconciliation、data cleanup |
+| `tests/observability/` | 指标、隐私脱敏 |
+| `tests/evaluation/` | 评估管道、gold cases |
+| `tests/orchestration/` | LangGraph 图流程 |
+| `tests/e2e/` | 端到端验收（25 场景） |
+
 `npm test` 存在但 CI 的 frontend job 当前只执行 lint/build。文档变更至少执行链接/路径审计、Markdown fence 配对和 `git diff --check`。
 
 ## 18. 故障排查
@@ -644,6 +748,13 @@ CI 在 push/PR 到 `main/master` 时执行：
 - 401 会清 sessionStorage 并跳登录；检查 token 过期/黑名单。
 - `AdminReviews` 无路由；请用 OpenAPI，而不是寻找菜单。
 
+### Outbox/Dispatcher 异常
+
+- 评估一直 queued：检查 `evaluation-dispatcher` 服务是否运行，查看 Dispatcher 日志。
+- Outbox 全部 leased 但不 published：Worker 可能崩溃，等待 lease 过期后 reconciliation 自动释放。
+- dead_letter 增多：检查 `last_error_code`，常见原因包括 broker 不可用、超过 24h 未 claim。
+- 重复投递：Outbox 保证至少一次，Celery 任务应实现幂等。
+
 ## 19. 生产发布检查清单
 
 - [ ] 医疗用途边界、人工责任、应急转交流程已批准。
@@ -662,20 +773,18 @@ CI 在 push/PR 到 `main/master` 时执行：
 ## 20. 已知限制
 
 1. `POST /api/v1/evaluations/` 的生产异步返回体与 `EvaluationOut` 响应模型不一致。
-2. 基础 Compose 未给 FastAPI backend 注入容器内 Celery broker/result URL。
-3. Compose RAG source 挂载路径与代码 `PDF_DIR=/app/data` 不一致。
-4. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；Compose 首次初始化不可视为迁移完成。
-5. Task 8 候选真实性能尚未以完整一致性遥测实测通过；当前不得宣称门禁已通过。
-6. `evaluate_bm25.py` CLI 当前不能传入真实一致性计数，完整 gate 会把它们判为 unavailable。
-7. RAG generation 没有受支持的回滚 REST/CLI；旧 `switch_index_version` 不是集群 immutable generation 回滚。
-8. `VITE_API_BASE_URL` 未被 Axios 使用；部署依赖同源 `/api/v1` 和反向代理。
-9. `AdminReviews` 页面未接路由；知识库、模型版本、监控也缺少完整 UI。
-10. 模型版本 GET 路由当前公开；review status 和 evaluation task status 只要求登录，未做对象归属校验。
-11. JWT 黑名单 Redis 不可用时 fail open；登出不保证立刻吊销。
-12. Compose 固定 `container_name`，不适合直接水平 scale Worker。
-13. ChromaDB 1.5.7 使用极大 `hnsw:sync_threshold` 规避已知跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
-14. BGE-M3 依赖默认未安装，Sparse/OCR/多项增强默认关闭；启用前必须做资源和质量验证。
-15. CI 安全扫描为告警模式，前端单元测试未在 CI frontend job 中执行。
+2. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；Compose 首次初始化不可视为迁移完成（V1.1 已通过 `migrate` 服务自动执行 Alembic）。
+3. Task 8 候选真实性能尚未以完整一致性遥测实测通过；当前不得宣称门禁已通过。
+4. `evaluate_bm25.py` CLI 当前不能传入真实一致性计数，完整 gate 会把它们判为 unavailable。
+5. RAG generation 没有受支持的回滚 REST/CLI；旧 `switch_index_version` 不是集群 immutable generation 回滚。
+6. `VITE_API_BASE_URL` 未被 Axios 使用；部署依赖同源 `/api/v1` 和反向代理。
+7. `AdminReviews` 页面未接路由；知识库、模型版本、监控也缺少完整 UI。
+8. 模型版本 GET 路由当前公开；review status 和 evaluation task status 只要求登录，未做对象归属校验。
+9. JWT 黑名单 Redis 不可用时 fail open；登出不保证立刻吊销。
+10. ChromaDB 1.5.7 使用极大 `hnsw:sync_threshold` 规避已知跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
+11. BGE-M3 依赖默认未安装，Sparse/OCR/多项增强默认关闭；启用前必须做资源和质量验证。
+12. CI 安全扫描为告警模式，前端单元测试未在 CI frontend job 中执行。
+13. 单主机限制：当前不支持多节点水平扩展，Dispatcher 和 Beat 均必须单实例。
 
 ## 21. 文档维护规则
 

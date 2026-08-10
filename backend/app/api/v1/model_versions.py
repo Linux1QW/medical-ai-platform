@@ -44,6 +44,7 @@ async def list_model_versions(
     name: Optional[str] = Query(None, description="按模型名称筛选"),
     status: Optional[str] = Query(None, description="按状态筛选"),
     db: AsyncSession = Depends(get_db),
+    _=require_permission("model:manage"),
 ):
     """列出所有模型版本"""
     stmt = select(ModelVersion).order_by(ModelVersion.created_at.desc())
@@ -93,6 +94,7 @@ async def register_model_version(
 async def get_active_version(
     name: str,
     db: AsyncSession = Depends(get_db),
+    _=require_permission("model:manage"),
 ):
     """获取某模型的活跃版本"""
     result = await db.execute(

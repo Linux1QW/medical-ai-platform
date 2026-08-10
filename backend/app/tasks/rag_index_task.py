@@ -1,6 +1,5 @@
 """Celery tasks for immutable RAG index generations."""
 
-import asyncio
 import hashlib
 import logging
 import threading
@@ -11,6 +10,7 @@ import redis
 
 from app.celery_app import celery_app
 from app.core.config import settings
+from app.tasks.async_runtime import run_worker_coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -361,7 +361,7 @@ def _run_index_task(
     )
     heartbeat.start()
     try:
-        return asyncio.run(
+        return run_worker_coroutine(
             _build_candidate(
                 task,
                 operation=operation,

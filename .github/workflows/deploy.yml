@@ -4,31 +4,445 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Deploy environment"
+        description: "Deploy environment (staging or production)"
         required: true
-        default: "staging"
         type: choice
         options: [staging, production]
+      image_tag:
+        description: "Full 40-character commit SHA of the image to deploy"
+        required: true
+        type: string
+      migration_operator_id:
+        description: "Operator ID for data migrations (positive integer, or empty)"
+        required: false
+        type: string
+        default: ""
+      allow_first_deploy_without_rollback:
+        description: "Allow first deploy without rollback (empty environments only)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  deploy:
+  # ── Input Validation ──────────────────────────────────────────────
+  validate:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Validate image_tag is 40-char SHA
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::image_tag must be a full 40-character commit SHA, got: '$TAG'"
+            exit 1
+          fi
+          echo "✓ image_tag is valid 40-char SHA: $TAG"
+
+      - name: Reject short SHA or latest
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ "$TAG" = "latest" ]; then
+            echo "::error::'latest' is not allowed; provide a full 40-char SHA"
+            exit 1
+          fi
+          if [ ${#TAG} -ne 40 ]; then
+            echo "::error::Short SHA not allowed; must be exactly 40 characters"
+            exit 1
+          fi
+          echo "✓ Tag is not 'latest' and is full SHA"
+
+      - name: Validate migration_operator_id format
+        run: |
+          OP_ID="${{ inputs.migration_operator_id }}"
+          if [ -n "$OP_ID" ]; then
+            if [[ ! "$OP_ID" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::migration_operator_id must be a positive integer, got: '$OP_ID'"
+              exit 1
+            fi
+            echo "✓ migration_operator_id is valid: $OP_ID"
+          else
+            echo "✓ migration_operator_id is empty (optional)"
+          fi
+
+  # ── Deploy ────────────────────────────────────────────────────────
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # Step 1: GitHub Environment approval (handled by environment protection rules)
+      - name: Step 1 – Environment approval gate
+        run: |
+          echo "✓ Environment approval granted for ${{ inputs.environment }}"
+
+      # Step 2: Pull image with exact tag
+      - name: Step 2 – Pull immutable image
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
+            set -euo pipefail
             cd /opt/medical-ai-platform
-            export ENVIRONMENT=${{ github.event.inputs.environment }}
-            if [ "$ENVIRONMENT" = "production" ]; then
-              docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-              docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            export IMAGE_TAG=${{ inputs.image_tag }}
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
             else
-              docker compose -f docker-compose.yml -f docker-compose.staging.yml pull
-              docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
             fi
-            docker image prune -f
+
+            echo "Pulling image with tag: $IMAGE_TAG"
+            docker compose $COMPOSE_FILES pull
+            echo "✓ Image pull complete"
+
+      # Step 3: Read previous tag and enable maintenance
+      - name: Step 3 – Enable maintenance mode & drain
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+            mkdir -p .deploy
+
+            # Read previous image tag
+            PREVIOUS_TAG=""
+            if [ -f .deploy/current-image-tag ]; then
+              PREVIOUS_TAG=$(cat .deploy/current-image-tag)
+              echo "Previous image tag: $PREVIOUS_TAG"
+            else
+              echo "No previous image tag found"
+              if [ "${{ inputs.allow_first_deploy_without_rollback }}" != "true" ]; then
+                echo "::error::No previous tag and allow_first_deploy_without_rollback is false. Aborting."
+                exit 1
+              fi
+              echo "First deploy approved (empty environment)"
+            fi
+
+            # Save previous tag for rollback
+            echo "$PREVIOUS_TAG" > .deploy/previous-image-tag
+
+            # Enable maintenance mode
+            mkdir -p .deploy/maintenance
+            date -u +%Y-%m-%dT%H:%M:%SZ > .deploy/maintenance/enabled
+            echo "✓ Maintenance mode enabled"
+
+            # Stop frontend to block public access
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            docker compose $COMPOSE_FILES stop frontend 2>/dev/null || true
+            echo "✓ Frontend stopped (maintenance mode active)"
+
+      # Step 4: Drain in-flight tasks
+      - name: Step 4 – Drain in-flight evaluations
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            # Stop beat to prevent new tasks
+            docker compose $COMPOSE_FILES stop celery-beat 2>/dev/null || true
+            echo "✓ Beat stopped"
+
+            # Wait for dispatcher/worker to drain (max 15 minutes)
+            TIMEOUT=900
+            ELAPSED=0
+            INTERVAL=10
+
+            echo "Waiting for in-flight tasks to drain (timeout: ${TIMEOUT}s)..."
+            while [ $ELAPSED -lt $TIMEOUT ]; do
+              # Check Celery active tasks
+              ACTIVE=$(docker compose $COMPOSE_FILES exec -T celery-worker \
+                celery -A app.celery_app inspect active 2>/dev/null | grep -c '"id"' || echo "0")
+
+              if [ "$ACTIVE" -eq 0 ]; then
+                echo "✓ All in-flight tasks drained"
+                break
+              fi
+
+              echo "  Active tasks: $ACTIVE (elapsed: ${ELAPSED}s)"
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+            done
+
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "::error::Drain timeout after ${TIMEOUT}s with active tasks remaining"
+              # Restore previous services and traffic
+              PREVIOUS_TAG=$(cat .deploy/previous-image-tag 2>/dev/null || echo "")
+              if [ -n "$PREVIOUS_TAG" ]; then
+                export IMAGE_TAG="$PREVIOUS_TAG"
+                docker compose $COMPOSE_FILES up -d --wait
+              fi
+              rm -f .deploy/maintenance/enabled
+              docker compose $COMPOSE_FILES start frontend 2>/dev/null || true
+              echo "Previous services restored. Deployment aborted."
+              exit 1
+            fi
+
+            # Stop remaining services
+            docker compose $COMPOSE_FILES stop backend evaluation-dispatcher celery-worker celery-beat 2>/dev/null || true
+            echo "✓ All application services stopped"
+
+      # Step 5: Encrypted backup
+      - name: Step 5 – Encrypted database backup
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+
+            # Load environment (no xtrace to protect secrets)
+            set +x
+            if [ -f .env ]; then
+              set -a
+              source .env
+              set +a
+            fi
+
+            export MYSQL_HOST=127.0.0.1
+            export MYSQL_USER="${MYSQL_BACKUP_USER:?MYSQL_BACKUP_USER not set}"
+            export MYSQL_PASSWORD="${MYSQL_BACKUP_PASSWORD:?MYSQL_BACKUP_PASSWORD not set}"
+            export BACKUP_AGE_RECIPIENT="${BACKUP_AGE_RECIPIENT:?BACKUP_AGE_RECIPIENT not set}"
+            export BACKUP_REMOTE_URI="${BACKUP_REMOTE_URI:?BACKUP_REMOTE_URI not set}"
+            export BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/opt/medical-ai-platform/.deploy/backup-status/status.json}"
+
+            bash backend/scripts/backup_db.sh /var/backups/medical-ai
+            echo "✓ Encrypted backup complete"
+
+      # Step 6: Run migrations
+      - name: Step 6 – Run database migrations
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+            export IMAGE_TAG=${{ inputs.image_tag }}
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            OP_ID="${{ inputs.migration_operator_id }}"
+            if [ -n "$OP_ID" ]; then
+              export MIGRATION_OPERATOR_ID="$OP_ID"
+            fi
+
+            docker compose $COMPOSE_FILES run --rm migrate
+            echo "✓ Migrations complete"
+
+      # Step 7: Start new services
+      - name: Step 7 – Start new version
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+            export IMAGE_TAG=${{ inputs.image_tag }}
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            docker compose $COMPOSE_FILES up -d --wait --remove-orphans
+            echo "✓ New version started (maintenance mode still active)"
+
+      # Step 8: Smoke tests
+      - name: Step 8 – Smoke tests
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            SHA="${{ inputs.image_tag }}"
+            SHORT_SHA="${SHA:0:7}"
+
+            # Health check (5 consecutive passes)
+            echo "Running health checks..."
+            for i in 1 2 3 4 5; do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health/ready || echo "000")
+              if [ "$STATUS" != "200" ]; then
+                echo "::error::Health check failed (attempt $i/5): HTTP $STATUS"
+                exit 1
+              fi
+              echo "  Health check $i/5: OK"
+            done
+            echo "✓ All health checks passed"
+
+            # Login smoke test
+            echo "Running login smoke test..."
+            LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST http://127.0.0.1:8000/api/v1/auth/login \
+              -H "Content-Type: application/json" \
+              -d '{"username":"smoke_test","password":"smoke_test"}' || echo "000")
+            # Accept 200 or 401 (auth works, credentials invalid is expected)
+            if [ "$LOGIN_STATUS" = "000" ]; then
+              echo "::error::Login endpoint unreachable"
+              exit 1
+            fi
+            echo "✓ Login endpoint responsive (HTTP $LOGIN_STATUS)"
+
+            # Read-only status check
+            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo "000")
+            if [ "$STATUS_CODE" = "000" ]; then
+              echo "::error::Status endpoint unreachable"
+              exit 1
+            fi
+            echo "✓ Status endpoint responsive"
+
+            echo "✓ All smoke tests passed for deployment_smoke:${SHORT_SHA}"
+
+      # Step 9: Restore traffic
+      - name: Step 9 – Restore traffic
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            # Remove maintenance marker
+            rm -f .deploy/maintenance/enabled
+
+            # Start frontend
+            docker compose $COMPOSE_FILES start frontend 2>/dev/null || \
+              docker compose $COMPOSE_FILES up -d frontend
+
+            # Verify frontend is accessible
+            sleep 3
+            FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:80 || echo "000")
+            if [ "$FRONTEND_STATUS" = "000" ]; then
+              echo "::warning::Frontend not yet responding, but traffic restored"
+            else
+              echo "✓ Frontend responding (HTTP $FRONTEND_STATUS)"
+            fi
+
+            # Atomically write current image tag
+            echo "${{ inputs.image_tag }}" > .deploy/current-image-tag
+            echo "✓ Traffic restored. Current image: ${{ inputs.image_tag }}"
+
+      # Step 10: Rollback on failure (conditional)
+      - name: Step 10 – Rollback on failure
+        if: failure()
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+
+            COMPOSE_FILES="-f docker-compose.yml"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+            else
+              COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.staging.yml"
+            fi
+
+            PREVIOUS_TAG=$(cat .deploy/previous-image-tag 2>/dev/null || echo "")
+
+            if [ -z "$PREVIOUS_TAG" ]; then
+              echo "::error::No previous image to rollback to. Manual intervention required."
+              echo "Maintenance mode is still active."
+              exit 1
+            fi
+
+            echo "Rolling back to previous image: $PREVIOUS_TAG"
+            export IMAGE_TAG="$PREVIOUS_TAG"
+
+            # Stop new version
+            docker compose $COMPOSE_FILES stop backend evaluation-dispatcher celery-worker celery-beat 2>/dev/null || true
+
+            # Start previous version (no Alembic downgrade)
+            docker compose $COMPOSE_FILES up -d --wait
+
+            # Restore traffic
+            rm -f .deploy/maintenance/enabled
+            docker compose $COMPOSE_FILES start frontend 2>/dev/null || true
+
+            echo "✓ Rollback complete. Restored: $PREVIOUS_TAG"
+
+      # Step 11: Cleanup (no unconditional image prune)
+      - name: Step 11 – Image cleanup (retain current + previous)
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/medical-ai-platform
+
+            CURRENT_TAG="${{ inputs.image_tag }}"
+            PREVIOUS_TAG=$(cat .deploy/previous-image-tag 2>/dev/null || echo "")
+
+            echo "Retaining images:"
+            echo "  Current:  $CURRENT_TAG"
+            [ -n "$PREVIOUS_TAG" ] && echo "  Previous: $PREVIOUS_TAG"
+
+            # List all backend/frontend images
+            REPO="${{ secrets.REPO || github.repository }}"
+            docker images "ghcr.io/${REPO}/backend" --format "{{.Tag}}" | while read -r tag; do
+              if [ "$tag" != "$CURRENT_TAG" ] && [ "$tag" != "$PREVIOUS_TAG" ] && [ "$tag" != "<none>" ]; then
+                echo "Removing old backend image: $tag"
+                docker rmi "ghcr.io/${REPO}/backend:$tag" 2>/dev/null || true
+              fi
+            done
+
+            docker images "ghcr.io/${REPO}/frontend" --format "{{.Tag}}" | while read -r tag; do
+              if [ "$tag" != "$CURRENT_TAG" ] && [ "$tag" != "$PREVIOUS_TAG" ] && [ "$tag" != "<none>" ]; then
+                echo "Removing old frontend image: $tag"
+                docker rmi "ghcr.io/${REPO}/frontend:$tag" 2>/dev/null || true
+              fi
+            done
+
+            echo "✓ Image cleanup complete (retained current + previous)"

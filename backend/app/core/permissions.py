@@ -11,7 +11,7 @@ PERMISSIONS: dict[str, list[str]] = {
         "evaluation:create", "evaluation:view", "evaluation:review",
         "consultation:create", "consultation:view",
         "patient:create", "patient:view", "patient:export",
-        "user:manage", "system:manage", "model:manage",
+        "user:manage", "system:manage", "model:manage", "knowledge:manage",
     ],
     "doctor": [
         "evaluation:create", "evaluation:view",

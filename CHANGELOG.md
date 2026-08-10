@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] - V1.2 Agent Intelligence
+
+### Added
+- Interview Coach Agent with Multi-Agent LangGraph orchestration
+- Three-layer memory: working, episodic, approved trainee profile
+- Skill/Tool registry with versioning, permissions, budgets and injection protection
+- AgentOps data flywheel: trace → eval → attribution → candidate → A/B → release
+- LiveKit realtime voice beta
+- 72-case stratified coach benchmark
 
 ## [1.1.0] - 2026-08-10
 

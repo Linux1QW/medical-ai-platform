@@ -5,6 +5,11 @@ building, and invoke_coach_graph for graph execution.
 
 COACH_ENABLED is read from settings at startup (immutable).
 Disabled → stable 409 / feature-disabled contract.
+
+Transaction order (durable SSE):
+  Reserve Decision → Acquire Lease → Execute Graph →
+  Open short TX → Save Decision → Save Events → Commit TX →
+  Read committed Events → Send Events to client → Send done
 """
 from __future__ import annotations
 
@@ -31,6 +36,13 @@ class CoachDisabledError(Exception):
         super().__init__("Coach feature is disabled")
 
 
+class CoachDecisionLockedError(Exception):
+    """Raised when a decision is already being processed by another worker."""
+
+    def __init__(self) -> None:
+        super().__init__("Decision is locked by another worker")
+
+
 class CoachService:
     """Service layer for coach operations.
 
@@ -38,6 +50,7 @@ class CoachService:
     - Context is compiled via compile_coach_context.
     - Graph execution uses invoke_coach_graph with hard timeout.
     - COACH_ENABLED is read from settings (no mutable set_enabled()).
+    - Transaction order: commit BEFORE sending events to client.
     """
 
     def __init__(self, db: AsyncSession) -> None:
@@ -94,7 +107,7 @@ class CoachService:
         }
 
     # ------------------------------------------------------------------
-    # Stream suggestion (SSE)
+    # Stream suggestion (SSE) — durable transaction order
     # ------------------------------------------------------------------
 
     async def stream_suggestion(
@@ -108,11 +121,17 @@ class CoachService:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream coach suggestion via SSE events.
 
-        - Uses real CoachContextBuilder for context from database.
-        - Uses CoachRuntimeFactory for real model, evidence, checkpointer.
-        - Durable idempotency via repository unique keys.
-        - Last-Event-ID replay from persisted events.
-        - Heartbeat comments every 15 seconds during long model calls.
+        Durable transaction order:
+        1. Get or create session
+        2. Handle Last-Event-ID replay (decision-level)
+        3. Reserve turn (idempotent)
+        4. Acquire lease on decision
+        5. Execute graph
+        6. Open short transaction: save decision + events → commit
+        7. Read committed events → yield to client
+        8. Yield done
+
+        Never sends suggestion or done before commit.
         """
         self.require_enabled()
 
@@ -122,32 +141,32 @@ class CoachService:
             doctor_id=doctor_id,
         )
 
-        # 2. Handle Last-Event-ID replay
+        # 2. Handle Last-Event-ID replay (decision-level)
         if last_event_id:
-            replay_events = await self._replay_from_event(
+            replay_events = await self._replay_decision_events(
                 session_id=session.id,
                 last_event_id=last_event_id,
+                idempotency_key=idempotency_key,
             )
             if replay_events is not None:
                 for evt in replay_events:
                     yield evt
-                # After replay, check if there's already a completed decision
+                # Check if decision is already completed
                 existing = await self.repo.get_decision_by_idempotency(
                     session.id, idempotency_key
                 )
-                if existing and existing.stage == "completed":
+                if existing and existing.stage in ("completed", "blocked", "error", "degraded"):
                     yield {"event": "done", "data": {}, "id": None}
                     return
                 # Continue with new turn after replay
-            # If last_event_id is invalid (not found), we proceed with fresh stream
+            # If last_event_id is invalid, proceed with fresh stream
 
         # 3. Reserve turn (idempotent)
         decision = await self.repo.reserve_turn(session.id, idempotency_key)
 
-        # If decision already completed → replay from stored events
-        if decision.stage == "completed" and decision.suggestion_json:
-            # Replay all events for this decision
-            events: list = await self.repo.list_events_after(session.id, 0)
+        # If decision already completed → replay from stored decision events
+        if decision.stage in ("completed", "blocked", "error", "degraded"):
+            events = await self.repo.list_decision_events_after(decision.id, 0)
             for stored_event in events:
                 yield {
                     "event": stored_event.event_type,
@@ -157,20 +176,42 @@ class CoachService:
             yield {"event": "done", "data": {}, "id": None}
             return
 
-        # 4. Emit thinking event
-        thinking_event = await self.repo.append_stream_event(
-            session_id=session.id,
-            event_type="thinking",
-            data={"turn_no": decision.turn_no},
-        )
-        yield {
-            "event": "thinking",
-            "data": {"turn_no": decision.turn_no},
-            "id": thinking_event.event_id,
-        }
+        # If decision is running but lease expired → recover
+        if decision.stage == "running":
+            expired = await self.repo.get_expired_running_decisions(
+                session_id=session.id
+            )
+            expired_ids = {d.id for d in expired}
+            if decision.id in expired_ids:
+                # Lease expired: write stable error state, allow retry
+                await self._write_error_terminal_state(decision.id, "LEASE_EXPIRED")
+                await self.db.commit()
+                yield {
+                    "event": "error",
+                    "data": {"message": "LEASE_EXPIRED"},
+                    "id": None,
+                }
+                yield {"event": "done", "data": {}, "id": None}
+                return
+            else:
+                # Still locked by another worker
+                raise CoachDecisionLockedError()
 
-        # 5. Build real context and run graph with heartbeat
+        # 4. Acquire lease
+        lease_acquired = await self.repo.acquire_decision_lease(decision.id)
+        if not lease_acquired:
+            raise CoachDecisionLockedError()
+        await self.db.commit()  # Commit the lease acquisition
+
+        # 5. Execute graph and collect results
+        collected_events: list[dict[str, Any]] = []
         try:
+            # Emit thinking event (will be persisted after commit)
+            collected_events.append({
+                "event_type": "thinking",
+                "data": {"turn_no": decision.turn_no},
+            })
+
             # Load consultation from DB for real context
             from sqlalchemy import select as sa_select
 
@@ -211,7 +252,7 @@ class CoachService:
 
             # Heartbeat loop: emit heartbeat every 15s while graph runs
             heartbeat_task = asyncio.create_task(
-                self._heartbeat_loop(session.id, graph_task)
+                self._heartbeat_loop(session.id, decision.id, graph_task)
             )
 
             try:
@@ -223,102 +264,98 @@ class CoachService:
                 except asyncio.CancelledError:
                     pass
 
-            # 6. Process result
+            # 6. Process result and build events to persist
+            final_stage: str
             if result.get("blocked"):
-                error_event = await self.repo.append_stream_event(
-                    session_id=session.id,
-                    event_type="error",
-                    data={"message": result.get("block_reason", "COACH_ERROR")},
-                )
-                yield {
-                    "event": "error",
+                final_stage = "blocked"
+                collected_events.append({
+                    "event_type": "error",
                     "data": {"message": result.get("block_reason", "COACH_ERROR")},
-                    "id": error_event.event_id,
-                }
-                # Update decision
-                await self.repo.save_decision(
-                    session_id=session.id,
-                    decision_data={
-                        "idempotency_key": idempotency_key,
-                        "intent": result.get("intent_result", {}).get("intent", "unknown") if isinstance(result.get("intent_result"), dict) else "unknown",
-                        "stage": "blocked",
-                        "risk_level": "low",
-                    },
-                )
+                })
             elif result.get("final_suggestion"):
+                final_stage = "completed"
                 suggestion_data = result["final_suggestion"]
                 if hasattr(suggestion_data, "model_dump"):
                     suggestion_data = suggestion_data.model_dump(mode="json")
-
-                suggestion_event = await self.repo.append_stream_event(
-                    session_id=session.id,
-                    event_type="suggestion",
-                    data=suggestion_data,
-                )
-                yield {
-                    "event": "suggestion",
+                collected_events.append({
+                    "event_type": "suggestion",
                     "data": suggestion_data,
-                    "id": suggestion_event.event_id,
-                }
-
-                # Update decision with result
-                await self.repo.save_decision(
-                    session_id=session.id,
-                    decision_data={
-                        "idempotency_key": idempotency_key,
-                        "intent": result.get("intent_result", {}).get("intent", "unknown") if isinstance(result.get("intent_result"), dict) else "unknown",
-                        "stage": "completed",
-                        "suggestion_json": suggestion_data,
-                        "suggestion_id": suggestion_data.get("suggestion_id", str(uuid4())),
-                        "confidence": suggestion_data.get("confidence", 0.0),
-                        "risk_level": suggestion_data.get("risk_level", "low"),
-                    },
-                )
+                })
             else:
-                error_event = await self.repo.append_stream_event(
-                    session_id=session.id,
-                    event_type="error",
-                    data={"message": "No suggestion produced"},
-                )
-                yield {
-                    "event": "error",
+                final_stage = "degraded"
+                collected_events.append({
+                    "event_type": "error",
                     "data": {"message": "No suggestion produced"},
-                    "id": error_event.event_id,
-                }
-                await self.repo.save_decision(
-                    session_id=session.id,
-                    decision_data={
-                        "idempotency_key": idempotency_key,
-                        "intent": "unknown",
-                        "stage": "degraded",
-                        "risk_level": "low",
-                    },
-                )
+                })
 
         except Exception:
             logger.exception("Coach graph error for consultation=%s", consultation_id)
-            error_event = await self.repo.append_stream_event(
-                session_id=session.id,
-                event_type="error",
-                data={"message": "Internal coach error"},
-            )
-            yield {
-                "event": "error",
+            final_stage = "error"
+            collected_events.append({
+                "event_type": "error",
                 "data": {"message": "Internal coach error"},
-                "id": error_event.event_id,
-            }
-            await self.repo.save_decision(
-                session_id=session.id,
-                decision_data={
-                    "idempotency_key": idempotency_key,
-                    "intent": "unknown",
-                    "stage": "error",
-                    "risk_level": "low",
-                },
-            )
+            })
 
-        yield {"event": "done", "data": {}, "id": None}
+        # 7. Open short transaction: save decision + events → commit
+        # Update decision with result
+        intent = "unknown"
+        if result and isinstance(result.get("intent_result"), dict):
+            intent = result["intent_result"].get("intent", "unknown")
+
+        suggestion_json = None
+        suggestion_id = None
+        confidence = 0.0
+        risk_level = "low"
+        if final_stage == "completed" and collected_events:
+            for evt in collected_events:
+                if evt["event_type"] == "suggestion":
+                    suggestion_json = evt["data"]
+                    suggestion_id = evt["data"].get("suggestion_id", str(uuid4()))
+                    confidence = evt["data"].get("confidence", 0.0)
+                    risk_level = evt["data"].get("risk_level", "low")
+                    break
+
+        # Save decision update
+        await self.repo.save_decision(
+            session_id=session.id,
+            decision_data={
+                "idempotency_key": idempotency_key,
+                "intent": intent,
+                "stage": final_stage,
+                "suggestion_json": suggestion_json,
+                "suggestion_id": suggestion_id,
+                "confidence": confidence,
+                "risk_level": risk_level,
+            },
+        )
+
+        # Save all events with decision_id
+        persisted_events = []
+        for evt_data in collected_events:
+            event = await self.repo.append_stream_event(
+                session_id=session.id,
+                event_type=evt_data["event_type"],
+                data=evt_data["data"],
+                decision_id=decision.id,
+            )
+            persisted_events.append(event)
+
+        # Release lease and set final stage
+        await self.repo.release_decision_lease(decision.id, final_stage)
+
+        # COMMIT the transaction
         await self.db.commit()
+
+        # 8. Read committed events and send to client
+        for event in persisted_events:
+            yield {
+                "event": event.event_type,
+                "data": event.data_json or {},
+                "id": event.event_id,
+            }
+
+        # 9. Send done
+        yield {"event": "done", "data": {}, "id": None}
 
     # ------------------------------------------------------------------
     # Feedback
@@ -428,6 +465,7 @@ class CoachService:
                     "sequence": e.sequence,
                     "event_type": e.event_type,
                     "data_json": e.data_json,
+                    "decision_id": e.decision_id,
                 }
                 for e in events
             ],
@@ -437,15 +475,16 @@ class CoachService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _replay_from_event(
+    async def _replay_decision_events(
         self,
         session_id: int,
         last_event_id: str,
+        idempotency_key: str,
     ) -> list[dict[str, Any]] | None:
-        """Replay events after the given event UUID.
+        """Replay events after the given event UUID, scoped to the decision.
 
+        Only replays events belonging to the decision identified by idempotency_key.
         Returns None if the event_id is not found (invalid Last-Event-ID).
-        Returns list of SSE event dicts to replay.
         """
         from sqlalchemy import select
 
@@ -465,8 +504,17 @@ class CoachService:
         if event.session_id != session_id:
             return None
 
-        # Get all events after this sequence
-        events = await self.repo.list_events_after(session_id, event.sequence)
+        # Find the decision for this idempotency key
+        decision = await self.repo.get_decision_by_idempotency(
+            session_id, idempotency_key
+        )
+        if decision is None:
+            return None
+
+        # Only replay events for THIS decision, not the whole session
+        events = await self.repo.list_decision_events_after(
+            decision.id, event.sequence
+        )
         return [
             {
                 "event": e.event_type,
@@ -476,12 +524,40 @@ class CoachService:
             for e in events
         ]
 
+    async def _write_error_terminal_state(
+        self,
+        decision_id: int,
+        error_message: str,
+    ) -> None:
+        """Write a stable error terminal state for an expired decision."""
+        from datetime import datetime
+
+        from sqlalchemy import select
+
+        from app.models.coach_decision import CoachDecision
+
+        stmt = (
+            select(CoachDecision)
+            .where(CoachDecision.id == decision_id)
+            .with_for_update()
+        )
+        result = await self.db.execute(stmt)
+        decision = result.scalar_one()
+        decision.stage = "error"
+        decision.lease_expires_at = None
+        decision.intent = decision.intent or "unknown"
+        await self.db.flush()
+
     async def _heartbeat_loop(
         self,
         session_id: int,
+        decision_id: int,
         graph_task: asyncio.Task,
     ) -> None:
-        """Emit heartbeat comments every 15 seconds while graph is running."""
+        """Emit heartbeat events every 15 seconds while graph is running.
+
+        Heartbeats are buffered and will be persisted with the decision's events.
+        """
         while not graph_task.done():
             try:
                 await asyncio.wait_for(
@@ -490,9 +566,11 @@ class CoachService:
                 )
                 break  # Graph completed
             except asyncio.TimeoutError:
-                # Emit heartbeat
+                # Heartbeat is appended to the repository but will be
+                # committed with the main transaction later
                 await self.repo.append_stream_event(
                     session_id=session_id,
                     event_type="heartbeat",
                     data={"ts": asyncio.get_event_loop().time()},
+                    decision_id=decision_id,
                 )

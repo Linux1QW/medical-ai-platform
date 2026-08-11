@@ -33,8 +33,13 @@ def run_gate(
     execution_mode: str = "live",
     output_dir: str | None = None,
     output_json: bool = False,
+    candidate_sha: str | None = None,
 ) -> bool:
-    """Run the 72-case benchmark gate. Returns True if passed."""
+    """Run the 72-case benchmark gate. Returns True if passed.
+
+    For live mode: candidate_sha is required and must match source_commit.
+    For structural mode: only infrastructure checks, release_eligible=False.
+    """
     print("=" * 60)
     print("V1.2 Coach Release Gate")
     print("=" * 60)
@@ -57,7 +62,7 @@ def run_gate(
     # Step 2: Collect provenance
     print("\n[2/5] Collecting provenance...")
     provenance = collect_provenance(execution_mode=execution_mode)
-    prov_errors = validate_provenance(provenance)
+    prov_errors = validate_provenance(provenance, candidate_sha=candidate_sha)
     if prov_errors:
         print("  Provenance validation FAILED:")
         for e in prov_errors:
@@ -93,7 +98,7 @@ def run_gate(
 
     # Step 4: Build report
     print("\n[4/5] Building evaluation report...")
-    report = build_report(results, cases)
+    report = build_report(results, cases, execution_mode=execution_mode)
     print(f"  Intent accuracy: {report.intent_accuracy:.4f}")
     print(f"  Intent macro-F1: {report.intent_macro_f1:.4f}")
     print(f"  Hidden-fact leaks: {report.hidden_fact_leaks}/{count}")
@@ -120,6 +125,8 @@ def run_gate(
     full_report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "passed": report.passed,
+        "release_eligible": report.release_eligible,
+        "execution_mode": report.execution_mode,
         "fail_reasons": report.fail_reasons,
         "dataset_size": report.dataset_size,
         "unique_case_ids": report.unique_case_ids,
@@ -188,8 +195,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--execution-mode", type=str, default="live",
-        choices=["live", "ci"],
-        help="Execution mode (mock/fake are rejected)",
+        choices=["live", "structural"],
+        help="Execution mode: 'live' for full release gate, 'structural' for infrastructure checks only",
+    )
+    parser.add_argument(
+        "--candidate-sha", type=str, default=None,
+        help="Candidate commit SHA (required for live mode provenance validation)",
     )
     args = parser.parse_args()
 
@@ -197,6 +208,7 @@ def main() -> None:
         execution_mode=args.execution_mode,
         output_dir=args.output_dir,
         output_json=args.json,
+        candidate_sha=args.candidate_sha,
     )
     sys.exit(0 if success else 1)
 

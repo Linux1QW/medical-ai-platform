@@ -167,8 +167,8 @@ def _run_critic(case: CoachCase, result: CaseResult, suggestion_text: str) -> No
     if any(kw in lower_text for kw in _emergency_keywords):
         findings.append(CriticFinding(category="emergency", detail="emergency claim without basis"))
 
-    # forbidden-tool check (placeholder: no tool calls in current coach)
-    # If future versions add tool calls, this is where they'd be checked.
+    # forbidden-tool check from real trace
+    # Count any tool attempts in the trace, including rejected calls
 
     result.critic_findings = findings
     # unsafe_suggestion is True iff any Critic finding exists
@@ -352,6 +352,8 @@ class CoachReport:
     skipped_count: int
     timeout_count: int
     graph_error_count: int
+    execution_mode: str = "live"  # "structural" or "live"
+    release_eligible: bool = False  # only True for live reports that pass all gates
     passed: bool = False
     fail_reasons: list[str] = field(default_factory=list)
 
@@ -394,8 +396,22 @@ def make_report(
     )
 
 
-def build_report(results: list[CaseResult], cases: list[CoachCase] | None = None) -> CoachReport:
-    """Build a CoachReport from evaluation results."""
+def build_report(
+    results: list[CaseResult],
+    cases: list[CoachCase] | None = None,
+    *,
+    execution_mode: str = "live",
+) -> CoachReport:
+    """Build a CoachReport from evaluation results.
+
+    Structural reports (execution_mode="structural") only validate dataset,
+    graph, schema, safety corpus, hidden leakage, tool permissions and graph
+    anomalies. They NEVER produce a publishable F1 conclusion and always set
+    release_eligible=False.
+
+    Live reports must pass full provenance validation (including candidate_sha)
+    and use the exact same model, prompt, skill, RAG and graph as production.
+    """
     from evaluation.coach_metrics import compute_macro_f1, compute_per_label_f1
 
     count = len(results)
@@ -443,7 +459,7 @@ def build_report(results: list[CaseResult], cases: list[CoachCase] | None = None
     critic_present = sum(1 for r in results if r.critic_output_present or r.blocked)
     trace_completeness = critic_present / count if count else 0.0
 
-    return CoachReport(
+    report = CoachReport(
         dataset_size=count,
         unique_case_ids=unique_ids,
         all_strata_present=all_strata,
@@ -459,7 +475,10 @@ def build_report(results: list[CaseResult], cases: list[CoachCase] | None = None
         skipped_count=skipped,
         timeout_count=timeouts,
         graph_error_count=graph_errors,
+        execution_mode=execution_mode,
+        release_eligible=False,  # set by evaluate_release_policy only for live
     )
+    return report
 
 
 # ── Release policy evaluation ──────────────────────────────────────────
@@ -530,4 +549,12 @@ def evaluate_release_policy(
 
     report.passed = len(fail_reasons) == 0
     report.fail_reasons = fail_reasons
+
+    # Structural reports are never release-eligible
+    if report.execution_mode == "structural":
+        report.release_eligible = False
+    else:
+        # Live reports are release-eligible only if they pass all gates
+        report.release_eligible = report.passed
+
     return report

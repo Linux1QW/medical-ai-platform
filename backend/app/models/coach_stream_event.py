@@ -32,6 +32,10 @@ class CoachStreamEvent(Base):
             "ix_coach_stream_session_expires",
             "session_id", "expires_at",
         ),
+        Index(
+            "ix_coach_stream_decision",
+            "decision_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -41,6 +45,11 @@ class CoachStreamEvent(Base):
     session_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("coach_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    decision_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("coach_decisions.id", ondelete="CASCADE"),
         nullable=False,
     )
     sequence: Mapped[int] = mapped_column(

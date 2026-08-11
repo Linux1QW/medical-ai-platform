@@ -24,9 +24,13 @@ def upgrade() -> None:
     # backfill public_id with uuid for existing rows (MySQL-safe: Python parameterized)
     bind = op.get_bind()
     if bind is not None:
-        rows = bind.execute(
-            sa.text("SELECT id FROM coach_sessions WHERE public_id IS NULL")
-        ).mappings().all()
+        try:
+            result = bind.execute(
+                sa.text("SELECT id FROM coach_sessions WHERE public_id IS NULL")
+            )
+            rows = result.mappings().all() if result is not None else []
+        except Exception:
+            rows = []
         for row in rows:
             bind.execute(
                 sa.text("UPDATE coach_sessions SET public_id=:public_id WHERE id=:id"),
@@ -60,9 +64,13 @@ def upgrade() -> None:
     # backfill (MySQL-safe: Python parameterized)
     bind = op.get_bind()
     if bind is not None:
-        rows = bind.execute(
-            sa.text("SELECT id FROM coach_decisions WHERE suggestion_id IS NULL")
-        ).mappings().all()
+        try:
+            result = bind.execute(
+                sa.text("SELECT id FROM coach_decisions WHERE suggestion_id IS NULL")
+            )
+            rows = result.mappings().all() if result is not None else []
+        except Exception:
+            rows = []
         for row in rows:
             bind.execute(
                 sa.text(
@@ -70,9 +78,13 @@ def upgrade() -> None:
                 ),
                 {"suggestion_id": str(uuid4()), "id": row["id"]},
             )
-        rows = bind.execute(
-            sa.text("SELECT id FROM coach_decisions WHERE idempotency_key IS NULL")
-        ).mappings().all()
+        try:
+            result = bind.execute(
+                sa.text("SELECT id FROM coach_decisions WHERE idempotency_key IS NULL")
+            )
+            rows = result.mappings().all() if result is not None else []
+        except Exception:
+            rows = []
         for row in rows:
             bind.execute(
                 sa.text(

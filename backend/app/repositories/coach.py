@@ -5,7 +5,7 @@ with idempotency, and SSE stream event persistence.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import and_, func, select
@@ -15,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.coach_decision import CoachDecision
 from app.models.coach_session import CoachSession
 from app.models.coach_stream_event import CoachStreamEvent
+
+# Default lease duration for running decisions
+DECISION_LEASE_SECONDS = 120
 
 
 class CoachRepository:
@@ -187,11 +190,16 @@ class CoachRepository:
         session_id: int,
         event_type: str,
         data: Optional[dict] = None,
+        decision_id: Optional[int] = None,
     ) -> CoachStreamEvent:
         """Append a stream event with transactional sequence allocation.
 
         Uses SELECT MAX(sequence) FOR UPDATE to guarantee monotonic ordering.
+        decision_id is required for durable event-to-decision association.
         """
+        if decision_id is None:
+            raise ValueError("decision_id is required for append_stream_event")
+
         # Lock and get next sequence
         seq_stmt = (
             select(func.coalesce(func.max(CoachStreamEvent.sequence), 0))
@@ -205,6 +213,7 @@ class CoachRepository:
         event = CoachStreamEvent(
             event_id=str(uuid.uuid4()),
             session_id=session_id,
+            decision_id=decision_id,
             sequence=next_seq,
             event_type=event_type,
             data_json=data,
@@ -234,6 +243,105 @@ class CoachRepository:
             )
             .order_by(CoachStreamEvent.sequence.asc())
             .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_decision_events_after(
+        self,
+        decision_id: int,
+        after_sequence: int,
+        limit: int = 100,
+    ) -> list[CoachStreamEvent]:
+        """List events for a specific decision with sequence > after_sequence.
+
+        Returns events ordered by sequence ascending.
+        """
+        stmt = (
+            select(CoachStreamEvent)
+            .where(
+                and_(
+                    CoachStreamEvent.decision_id == decision_id,
+                    CoachStreamEvent.sequence > after_sequence,
+                )
+            )
+            .order_by(CoachStreamEvent.sequence.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # Decision lease management
+    # ------------------------------------------------------------------
+
+    async def acquire_decision_lease(
+        self,
+        decision_id: int,
+        lease_seconds: int = DECISION_LEASE_SECONDS,
+    ) -> bool:
+        """Acquire a lease on a decision for processing.
+
+        Returns True if the lease was acquired, False if already leased
+        and the existing lease has not expired.
+        """
+        now = datetime.utcnow()
+        stmt = (
+            select(CoachDecision)
+            .where(CoachDecision.id == decision_id)
+            .with_for_update()
+        )
+        result = await self.db.execute(stmt)
+        decision = result.scalar_one()
+
+        # If already leased and not expired, cannot acquire
+        if (
+            decision.lease_expires_at is not None
+            and decision.lease_expires_at > now
+            and decision.stage == "running"
+        ):
+            return False
+
+        decision.locked_at = now
+        decision.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        decision.stage = "running"
+        await self.db.flush()
+        return True
+
+    async def release_decision_lease(
+        self,
+        decision_id: int,
+        final_stage: str,
+    ) -> None:
+        """Release the lease on a decision and set final stage."""
+        stmt = (
+            select(CoachDecision)
+            .where(CoachDecision.id == decision_id)
+            .with_for_update()
+        )
+        result = await self.db.execute(stmt)
+        decision = result.scalar_one()
+        decision.stage = final_stage
+        decision.lease_expires_at = None
+        await self.db.flush()
+
+    async def get_expired_running_decisions(
+        self,
+        session_id: Optional[int] = None,
+    ) -> list[CoachDecision]:
+        """Find decisions that are running but have expired leases."""
+        now = datetime.utcnow()
+        conditions = [
+            CoachDecision.stage == "running",
+            CoachDecision.lease_expires_at < now,
+        ]
+        if session_id is not None:
+            conditions.append(CoachDecision.session_id == session_id)
+
+        stmt = (
+            select(CoachDecision)
+            .where(and_(*conditions))
+            .order_by(CoachDecision.created_at.asc())
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())

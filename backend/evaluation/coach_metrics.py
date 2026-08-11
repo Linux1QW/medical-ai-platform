@@ -175,20 +175,68 @@ def collect_provenance(
     )
 
 
-def validate_provenance(provenance: Provenance) -> list[str]:
+def validate_provenance(
+    provenance: Provenance,
+    *,
+    candidate_sha: str | None = None,
+) -> list[str]:
     """Validate provenance. Returns list of errors (empty = valid).
 
-    RC rejects 'mock' or deterministic-fake execution mode.
+    Full validation for live mode:
+    - execution_mode must not be mock/fake/deterministic-fake
+    - source_commit must not be unknown
+    - For live mode: source_commit must equal candidate_sha (if provided)
+    - model_provider and model_name must not be 'unknown'
+    - prompt_bundle_hash and skill_manifest_hash must not be missing/empty
+    - dataset_sha256 must not be missing
+    - timestamp must be present
     """
     errors: list[str] = []
+
+    # Reject fake execution modes
     if provenance.execution_mode in ("mock", "fake", "deterministic-fake"):
         errors.append(
             f"execution_mode='{provenance.execution_mode}' is rejected by RC"
         )
-    if provenance.source_commit == "unknown":
+
+    # source_commit must be known
+    if provenance.source_commit == "unknown" or not provenance.source_commit:
         errors.append("source_commit is unknown")
-    if provenance.dataset_sha256 == "missing":
+
+    # dataset must exist
+    if provenance.dataset_sha256 in ("missing", ""):
         errors.append("dataset file not found")
+
+    # Live-mode full provenance checks
+    if provenance.execution_mode == "live":
+        # candidate_sha must match source_commit
+        if candidate_sha is not None:
+            if provenance.source_commit != candidate_sha:
+                errors.append(
+                    f"source_commit '{provenance.source_commit}' != "
+                    f"candidate_sha '{candidate_sha}'"
+                )
+        elif not provenance.source_commit or provenance.source_commit == "unknown":
+            errors.append("candidate_sha required for live mode but source_commit unknown")
+
+        # model provider/name must not be unknown
+        if provenance.model_provider in ("unknown", ""):
+            errors.append("model_provider is unknown; live mode requires real model identity")
+        if provenance.model_name in ("unknown", ""):
+            errors.append("model_name is unknown; live mode requires real model identity")
+
+        # Prompt hash must come from actual activated bundle
+        if provenance.prompt_bundle_hash in ("missing", ""):
+            errors.append("prompt_bundle_hash is missing; must come from actual activated bundle")
+
+        # Skill hash must come from actual loaded manifest
+        if provenance.skill_manifest_hash in ("missing", ""):
+            errors.append("skill_manifest_hash is missing; must come from actual loaded manifest")
+
+        # timestamp must exist
+        if not provenance.timestamp:
+            errors.append("timestamp is missing")
+
     return errors
 
 

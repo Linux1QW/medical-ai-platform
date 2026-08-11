@@ -66,6 +66,12 @@ class CoachDecision(Base):
     feedback_reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     feedback_comment: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     feedback_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="when the decision was locked for processing"
+    )
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="lease expiry for the lock"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow
     )

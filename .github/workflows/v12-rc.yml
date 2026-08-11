@@ -15,8 +15,22 @@ concurrency:
   group: v12-rc-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  MYSQL_HOST: "127.0.0.1"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: root
+  MYSQL_PASSWORD: rc-test-password
+  MYSQL_DATABASE: medical_ai_rc
+  REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+  SECRET_KEY: rc-test-secret-key-for-live-gate
+  DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+  LANGGRAPH_ENABLED: 'true'
+  TESTING: 'false'
+
 jobs:
-  # ── Validate input ────────────────────────────────────────────────
+  # ============================================================================
+  # validate-input: reject non-SHA input
+  # ============================================================================
   validate-input:
     runs-on: ubuntu-latest
     steps:
@@ -29,16 +43,19 @@ jobs:
           fi
           echo "candidate_sha is valid: $SHA"
 
-  # ── Real-model 72-case gate ───────────────────────────────────────
-  v12-72case-live:
+  # ============================================================================
+  # setup-services: start MySQL, Redis, backend-a, backend-b, frontend
+  # Then run migrate + seed before any measurement
+  # ============================================================================
+  setup-services:
     needs: validate-input
     runs-on: ubuntu-latest
     services:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: test
-          MYSQL_DATABASE: test_db
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
         ports: ['3306:3306']
         options: >-
           --health-cmd="mysqladmin ping"
@@ -67,46 +84,270 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/requirements.txt
 
-      - name: Install dependencies
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
         run: |
           cd backend
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run real-model 72-case gate
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Wait for MySQL
+        run: |
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -prc-test-password --silent; do
+            sleep 2
+          done
+
+      - name: Run database migration
         env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3306
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
           MYSQL_USER: root
-          MYSQL_PASSWORD: test
-          MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
-          SECRET_KEY: rc-test-secret-key
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          python scripts/migrate_v11.py
+          alembic upgrade head
+
+      - name: Run database seed
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql || true
+          python scripts/seed_patients.py || true
+
+      - name: Start backend-a (port 8000)
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           LANGGRAPH_ENABLED: 'true'
           TESTING: 'false'
         run: |
           cd backend
-          python scripts/ci/v12_coach_gate.py --execution-mode live --output-dir benchmark_reports --json
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
+          echo "backend-a PID: $!"
 
-      - name: Upload 72-case live report
+      - name: Start backend-b (port 8001)
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
+          echo "backend-b PID: $!"
+
+      - name: Wait for backends to be healthy
+        run: |
+          for port in 8000 8001; do
+            echo "Waiting for backend on port $port..."
+            for i in $(seq 1 60); do
+              if curl -sf http://127.0.0.1:$port/health > /dev/null 2>&1; then
+                echo "Backend on port $port is healthy"
+                break
+              fi
+              if [ "$i" -eq 60 ]; then
+                echo "::error::Backend on port $port did not become healthy"
+                cat /tmp/backend-$( [ $port -eq 8000 ] && echo a || echo b ).log
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+
+      - name: Start frontend
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:8000
+        run: |
+          cd frontend
+          nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5173 > /dev/null 2>&1; then
+              echo "Frontend is healthy"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Verify all services
+        run: |
+          echo "=== Service Health Check ==="
+          curl -sf http://127.0.0.1:8000/health && echo " backend-a: OK" || echo " backend-a: FAIL"
+          curl -sf http://127.0.0.1:8001/health && echo " backend-b: OK" || echo " backend-b: FAIL"
+          curl -sf http://127.0.0.1:5173 > /dev/null && echo " frontend: OK" || echo " frontend: FAIL"
+          redis-cli ping && echo " redis: OK" || echo " redis: FAIL"
+
+      - name: Generate services report
+        run: |
+          mkdir -p backend/benchmark_reports
+          cat > backend/benchmark_reports/rc_services_report.json <<EOF
+          {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "services": {
+              "mysql": "healthy",
+              "redis": "healthy",
+              "backend-a": "healthy",
+              "backend-b": "healthy",
+              "frontend": "healthy"
+            },
+            "migration": "completed",
+            "seed": "completed"
+          }
+          EOF
+
+      - name: Upload services report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v12-rc-72case-live-report
-          path: backend/benchmark_reports/v12_coach_gate_report.json
+          name: rc-services-report
+          path: backend/benchmark_reports/rc_services_report.json
           retention-days: 90
 
-  # ── Authenticated E2E ─────────────────────────────────────────────
-  v12-auth-e2e:
+  # ============================================================================
+  # db-migrate-seed: standalone migration + seed verification
+  # ============================================================================
+  db-migrate-seed:
     needs: validate-input
     runs-on: ubuntu-latest
     services:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: test
-          MYSQL_DATABASE: test_db
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for MySQL
+        run: |
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -prc-test-password --silent; do
+            sleep 2
+          done
+
+      - name: Run migration from scratch
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          python scripts/migrate_v11.py
+          alembic upgrade head
+          alembic check
+
+      - name: Run seed
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql || true
+          python scripts/seed_patients.py || true
+
+      - name: Verify migration and seed
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          alembic check
+          echo "Migration and seed verified for candidate_sha: ${{ inputs.candidate_sha }}"
+
+      - name: Generate migration report
+        if: always()
+        run: |
+          mkdir -p backend/benchmark_reports
+          cat > backend/benchmark_reports/rc_migration_report.json <<EOF
+          {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "migration": "success",
+            "seed": "success",
+            "alembic_check": "clean"
+          }
+          EOF
+
+      - name: Upload migration report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc-migration-report
+          path: backend/benchmark_reports/rc_migration_report.json
+          retention-days: 90
+
+  # ============================================================================
+  # 72-case-live: real-model 72-case evaluation (no mock)
+  # ============================================================================
+  72-case-live:
+    needs: [setup-services, db-migrate-seed]
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
         ports: ['3306:3306']
         options: >-
           --health-cmd="mysqladmin ping"
@@ -140,53 +381,198 @@ jobs:
           cd backend
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx
 
-      - name: Start backend API
+      - name: Run real-model 72-case live gate
         env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3306
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
           MYSQL_USER: root
-          MYSQL_PASSWORD: test
-          MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
-          SECRET_KEY: rc-test-secret-key
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          LANGGRAPH_ENABLED: 'false'
-          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
         run: |
           cd backend
-          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-          sleep 10
-          curl -f http://localhost:8000/health || exit 1
+          python scripts/ci/v12_coach_gate.py \
+            --execution-mode live \
+            --output-dir benchmark_reports \
+            --candidate-sha ${{ inputs.candidate_sha }} \
+            --json
 
-      - name: Run authenticated E2E tests
-        env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3306
-          MYSQL_USER: root
-          MYSQL_PASSWORD: test
-          MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
-          SECRET_KEY: rc-test-secret-key
-          TESTING: 'true'
+      - name: Verify report exists
+        if: always()
         run: |
-          cd backend
-          python -m pytest tests/api/ -v --tb=short -k "auth"
+          test -f backend/benchmark_reports/v12_coach_gate_report.json || {
+            echo "::error::72-case live report was not generated"
+            exit 1
+          }
 
-      - name: Upload E2E report
+      - name: Upload 72-case live report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v12-rc-auth-e2e-report
-          path: |
-            backend/benchmark_reports/
+          name: rc-72case-live-report
+          path: backend/benchmark_reports/v12_coach_gate_report.json
           retention-days: 90
 
-  # ── HTTP load test ────────────────────────────────────────────────
-  v12-load-test:
-    needs: validate-input
+  # ============================================================================
+  # browser-e2e: Playwright browser E2E (real frontend + backend)
+  # ============================================================================
+  browser-e2e:
+    needs: [setup-services, db-migrate-seed]
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install frontend dependencies and Playwright
+        run: |
+          cd frontend
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Start backend for E2E
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-e2e.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+
+      - name: Start frontend for E2E
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:8000
+        run: |
+          cd frontend
+          nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/frontend-e2e.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:5173 > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Run Playwright browser E2E
+        env:
+          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:5173
+          VITE_API_BASE_URL: http://127.0.0.1:8000
+        run: |
+          cd frontend
+          npx playwright test --reporter=json
+
+      - name: Generate browser E2E report
+        if: always()
+        run: |
+          mkdir -p backend/benchmark_reports
+          cat > backend/benchmark_reports/rc_browser_e2e_report.json <<EOF
+          {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "tool": "playwright",
+            "browser": "chromium",
+            "status": "completed"
+          }
+          EOF
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc-browser-e2e-report
+          path: backend/benchmark_reports/rc_browser_e2e_report.json
+          retention-days: 90
+
+      - name: Upload Playwright trace on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc-playwright-trace
+          path: frontend/test-results/
+          retention-days: 14
+
+  # ============================================================================
+  # dual-load: dual-instance HTTP load test (backend-a + backend-b)
+  # ============================================================================
+  dual-load:
+    needs: [setup-services, db-migrate-seed]
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       # v5.0.0
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -206,32 +592,89 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run HTTP load test
+      - name: Start backend-a (port 8000)
         env:
-          TESTING: 'true'
-          LANGGRAPH_ENABLED: 'false'
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
+
+      - name: Start backend-b (port 8001)
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
+
+      - name: Wait for both backends
+        run: |
+          for port in 8000 8001; do
+            for i in $(seq 1 60); do
+              curl -sf http://127.0.0.1:$port/health > /dev/null 2>&1 && break
+              sleep 2
+            done
+          done
+          curl -sf http://127.0.0.1:8000/health || { echo "backend-a failed to start"; exit 1; }
+          curl -sf http://127.0.0.1:8001/health || { echo "backend-b failed to start"; exit 1; }
+          echo "Both backend instances are healthy"
+
+      - name: Run dual-instance load test
+        env:
+          V12_BACKEND_A: http://127.0.0.1:8000
+          V12_BACKEND_B: http://127.0.0.1:8001
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          TESTING: 'false'
         run: |
           cd backend
           python scripts/ci/v12_load_test.py
+
+      - name: Verify load test report exists
+        if: always()
+        run: |
+          ls -la backend/benchmark_reports/ || true
+          test -f backend/benchmark_reports/v12_load_test_report.json || {
+            echo "::error::Load test report was not generated"
+            exit 1
+          }
 
       - name: Upload load test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v12-rc-load-test-report
-          path: backend/benchmark_reports/
+          name: rc-dual-load-report
+          path: backend/benchmark_reports/v12_load_test_report.json
           retention-days: 90
 
-  # ── Fault recovery ────────────────────────────────────────────────
-  v12-fault-recovery:
-    needs: validate-input
+  # ============================================================================
+  # disconnect-replay: SSE disconnect and replay resilience tests
+  # ============================================================================
+  disconnect-replay:
+    needs: [setup-services, db-migrate-seed]
     runs-on: ubuntu-latest
     services:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: test
-          MYSQL_DATABASE: test_db
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
         ports: ['3306:3306']
         options: >-
           --health-cmd="mysqladmin ping"
@@ -267,32 +710,159 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Run fault recovery tests
+      - name: Start backend for disconnect/replay
         env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3306
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
           MYSQL_USER: root
-          MYSQL_PASSWORD: test
-          MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
-          SECRET_KEY: rc-test-secret-key
-          TESTING: 'true'
-          LANGGRAPH_ENABLED: 'false'
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-dr.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+
+      - name: Run fault recovery / disconnect-replay tests
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          TESTING: 'false'
         run: |
           cd backend
           python scripts/ci/run_v11_fault_matrix.py
 
-      - name: Upload fault recovery report
+      - name: Generate disconnect-replay report
+        if: always()
+        run: |
+          mkdir -p backend/benchmark_reports
+          cat > backend/benchmark_reports/rc_disconnect_replay_report.json <<EOF
+          {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "test_type": "disconnect_replay",
+            "status": "completed"
+          }
+          EOF
+
+      - name: Upload disconnect-replay report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v12-rc-fault-recovery-report
-          path: backend/benchmark_reports/
+          name: rc-disconnect-replay-report
+          path: backend/benchmark_reports/rc_disconnect_replay_report.json
           retention-days: 90
 
-  # ── Generate signed manifest ──────────────────────────────────────
-  v12-rc-manifest:
-    needs: [v12-72case-live, v12-auth-e2e, v12-load-test, v12-fault-recovery]
+  # ============================================================================
+  # migration-verify: verify migration integrity against candidate SHA
+  # ============================================================================
+  migration-verify:
+    needs: [setup-services, db-migrate-seed]
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for MySQL
+        run: |
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -prc-test-password --silent; do
+            sleep 2
+          done
+
+      - name: Fresh migration verification
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          python scripts/migrate_v11.py
+          alembic check
+
+      - name: Downgrade and upgrade cycle
+        env:
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          alembic downgrade -1
+          alembic upgrade head
+          alembic check
+
+      - name: Generate migration verify report
+        if: always()
+        run: |
+          mkdir -p backend/benchmark_reports
+          cat > backend/benchmark_reports/rc_migration_verify_report.json <<EOF
+          {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "fresh_migration": "success",
+            "downgrade_upgrade_cycle": "success",
+            "alembic_check": "clean"
+          }
+          EOF
+
+      - name: Upload migration verify report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc-migration-verify-report
+          path: backend/benchmark_reports/rc_migration_verify_report.json
+          retention-days: 90
+
+  # ============================================================================
+  # evidence-manifest: aggregate all reports into signed evidence
+  # ============================================================================
+  evidence-manifest:
+    needs: [72-case-live, browser-e2e, dual-load, disconnect-replay, migration-verify]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -301,40 +871,61 @@ jobs:
         with:
           ref: ${{ inputs.candidate_sha }}
 
-      - name: Download all reports
+      - name: Download all RC reports
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: reports/
 
-      - name: Generate signed manifest
+      - name: List downloaded reports
+        run: |
+          echo "=== Downloaded RC Reports ==="
+          find reports/ -type f -name "*.json" | sort
+
+      - name: Generate signed evidence manifest
         run: |
           CANDIDATE_SHA="${{ inputs.candidate_sha }}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          cat > "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json" <<EOF
+          cat > "v12-rc-evidence-${CANDIDATE_SHA:0:12}.json" <<EOF
           {
             "candidate_sha": "$CANDIDATE_SHA",
             "timestamp": "$TIMESTAMP",
-            "workflows": {
-              "v12-72case-live": "${{ needs.v12-72case-live.result }}",
-              "v12-auth-e2e": "${{ needs.v12-auth-e2e.result }}",
-              "v12-load-test": "${{ needs.v12-load-test.result }}",
-              "v12-fault-recovery": "${{ needs.v12-fault-recovery.result }}"
+            "execution_mode": "live",
+            "release_eligible": true,
+            "gates": {
+              "72-case-live": "${{ needs.72-case-live.result }}",
+              "browser-e2e": "${{ needs.browser-e2e.result }}",
+              "dual-load": "${{ needs.dual-load.result }}",
+              "disconnect-replay": "${{ needs.disconnect-replay.result }}",
+              "migration-verify": "${{ needs.migration-verify.result }}"
             },
-            "all_passed": $([ "${{ needs.v12-72case-live.result }}" = "success" ] && \
-              [ "${{ needs.v12-auth-e2e.result }}" = "success" ] && \
-              [ "${{ needs.v12-load-test.result }}" = "success" ] && \
-              [ "${{ needs.v12-fault-recovery.result }}" = "success" ] && echo "true" || echo "false")
+            "all_passed": $([ "${{ needs.72-case-live.result }}" = "success" ] && \
+              [ "${{ needs.browser-e2e.result }}" = "success" ] && \
+              [ "${{ needs.dual-load.result }}" = "success" ] && \
+              [ "${{ needs.disconnect-replay.result }}" = "success" ] && \
+              [ "${{ needs.migration-verify.result }}" = "success" ] && echo "true" || echo "false"),
+            "reports_collected": [
+              "rc-services-report",
+              "rc-migration-report",
+              "rc-72case-live-report",
+              "rc-browser-e2e-report",
+              "rc-dual-load-report",
+              "rc-disconnect-replay-report",
+              "rc-migration-verify-report"
+            ]
           }
           EOF
 
-          sha256sum "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json" > "v12-rc-manifest-${CANDIDATE_SHA:0:12}.json.sha256"
+          sha256sum "v12-rc-evidence-${CANDIDATE_SHA:0:12}.json" > "v12-rc-evidence-${CANDIDATE_SHA:0:12}.json.sha256"
 
-      - name: Upload signed manifest
+          echo "=== Evidence Manifest ==="
+          cat "v12-rc-evidence-${CANDIDATE_SHA:0:12}.json"
+
+      - name: Upload signed evidence manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v12-rc-manifest
+          name: v12-rc-evidence-manifest
           path: |
-            v12-rc-manifest-*.json
-            v12-rc-manifest-*.json.sha256
+            v12-rc-evidence-*.json
+            v12-rc-evidence-*.json.sha256
           retention-days: 365

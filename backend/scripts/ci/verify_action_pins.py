@@ -48,6 +48,11 @@ REQUIRED_RC_JOBS = [
 
 # ── Pin verification ─────────────────────────────────────────────────
 
+def verify_workflow_pins(workflow_root: Path) -> list[str]:
+    """Alias for verify_pins for test compatibility."""
+    return verify_pins(workflow_root)
+
+
 def verify_pins(workflow_root: Path) -> list[str]:
     """Return errors for every non-pinned or non-SHA action reference."""
     errors: list[str] = []

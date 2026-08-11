@@ -42,6 +42,13 @@ asyncio_mode = "auto"
 markers = [
     "integration: marks tests as requiring real infrastructure (deselect with '-m \"not integration\"')",
 ]
+filterwarnings = [
+    # Treat all warnings as errors (lowest priority — checked last)
+    "error",
+    # anyio internal memory streams are not always closed by Starlette TestClient
+    # (higher priority — checked first, overrides the error rule above)
+    "ignore:Exception ignored in.*MemoryObject:pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

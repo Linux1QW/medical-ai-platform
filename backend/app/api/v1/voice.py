@@ -22,7 +22,7 @@ from app.schemas.voice import (
     VoiceSessionResponse,
     VoiceStateResponse,
 )
-from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession, VoiceSessionManager
+from app.voice.session import VoiceSessionManager
 from app.voice.session_store import VoiceSessionStore, create_voice_store
 
 logger = logging.getLogger(__name__)

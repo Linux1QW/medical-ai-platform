@@ -15,12 +15,7 @@ These tests validate the *contract shapes*, not the live HTTP endpoints.
 They exercise the same models, schemas, and service interfaces used by E2E.
 """
 
-import json
 import uuid
-from datetime import datetime
-
-import pytest
-
 
 # ──────────────────────────────────────────────────────────────────
 # Contract 1: Authentication response shape
@@ -138,7 +133,6 @@ class TestSeedDataContract:
         """Seed users must have all fields needed for login."""
         from tests.fixtures.seed_v12_coach_e2e import seed_users
         # seed_users returns user dicts — validate shape
-        users = seed_users.__wrapped__() if hasattr(seed_users, "__wrapped__") else None
         # We can't call seed_users without a session, but we can verify the function exists
         assert callable(seed_users)
 

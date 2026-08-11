@@ -180,7 +180,9 @@ class VoiceWorker:
             self._dedup_redis = aioredis.from_url(
                 self._dedup_redis_url, decode_responses=True
             )
+        conn = self._dedup_redis
+        assert conn is not None
         redis_key = f"voice:dedup:{self.room_name}:{key}"
         # SET NX EX: set only if not exists, with 600s TTL
-        was_set = await self._dedup_redis.set(redis_key, "1", nx=True, ex=600)
+        was_set = await conn.set(redis_key, "1", nx=True, ex=600)
         return was_set is None  # None means key already existed → duplicate

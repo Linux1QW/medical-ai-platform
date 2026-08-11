@@ -11,7 +11,7 @@ Coverage:
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -145,8 +145,9 @@ class TestVoiceNonOwner:
         _as_user(DOCTOR_B)
 
         # Create a session in the store
-        from app.api.v1.voice import get_store
         import asyncio
+
+        from app.api.v1.voice import get_store
 
         store = get_store()
         from app.voice.session import VoiceSessionManager
@@ -176,8 +177,9 @@ class TestVoiceNonOwner:
         """POST /voice/sessions/{room_name}/end with non-owner → 403."""
         _as_user(DOCTOR_B)
 
-        from app.api.v1.voice import get_store
         import asyncio
+
+        from app.api.v1.voice import get_store
 
         store = get_store()
         from app.voice.session import VoiceSessionManager
@@ -214,7 +216,6 @@ class TestVoiceConfigMissing:
         """POST /voice/sessions with no LiveKit config → 503."""
         _as_user(DOCTOR_A)
 
-        from unittest.mock import MagicMock
 
         mock_consultation = SimpleNamespace(id=1, doctor_id=10)
 

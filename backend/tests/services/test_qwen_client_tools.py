@@ -53,6 +53,14 @@ def make_tool_call(tool_id, name, arguments):
 # ── Fixtures ────────────────────────────────────────────────────────────────────
 
 
+def _make_mock_sem():
+    """Create a mock semaphore with sync release() and async acquire()."""
+    sem = MagicMock()
+    sem.acquire = AsyncMock(return_value=None)
+    sem._value = 10
+    return sem
+
+
 @pytest.fixture
 def mock_executor():
     """模拟工具执行器"""
@@ -84,11 +92,7 @@ def mock_tools():
 @patch("app.services.qwen_client._get_semaphore")
 async def test_no_tool_call_direct_return(mock_sem, mock_api, mock_executor, mock_tools):
     """无 tool_calls 时直接返回 content"""
-    # 信号量 mock
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     # API 返回无 tool_calls 的响应
     mock_api.return_value = make_mock_response(content="最终答案")
@@ -112,10 +116,7 @@ async def test_no_tool_call_direct_return(mock_sem, mock_api, mock_executor, moc
 @patch("app.services.qwen_client._get_semaphore")
 async def test_single_tool_call(mock_sem, mock_api, mock_executor, mock_tools):
     """单轮工具调用 → 执行工具 → 返回最终结果"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc = make_tool_call("tc_1", "test_tool", '{"query": "test"}')
 
@@ -143,10 +144,7 @@ async def test_single_tool_call(mock_sem, mock_api, mock_executor, mock_tools):
 @patch("app.services.qwen_client._get_semaphore")
 async def test_multi_round_tool_calls(mock_sem, mock_api, mock_executor, mock_tools):
     """多轮工具调用"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc1 = make_tool_call("tc_1", "test_tool", '{"query": "first"}')
     tc2 = make_tool_call("tc_2", "test_tool", '{"query": "second"}')
@@ -174,10 +172,7 @@ async def test_multi_round_tool_calls(mock_sem, mock_api, mock_executor, mock_to
 @patch("app.services.qwen_client._get_semaphore")
 async def test_max_rounds_exceeded(mock_sem, mock_api, mock_executor, mock_tools):
     """超过最大轮数返回 degraded=True"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc = make_tool_call("tc_1", "test_tool", '{"query": "test"}')
 
@@ -199,10 +194,7 @@ async def test_max_rounds_exceeded(mock_sem, mock_api, mock_executor, mock_tools
 @patch("app.services.qwen_client._get_semaphore")
 async def test_max_calls_exceeded(mock_sem, mock_api, mock_executor, mock_tools):
     """超过最大调用数返回 degraded=True 或 budget_exceeded trace"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc = make_tool_call("tc_1", "test_tool", '{"query": "test"}')
 
@@ -229,10 +221,7 @@ async def test_max_calls_exceeded(mock_sem, mock_api, mock_executor, mock_tools)
 @patch("app.services.qwen_client._get_semaphore")
 async def test_tool_execution_error(mock_sem, mock_api, mock_executor, mock_tools):
     """工具执行失败返回结构化错误给 LLM"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc = make_tool_call("tc_1", "test_tool", '{"query": "test"}')
 
@@ -261,10 +250,7 @@ async def test_tool_execution_error(mock_sem, mock_api, mock_executor, mock_tool
 @patch("app.services.qwen_client._get_semaphore")
 async def test_invalid_tool_arguments(mock_sem, mock_api, mock_executor, mock_tools):
     """工具参数非法时的处理"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     tc = make_tool_call("tc_1", "test_tool", "invalid json {{{")
 
@@ -295,10 +281,7 @@ async def test_invalid_tool_arguments(mock_sem, mock_api, mock_executor, mock_to
 @patch("app.services.qwen_client._get_semaphore")
 async def test_call_qwen_chat_unchanged(mock_sem, mock_client):
     """验证 call_qwen_chat() 行为不变（回归）"""
-    sem = AsyncMock()
-    sem.acquire.return_value = None
-    sem._value = 10
-    mock_sem.return_value = sem
+    mock_sem.return_value = _make_mock_sem()
 
     # Mock API response
     mock_response = MagicMock()

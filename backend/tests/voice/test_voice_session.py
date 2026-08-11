@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.voice.agent import VoiceAgent, VoiceAgentConfig, VoiceTranscript
-from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession, VoiceSessionManager
+from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSessionManager
 from app.voice.session_store import (
     VoiceSessionStoreMemory,
     create_voice_store,

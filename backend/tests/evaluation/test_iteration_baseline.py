@@ -32,7 +32,7 @@ class TestGateExitCodes:
         result = subprocess.run(
             [sys.executable, str(BACKEND_DIR / "scripts" / "eval_regression.py"),
              "--report", str(report_path)],
-            capture_output=True, text=True, cwd=str(BACKEND_DIR),
+            capture_output=True, text=True, encoding="utf-8", cwd=str(BACKEND_DIR),
         )
         return result.returncode
 
@@ -51,7 +51,7 @@ class TestGateExitCodes:
         result = subprocess.run(
             [sys.executable, str(BACKEND_DIR / "scripts" / "eval_regression.py"),
              "--report", str(tmp_path / "nonexistent.json")],
-            capture_output=True, text=True, cwd=str(BACKEND_DIR),
+            capture_output=True, text=True, encoding="utf-8", cwd=str(BACKEND_DIR),
         )
         assert result.returncode == 2
 

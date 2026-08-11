@@ -80,7 +80,12 @@ class WorkerAsyncRuntime:
         先 loop.create_task(coro)，再用 run_until_complete(asyncio.wait_for(task, timeout))。
         异常/timeout 退出时 cancel task + gather，确保无悬挂 coroutine。
         """
-        self._check_ownership()
+        try:
+            self._check_ownership()
+        except WorkerRuntimeOwnershipError:
+            # Close the coroutine to prevent unawaited-coroutine warnings
+            coro.close()
+            raise
         assert self._loop is not None
 
         task = self._loop.create_task(coro)

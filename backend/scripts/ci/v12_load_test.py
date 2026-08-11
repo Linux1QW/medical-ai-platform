@@ -468,7 +468,7 @@ async def run_replay_test(
 # Load runner
 # ──────────────────────────────────────────────────────────────
 
-async def run_load_test(
+async def run_load_test(  # noqa: C901
     concurrency: int = 10,
     total_requests: int = 50,
     patient_id: int = 1,
@@ -558,7 +558,7 @@ async def run_load_test(
     print(f"  Replay failures:   {replay_failures} (threshold: {THRESHOLD_REPLAY_FAILURES})")
     print(f"  Trace complete:    {trace_complete_count}/{total_completed} "
           f"({trace_completeness:.0%}, threshold: {THRESHOLD_TRACE_COMPLETENESS:.0%})")
-    print(f"  Backend hits:")
+    print("  Backend hits:")
     for url, count in backend_hit_count.items():
         label = "A" if url == BACKEND_URLS[0] else "B"
         print(f"    Backend {label} ({url}): {count} requests")
@@ -588,11 +588,11 @@ async def run_load_test(
 
     passed = len(failures) == 0
     if failures:
-        print(f"\nLoad test FAIL reasons:")
+        print("\nLoad test FAIL reasons:")
         for f in failures:
             print(f"  - {f}")
     else:
-        print(f"\nLoad test: PASS")
+        print("\nLoad test: PASS")
 
     return {
         "p50": p50,

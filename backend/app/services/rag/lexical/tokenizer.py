@@ -2,6 +2,7 @@
 
 import logging
 import re
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -52,7 +53,12 @@ _PROTECTED_PATTERN = re.compile(
 def _load_medical_dictionary() -> None:
     dictionary_path = Path(__file__).resolve().parents[4] / "data" / "medical_dict.txt"
     if dictionary_path.exists():
-        jieba.load_userdict(str(dictionary_path))
+        # Pre-read to ensure the file handle is closed before jieba opens it.
+        # jieba.load_userdict internally opens the file; we suppress the
+        # ResourceWarning that may arise on some platforms / Python versions.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            jieba.load_userdict(str(dictionary_path))
         logger.info("Loaded jieba medical dictionary: %s", dictionary_path)
     else:
         logger.warning("Medical dictionary does not exist: %s", dictionary_path)

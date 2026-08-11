@@ -10,7 +10,6 @@ import json
 import logging
 import time
 from typing import Protocol, runtime_checkable
-from uuid import uuid4
 
 from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession
 

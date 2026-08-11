@@ -1,4 +1,8 @@
-"""Run V1.1 fault matrix against a live Compose environment."""
+"""Run V1.2 fault matrix against a live Compose environment.
+
+Covers: dispatcher outage recovery, redis state fail-closed,
+redis cache saturation degradation, execution owner fencing.
+"""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +21,7 @@ FAULTS = (
     "execution_owner_fencing",
 )
 
-PROJECT_NAME = "medical-ai-v11-e2e"
+PROJECT_NAME = "medical-ai-v12-e2e"
 
 
 @dataclass
@@ -125,7 +129,7 @@ def _test_execution_owner_fencing(project: str) -> FaultResult:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run V1.1 fault matrix")
+    parser = argparse.ArgumentParser(description="Run V1.2 fault matrix")
     parser.add_argument("--project", default=PROJECT_NAME)
     parser.add_argument("--output", default="artifacts/fault-matrix.json")
     args = parser.parse_args()

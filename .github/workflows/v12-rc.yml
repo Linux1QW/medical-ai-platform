@@ -117,7 +117,7 @@ jobs:
           MYSQL_DATABASE: medical_ai_rc
         run: |
           cd backend
-          python scripts/migrate_v11.py
+          python scripts/migrate.py
           alembic upgrade head
 
       - name: Run database seed
@@ -209,6 +209,9 @@ jobs:
       - name: Generate services report
         run: |
           mkdir -p backend/benchmark_reports
+          SVC_STATUS="${{ job.status == 'success' && 'completed' || 'failed' }}"
+          MIG_STATUS="${{ job.status == 'success' && 'completed' || 'failed' }}"
+          SEED_STATUS="${{ job.status == 'success' && 'completed' || 'failed' }}"
           cat > backend/benchmark_reports/rc_services_report.json <<EOF
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
@@ -220,8 +223,8 @@ jobs:
               "backend-b": "healthy",
               "frontend": "healthy"
             },
-            "migration": "completed",
-            "seed": "completed"
+            "migration": "$MIG_STATUS",
+            "seed": "$SEED_STATUS"
           }
           EOF
 
@@ -286,7 +289,7 @@ jobs:
           MYSQL_DATABASE: medical_ai_rc
         run: |
           cd backend
-          python scripts/migrate_v11.py
+          python scripts/migrate.py
           alembic upgrade head
           alembic check
 
@@ -318,13 +321,16 @@ jobs:
         if: always()
         run: |
           mkdir -p backend/benchmark_reports
+          MIG_STATUS="${{ job.status == 'success' && 'success' || 'failed' }}"
+          SEED_STATUS="${{ job.status == 'success' && 'success' || 'failed' }}"
+          ALEMBIC_STATUS="${{ job.status == 'success' && 'clean' || 'failed' }}"
           cat > backend/benchmark_reports/rc_migration_report.json <<EOF
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "migration": "success",
-            "seed": "success",
-            "alembic_check": "clean"
+            "migration": "$MIG_STATUS",
+            "seed": "$SEED_STATUS",
+            "alembic_check": "$ALEMBIC_STATUS"
           }
           EOF
 
@@ -520,13 +526,14 @@ jobs:
         if: always()
         run: |
           mkdir -p backend/benchmark_reports
+          E2E_STATUS="${{ job.status == 'success' && 'completed' || 'failed' }}"
           cat > backend/benchmark_reports/rc_browser_e2e_report.json <<EOF
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "tool": "playwright",
             "browser": "chromium",
-            "status": "completed"
+            "status": "$E2E_STATUS"
           }
           EOF
 
@@ -744,18 +751,19 @@ jobs:
           TESTING: 'false'
         run: |
           cd backend
-          python scripts/ci/run_v11_fault_matrix.py
+          python scripts/ci/run_v12_fault_matrix.py
 
       - name: Generate disconnect-replay report
         if: always()
         run: |
           mkdir -p backend/benchmark_reports
+          DR_STATUS="${{ job.status == 'success' && 'completed' || 'failed' }}"
           cat > backend/benchmark_reports/rc_disconnect_replay_report.json <<EOF
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "test_type": "disconnect_replay",
-            "status": "completed"
+            "status": "$DR_STATUS"
           }
           EOF
 
@@ -820,7 +828,7 @@ jobs:
           MYSQL_DATABASE: medical_ai_rc
         run: |
           cd backend
-          python scripts/migrate_v11.py
+          python scripts/migrate.py
           alembic check
 
       - name: Downgrade and upgrade cycle
@@ -840,13 +848,16 @@ jobs:
         if: always()
         run: |
           mkdir -p backend/benchmark_reports
+          FM_STATUS="${{ job.status == 'success' && 'success' || 'failed' }}"
+          DU_STATUS="${{ job.status == 'success' && 'success' || 'failed' }}"
+          ALEMBIC_STATUS="${{ job.status == 'success' && 'clean' || 'failed' }}"
           cat > backend/benchmark_reports/rc_migration_verify_report.json <<EOF
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "fresh_migration": "success",
-            "downgrade_upgrade_cycle": "success",
-            "alembic_check": "clean"
+            "fresh_migration": "$FM_STATUS",
+            "downgrade_upgrade_cycle": "$DU_STATUS",
+            "alembic_check": "$ALEMBIC_STATUS"
           }
           EOF
 
@@ -891,7 +902,11 @@ jobs:
             "candidate_sha": "$CANDIDATE_SHA",
             "timestamp": "$TIMESTAMP",
             "execution_mode": "live",
-            "release_eligible": true,
+            "release_eligible": $([ "${{ needs.72-case-live.result }}" = "success" ] && \
+              [ "${{ needs.browser-e2e.result }}" = "success" ] && \
+              [ "${{ needs.dual-load.result }}" = "success" ] && \
+              [ "${{ needs.disconnect-replay.result }}" = "success" ] && \
+              [ "${{ needs.migration-verify.result }}" = "success" ] && echo "true" || echo "false"),
             "gates": {
               "72-case-live": "${{ needs.72-case-live.result }}",
               "browser-e2e": "${{ needs.browser-e2e.result }}",

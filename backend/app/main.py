@@ -4,6 +4,10 @@ import traceback
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+# Patch starlette BaseHTTPMiddleware to prevent MemoryObjectReceiveStream leaks
+# Must be imported before any @app.middleware("http") decorator runs.
+import app._starlette_patch  # noqa: F401
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError

@@ -120,7 +120,7 @@ class LLMResponseCache:
             if value is not None:
                 await _incr_counter(REDIS_KEY_HITS)
                 logger.debug(f"LLM 缓存命中: key={cache_key}")
-                return value
+                return str(value) if value is not None else None
             else:
                 await _incr_counter(REDIS_KEY_MISSES)
                 logger.debug(f"LLM 缓存未命中: key={cache_key}")

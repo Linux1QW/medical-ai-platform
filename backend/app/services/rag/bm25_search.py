@@ -247,17 +247,19 @@ def _build_legacy_bm25_index() -> BM25Index:
 def _load_generation_candidate(
     generation: str, artifact_root: Optional[Path]
 ) -> BM25Index:
+    from typing import cast
+
     from app.services.rag.lexical.artifacts import (
         BM25ArtifactNotFound,
         load_bm25_artifact,
     )
 
     try:
-        return load_bm25_artifact(
+        return cast(BM25Index, load_bm25_artifact(
             generation,
             _artifact_root(artifact_root),
             mmap=True,
-        )
+        ))
     except BM25ArtifactNotFound:
         if not settings.RAG_LEGACY_COLLECTION_FALLBACK:
             raise

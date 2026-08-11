@@ -85,6 +85,21 @@ def validate_manifest(manifest: SkillManifest) -> list[str]:
     """
     errors: list[str] = []
 
+    # Extract validations into helper functions to reduce complexity
+    errors.extend(_validate_name_and_version(manifest))
+    errors.extend(_validate_allowed_agents(manifest))
+    errors.extend(_validate_context_views(manifest))
+    errors.extend(_validate_read_only(manifest))
+    errors.extend(_validate_timeout(manifest))
+    errors.extend(_validate_budget_tokens(manifest))
+    errors.extend(_validate_budget_results(manifest))
+    errors.extend(_validate_parameters(manifest))
+
+    return errors
+
+
+def _validate_name_and_version(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 1. Name must be non-empty and alphanumeric + underscores
     if not manifest.name or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", manifest.name):
         errors.append(
@@ -97,7 +112,11 @@ def validate_manifest(manifest: SkillManifest) -> list[str]:
             f"Invalid version '{manifest.version}' for skill '{manifest.name}': "
             "must be semantic version (MAJOR.MINOR.PATCH)"
         )
+    return errors
 
+
+def _validate_allowed_agents(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 3. Allowed agents must be list of non-empty strings
     if not isinstance(manifest.allowed_agents, list):
         errors.append(f"'allowed_agents' for '{manifest.name}' must be a list")
@@ -107,7 +126,11 @@ def validate_manifest(manifest: SkillManifest) -> list[str]:
                 errors.append(
                     f"Invalid agent '{agent}' in allowed_agents for '{manifest.name}'"
                 )
+    return errors
 
+
+def _validate_context_views(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 4. Allowed context views must be in whitelist
     if not isinstance(manifest.allowed_context_views, list):
         errors.append(f"'allowed_context_views' for '{manifest.name}' must be a list")
@@ -118,32 +141,52 @@ def validate_manifest(manifest: SkillManifest) -> list[str]:
                     f"Unknown context_view '{view}' for skill '{manifest.name}': "
                     f"allowed values are {sorted(ALLOWED_CONTEXT_VIEWS)}"
                 )
+    return errors
 
+
+def _validate_read_only(manifest: SkillManifest) -> list[str]:
+    errors: list[str] = []
     # 5. read_only must be bool
     if not isinstance(manifest.read_only, bool):
         errors.append(f"'read_only' for '{manifest.name}' must be a boolean")
+    return errors
 
+
+def _validate_timeout(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 6. timeout_seconds within bounds
     if not (0.1 <= manifest.timeout_seconds <= MAX_TIMEOUT_SECONDS):
         errors.append(
             f"timeout_seconds={manifest.timeout_seconds} for '{manifest.name}' "
             f"out of range [0.1, {MAX_TIMEOUT_SECONDS}]"
         )
+    return errors
 
+
+def _validate_budget_tokens(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 7. budget_tokens within bounds
     if not (1 <= manifest.budget_tokens <= MAX_BUDGET_TOKENS):
         errors.append(
             f"budget_tokens={manifest.budget_tokens} for '{manifest.name}' "
             f"out of range [1, {MAX_BUDGET_TOKENS}]"
         )
+    return errors
 
+
+def _validate_budget_results(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 8. budget_results within bounds
     if not (1 <= manifest.budget_results <= MAX_RESULT_ITEMS):
         errors.append(
             f"budget_results={manifest.budget_results} for '{manifest.name}' "
             f"out of range [1, {MAX_RESULT_ITEMS}]"
         )
+    return errors
 
+
+def _validate_parameters(manifest: SkillManifest) -> list[str]:
+    errors = []
     # 9. Parameters schema validation
     if not isinstance(manifest.parameters, dict):
         errors.append(f"'parameters' for '{manifest.name}' must be a dict")
@@ -159,7 +202,6 @@ def validate_manifest(manifest: SkillManifest) -> list[str]:
                 errors.append(
                     f"Parameter '{param_name}' in '{manifest.name}' has invalid type '{ptype}'"
                 )
-
     return errors
 
 

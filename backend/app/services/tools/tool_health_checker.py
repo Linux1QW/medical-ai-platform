@@ -62,7 +62,8 @@ class DegradedResultBuilder:
         """构建降级结果"""
         builder = cls._builders.get(tool_name)
         if builder:
-            return builder()
+            result = builder()
+            return dict(result) if isinstance(result, dict) else {}
         # 默认降级结果
         return {
             "degraded": True,
@@ -78,7 +79,7 @@ class DegradedResultBuilder:
             result = builder()
             if fallback_data is not None:
                 result["fallback_data"] = fallback_data
-            return result
+            return dict(result) if isinstance(result, dict) else {}
         return {
             "degraded": True,
             "message": f"工具 '{tool_name}' 当前不可用",

@@ -99,7 +99,7 @@ class TokenTracker:
         except Exception as e:
             logger.debug(f"Token 用量记录异常: {e}")
 
-    async def get_daily_usage(self, date_str: str = None) -> dict:
+    async def get_daily_usage(self, date_str: Optional[str] = None) -> dict:
         """获取某天的 Token 用量统计"""
         redis = await _get_redis()
         if redis is None:
@@ -230,7 +230,7 @@ class TokenTracker:
             logger.debug(f"聚合 run 用量异常: {e}")
         return summary
 
-    async def check_budget(self, daily_limit: float = None) -> dict:
+    async def check_budget(self, daily_limit: Optional[float] = None) -> dict:
         """检查是否超出每日预算"""
         limit = daily_limit or settings.TOKEN_DAILY_LIMIT
         usage = await self.get_daily_usage()

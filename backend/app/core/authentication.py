@@ -47,7 +47,7 @@ def _decode_access_token(token: str) -> Optional[dict]:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if payload.get("type") != "access":
             return None
-        return payload
+        return dict(payload)
     except JWTError:
         return None
 

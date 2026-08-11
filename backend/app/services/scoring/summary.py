@@ -180,7 +180,7 @@ class SummaryGenerator:
             if "未生成总分" not in summary and "证据不足" not in summary and "人工复核" not in summary:
                 summary = "本次因证据不足/人工复核未生成总分。" + summary
 
-        return summary
+        return str(summary)
 
     async def _llm_summary(self, dimensions, total_score) -> str:
         """调用 LLM 生成摘要"""
@@ -214,7 +214,7 @@ class SummaryGenerator:
         summary = data.get("summary", "")
         if not summary:
             raise ValueError("LLM summary 为空")
-        return summary
+        return str(summary)
 
     def _fallback_summary(self, dimensions, total_score) -> str:
         """确定性降级摘要 — 覆盖五个维度，正确表达各种状态"""

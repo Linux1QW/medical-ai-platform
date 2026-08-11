@@ -54,7 +54,8 @@ def _build_livekit_token(
         )
         .with_ttl(ttl)
     )
-    return token.to_jwt()
+    jwt_str = token.to_jwt()
+    return str(jwt_str)
 
 
 @dataclass

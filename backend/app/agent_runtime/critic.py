@@ -171,122 +171,17 @@ class CriticAgent:
             f"{suggestion.suggested_question} {suggestion.rationale_summary}".lower()
         )
 
-        # Check 1: Hidden-fact leakage
-        for pattern in HIDDEN_FACT_PATTERNS:
-            if pattern.lower() in text_to_check:
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="hidden_leak",
-                        message=f"Hidden fact pattern detected: {pattern}",
-                    )
-                )
-
-        # Check 2: Direct diagnostic phrasing
-        for pattern in DIAGNOSTIC_PATTERNS:
-            if re.search(pattern, suggestion.suggested_question, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="diagnostic",
-                        message="Direct diagnostic phrasing detected",
-                    )
-                )
-                break
-
-        # Check 3: Paraphrased diagnostic phrasing
-        for pattern in PARAPHRASED_DIAGNOSTIC_PATTERNS:
-            if re.search(pattern, suggestion.suggested_question, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="paraphrased_diagnostic",
-                        message="Paraphrased diagnostic phrasing detected",
-                    )
-                )
-                break
-
-        # Check 4: Medication instructions
-        for pattern in MEDICATION_PATTERNS:
-            if re.search(pattern, suggestion.suggested_question, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="medication_instruction",
-                        message="Medication instruction detected",
-                    )
-                )
-                break
-
-        # Check 5: Emergency claims
-        for pattern in EMERGENCY_PATTERNS:
-            if re.search(pattern, text_to_check, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="emergency_claim",
-                        message="Emergency claim detected",
-                    )
-                )
-                break
-
-        # Check 6: Hidden label markers
-        for pattern in HIDDEN_LABEL_PATTERNS:
-            if re.search(pattern, text_to_check, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="hidden_label",
-                        message="Hidden label marker detected",
-                    )
-                )
-                break
-
-        # Check 7: Unsupported citations
-        if suggestion.citation_ids and not evidence_results:
-            findings.append(
-                CriticFinding(
-                    severity="warning",
-                    category="unsupported_citation",
-                    message="Citations present but no evidence results to support them",
-                )
-            )
-
-        # Check 8: Prompt injection
-        for pattern in PROMPT_INJECTION_PATTERNS:
-            if re.search(pattern, text_to_check, re.IGNORECASE):
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="prompt_injection",
-                        message="Prompt injection pattern detected",
-                    )
-                )
-                break
-
-        # Check 9: Forbidden tools
-        if available_tools:
-            for tool in suggestion.targeted_slots:
-                if tool.lower() in [t.lower() for t in FORBIDDEN_TOOLS]:
-                    findings.append(
-                        CriticFinding(
-                            severity="error",
-                            category="forbidden_tool",
-                            message=f"Forbidden tool referenced: {tool}",
-                        )
-                    )
-
-        # Check 10: Schema mismatch
-        suggestion_dict = suggestion.model_dump()
-        for required_field in REQUIRED_SCHEMA_FIELDS:
-            if required_field not in suggestion_dict or suggestion_dict[required_field] is None:
-                findings.append(
-                    CriticFinding(
-                        severity="error",
-                        category="schema_mismatch",
-                        message=f"Required field missing: {required_field}",
-                    )
-                )
+        # Extract checks into separate methods to reduce complexity
+        findings.extend(self._check_hidden_fact_leakage(text_to_check))
+        findings.extend(self._check_diagnostic_phrasing(suggestion.suggested_question))
+        findings.extend(self._check_paraphrased_diagnostic(suggestion.suggested_question))
+        findings.extend(self._check_medication_instructions(suggestion.suggested_question))
+        findings.extend(self._check_emergency_claims(text_to_check))
+        findings.extend(self._check_hidden_labels(text_to_check))
+        findings.extend(self._check_unsupported_citations(suggestion, evidence_results))
+        findings.extend(self._check_prompt_injection(text_to_check))
+        findings.extend(self._check_forbidden_tools(suggestion, available_tools))
+        findings.extend(self._check_schema_mismatch(suggestion))
 
         # Calculate risk from findings, never hard-coded
         risk_level = self._calculate_risk(findings)
@@ -298,6 +193,150 @@ class CriticAgent:
             risk_level=risk_level,
             error_code=COACH_POLICY_BLOCKED if has_errors else None,
         )
+
+    def _check_hidden_fact_leakage(self, text_to_check: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in HIDDEN_FACT_PATTERNS:
+            if pattern.lower() in text_to_check:
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="hidden_leak",
+                        message=f"Hidden fact pattern detected: {pattern}",
+                    )
+                )
+        return findings
+
+    def _check_diagnostic_phrasing(self, question: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in DIAGNOSTIC_PATTERNS:
+            if re.search(pattern, question, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="diagnostic",
+                        message="Direct diagnostic phrasing detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_paraphrased_diagnostic(self, question: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in PARAPHRASED_DIAGNOSTIC_PATTERNS:
+            if re.search(pattern, question, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="paraphrased_diagnostic",
+                        message="Paraphrased diagnostic phrasing detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_medication_instructions(self, question: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in MEDICATION_PATTERNS:
+            if re.search(pattern, question, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="medication_instruction",
+                        message="Medication instruction detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_emergency_claims(self, text_to_check: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in EMERGENCY_PATTERNS:
+            if re.search(pattern, text_to_check, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="emergency_claim",
+                        message="Emergency claim detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_hidden_labels(self, text_to_check: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in HIDDEN_LABEL_PATTERNS:
+            if re.search(pattern, text_to_check, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="hidden_label",
+                        message="Hidden label marker detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_unsupported_citations(
+        self,
+        suggestion: CoachSuggestion,
+        evidence_results: list[dict[str, Any]] | None,
+    ) -> list[CriticFinding]:
+        if suggestion.citation_ids and not evidence_results:
+            return [
+                CriticFinding(
+                    severity="warning",
+                    category="unsupported_citation",
+                    message="Citations present but no evidence results to support them",
+                )
+            ]
+        return []
+
+    def _check_prompt_injection(self, text_to_check: str) -> list[CriticFinding]:
+        findings = []
+        for pattern in PROMPT_INJECTION_PATTERNS:
+            if re.search(pattern, text_to_check, re.IGNORECASE):
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="prompt_injection",
+                        message="Prompt injection pattern detected",
+                    )
+                )
+                break
+        return findings
+
+    def _check_forbidden_tools(
+        self,
+        suggestion: CoachSuggestion,
+        available_tools: list[str] | None,
+    ) -> list[CriticFinding]:
+        findings = []
+        if available_tools:
+            for tool in suggestion.targeted_slots:
+                if tool.lower() in [t.lower() for t in FORBIDDEN_TOOLS]:
+                    findings.append(
+                        CriticFinding(
+                            severity="error",
+                            category="forbidden_tool",
+                            message=f"Forbidden tool referenced: {tool}",
+                        )
+                    )
+        return findings
+
+    def _check_schema_mismatch(self, suggestion: CoachSuggestion) -> list[CriticFinding]:
+        findings = []
+        suggestion_dict = suggestion.model_dump()
+        for required_field in REQUIRED_SCHEMA_FIELDS:
+            if required_field not in suggestion_dict or suggestion_dict[required_field] is None:
+                findings.append(
+                    CriticFinding(
+                        severity="error",
+                        category="schema_mismatch",
+                        message=f"Required field missing: {required_field}",
+                    )
+                )
+        return findings
 
     def _calculate_risk(self, findings: list[CriticFinding]) -> str:
         """Calculate risk level from findings.

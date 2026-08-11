@@ -617,7 +617,7 @@ def list_index_versions() -> list[str]:
     return versions
 
 
-def get_collection_count(collection_name: str = None) -> int:
+def get_collection_count(collection_name: Optional[str] = None) -> int:
     """获取指定 collection 的文档数"""
     store = get_medical_store()
     client = store._ensure_client()

@@ -37,8 +37,8 @@ def get_user_permissions(user: User) -> list[str]:
     若未设置则回退到角色默认权限。
     """
     if user.permissions:
-        return user.permissions
-    return PERMISSIONS.get(user.role, [])
+        return list(user.permissions)
+    return list(PERMISSIONS.get(user.role, []))
 
 
 def require_permission(permission: str):

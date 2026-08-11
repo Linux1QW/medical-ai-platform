@@ -45,7 +45,8 @@ async def _get_cached_summary(key: str) -> str | None:
         r = await _get_redis()
         if r is None:
             return None
-        return await r.get(key)
+        value = await r.get(key)
+        return str(value) if value is not None else None
     except Exception as e:
         logger.debug(f"评估摘要缓存读取失败（忽略）: {e}")
         return None

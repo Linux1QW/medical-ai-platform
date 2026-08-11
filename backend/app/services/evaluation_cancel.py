@@ -175,7 +175,8 @@ async def _get_task_id_for_key(key: str) -> str | None:
             r = await _get_redis()
         if r is None:
             return None
-        return await r.get(_task_key(key))
+        task_id = await r.get(_task_key(key))
+        return str(task_id) if task_id is not None else None
     except Exception as e:
         logger.debug(f"task_id 查询异常: {e}")
         return None

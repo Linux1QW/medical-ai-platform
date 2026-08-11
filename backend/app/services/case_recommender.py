@@ -170,7 +170,8 @@ async def _estimate_target_difficulty(db: AsyncSession, doctor_id: int) -> float
         # 平均分 <50 → 推荐难度 2-3（基础练习）
         ability = avg_score / 100  # 0-1
         target = ability * 10 + 1.5  # 略高于当前能力
-        return min(max(target, 1.0), 10.0)
+        result = min(max(target, 1.0), 10.0)
+        return float(result)
     except Exception as e:
         logger.warning(f"Failed to estimate target difficulty: {e}")
         return 5.0

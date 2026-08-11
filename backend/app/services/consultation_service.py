@@ -55,7 +55,7 @@ async def _get_consultation_or_raise(
 async def list_consultations(
     db: AsyncSession,
     doctor_id: Optional[int] = None,
-    filters: Dict = None,
+    filters: Optional[Dict] = None,
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> List[Dict]:

@@ -193,7 +193,8 @@ class MCPDemoServer:
         handler = self._tools.get(tool_name)
         if handler is None:
             return {"error": f"Unknown tool: {tool_name}", "data": None}
-        return handler(arguments)
+        result = handler(arguments)
+        return dict(result) if isinstance(result, dict) else {}
 
     def _search_teaching_rubric(self, args: dict[str, Any]) -> dict[str, Any]:
         """Search teaching rubric fixtures."""

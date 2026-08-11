@@ -147,7 +147,7 @@ def _make_wrapper(node_fn: Any, deps: CoachDependencies) -> Any:
             new_refs = result["trace_refs"]
             merged = existing + [r for r in new_refs if r not in existing]
             result["trace_refs"] = merged
-        return result
+        return dict(result) if isinstance(result, dict) else {}
 
     return wrapper
 

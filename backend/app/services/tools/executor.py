@@ -300,8 +300,9 @@ class ToolExecutorBridge:
         self.budget = budget
 
     async def execute(self, tool_name: str, arguments_json: str) -> dict:
-        return await self.executor.execute(
+        result = await self.executor.execute(
             tool_name, arguments_json,
             context=self.context,
             budget=self.budget,
         )
+        return dict(result) if isinstance(result, dict) else {}

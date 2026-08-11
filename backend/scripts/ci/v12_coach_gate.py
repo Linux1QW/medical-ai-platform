@@ -19,13 +19,13 @@ _BACKEND = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from evaluation.coach_cases.coach_dataset import load_cases, validate_dataset
-from evaluation.coach_eval import (
+from evaluation.coach_cases.coach_dataset import load_cases, validate_dataset  # noqa: E402
+from evaluation.coach_eval import (  # noqa: E402
     build_report,
     evaluate_all,
     evaluate_release_policy,
 )
-from evaluation.coach_metrics import collect_provenance, validate_provenance
+from evaluation.coach_metrics import collect_provenance, validate_provenance  # noqa: E402
 
 
 def run_gate(

@@ -311,7 +311,8 @@ async def load_evaluation_state(
         if redis:
             data = await redis.get(f"eval_checkpoint:{evaluation_id}")
             if data:
-                return json.loads(data)
+                result = json.loads(data)
+                return dict(result) if isinstance(result, dict) else None
     except Exception as e:
         logger.warning(f"Failed to load checkpoint from Redis: {e}")
 
@@ -326,8 +327,9 @@ async def load_evaluation_state(
         state_json = result.scalar_one_or_none()
         if state_json is not None:
             if isinstance(state_json, str):
-                return json.loads(state_json)
-            return state_json
+                parsed = json.loads(state_json)
+                return dict(parsed) if isinstance(parsed, dict) else None
+            return dict(state_json) if isinstance(state_json, dict) else None
     except Exception as e:
         logger.warning(f"Failed to load checkpoint from DB: {e}")
 

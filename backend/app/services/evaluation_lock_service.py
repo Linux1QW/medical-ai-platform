@@ -64,7 +64,7 @@ async def update_lock_status(
     db: AsyncSession,
     consultation_id: int,
     new_status: str,
-    error_message: str = None,
+    error_message: Optional[str] = None,
 ) -> bool:
     """更新锁状态（带状态机校验）"""
     result = await db.execute(

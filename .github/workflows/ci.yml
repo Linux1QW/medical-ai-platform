@@ -59,10 +59,14 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov httpx
 
-      - name: Run mypy type check (blocking)
+      - name: Run mypy
         run: |
           cd backend
           python -m mypy app
+
+      - name: Run Ruff
+        run: |
+          python -m ruff check backend
 
       - name: Run tests with coverage
         env:
@@ -276,11 +280,11 @@ jobs:
 
       - name: Install linting tools
         run: |
-          pip install ruff
+          pip install ruff mypy
 
-      - name: Run ruff
+      - name: Run Ruff
         run: |
-          ruff check backend/
+          python -m ruff check backend
 
       - name: Check patch whitespace
         shell: bash

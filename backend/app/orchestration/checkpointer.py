@@ -12,7 +12,7 @@ _checkpointer = None
 _exit_stack: Optional[AsyncExitStack] = None
 
 
-async def init_checkpointer(redis_url: str = None, ttl: int = None):
+async def init_checkpointer(redis_url: Optional[str] = None, ttl: Optional[int] = None):
     """初始化 Redis Checkpointer（在 FastAPI lifespan 中调用）
 
     Returns:

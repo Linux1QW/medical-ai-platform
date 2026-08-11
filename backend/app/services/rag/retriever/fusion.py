@@ -190,7 +190,7 @@ def reciprocal_rank_fusion(
         sparse=[],
         top_k=top_k,
     )
-    return fused
+    return list(fused)
 
 
 async def hybrid_recall(

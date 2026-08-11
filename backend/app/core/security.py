@@ -16,14 +16,14 @@ def normalize_password(password: str) -> str:
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(normalize_password(password))
+    return str(pwd_context.hash(normalize_password(password)))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     normalized_password = normalize_password(plain_password)
     if pwd_context.verify(normalized_password, hashed_password):
         return True
-    return pwd_context.verify(plain_password, hashed_password)
+    return bool(pwd_context.verify(plain_password, hashed_password))
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -33,7 +33,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     to_encode.update({"exp": expire, "type": "access", "jti": jti})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return str(jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
 
 
 def create_refresh_token(data: dict) -> str:
@@ -42,7 +42,7 @@ def create_refresh_token(data: dict) -> str:
     jti = str(uuid.uuid4())
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire, "type": "refresh", "jti": jti})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return str(jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
 
 
 def decode_access_token(token: str) -> Optional[dict]:
@@ -50,7 +50,7 @@ def decode_access_token(token: str) -> Optional[dict]:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if payload.get("type") != "access":
             return None
-        return payload
+        return dict(payload)
     except JWTError:
         return None
 
@@ -61,7 +61,7 @@ def verify_refresh_token(token: str) -> Optional[dict]:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if payload.get("type") != "refresh":
             return None
-        return payload
+        return dict(payload)
     except JWTError:
         return None
 
@@ -73,7 +73,8 @@ def get_token_jti(token: str) -> Optional[str]:
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
             options={"verify_exp": False},
         )
-        return payload.get("jti")
+        jti = payload.get("jti")
+        return str(jti) if jti is not None else None
     except JWTError:
         return None
 

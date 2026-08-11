@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── 1. 全新库无 operator ────────────────────────────────────────────────────
 
@@ -69,11 +69,13 @@ class TestMigrateExistingDatabase:
             patch("scripts.migrate_v11._run_command") as mock_cmd,
             patch("scripts.migrate_v11._get_current_revision", return_value="2b3c4d5e6f7a"),
             patch("scripts.migrate_v11._count_backfill_candidates", return_value={"null_run_id": 5, "orphans": 0, "ambiguous": 0}),
+            patch("scripts.backfill_legacy_evaluation_runs.main_async", new_callable=AsyncMock, return_value=0) as mock_backfill,
         ):
             mock_cmd.return_value = MagicMock(returncode=0)
             exit_code = run_migration(operator_id="admin-1", batch_size=100, dry_run=False)
 
         assert exit_code == 0
+        mock_backfill.assert_awaited_once()
 
 
 # ── 3. 缺 operator 失败 ─────────────────────────────────────────────────────

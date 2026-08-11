@@ -155,4 +155,5 @@ async def cleanup_unreported_runs(
     run_result = await db.execute(
         delete(EvaluationRun).where(EvaluationRun.id.in_(run_ids))
     )
-    return run_result.rowcount
+    count = run_result.rowcount
+    return int(count) if count is not None else 0

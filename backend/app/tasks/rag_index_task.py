@@ -73,7 +73,8 @@ class RedisIndexBuildLock:
         )
 
     def is_owned_by(self, task_id: str) -> bool:
-        return self.redis.get(RAG_INDEX_BUILD_LOCK) == task_id
+        result = self.redis.get(RAG_INDEX_BUILD_LOCK)
+        return bool(result == task_id)
 
     def release(self, task_id: str) -> bool:
         return bool(

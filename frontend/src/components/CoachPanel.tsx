@@ -100,6 +100,7 @@ export const CoachPanel: React.FC<CoachPanelProps> = ({
             aria-label="教练输入框"
           />
           <button
+            data-testid="coach-request-btn"
             onClick={handleHintRequest}
             disabled={!pendingText.trim() || disabled}
             style={{
@@ -150,6 +151,7 @@ export const CoachPanel: React.FC<CoachPanelProps> = ({
               填入输入框
             </button>
             <button
+              data-testid="coach-accept-btn"
               onClick={() => handleFeedback({ feedback: 'accepted' })}
               style={{ padding: '4px 12px', borderRadius: 4 }}
               title="采纳该建议"
@@ -157,6 +159,7 @@ export const CoachPanel: React.FC<CoachPanelProps> = ({
               👍 有用
             </button>
             <button
+              data-testid="coach-reject-btn"
               onClick={() => handleFeedback({ feedback: 'rejected' })}
               style={{ padding: '4px 12px', borderRadius: 4 }}
               title="不采纳该建议"

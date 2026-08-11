@@ -49,6 +49,35 @@ export interface CoachTraceNode {
   safe_message: string | null;
 }
 
+export interface CoachTraceSession {
+  session_id: string;
+  consultation_id: number;
+  status: string;
+  created_at: string | null;
+}
+
+export interface CoachTraceDecision {
+  decision_id: string;
+  agent: string;
+  action: string;
+  rationale: string | null;
+  timestamp: string | null;
+}
+
+export interface CoachTraceEvent {
+  event_id: string;
+  agent: string;
+  event_type: string;
+  message: string | null;
+  timestamp: string | null;
+}
+
+export interface CoachTraceResponse {
+  session: CoachTraceSession | null;
+  decisions: CoachTraceDecision[];
+  events: CoachTraceEvent[];
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function getAuthHeaders(): Record<string, string> {
@@ -74,14 +103,16 @@ export async function submitFeedback(
 }
 
 /** Fetch sanitised agent trace projection (admin only). */
-export async function getCoachTrace(consultationId: number): Promise<CoachTraceNode[]> {
-  return request.get(`${API_BASE}/consultations/${consultationId}/trace`);
+export async function getCoachTrace(consultationId: number): Promise<CoachTraceResponse> {
+  return request.get(
+    `/admin/consultations/${consultationId}/trace`,
+  ) as Promise<CoachTraceResponse>;
 }
 
 // ── SSE stream (uses fetch with auth token) ──────────────────────────────────
 
 export interface CoachStreamCallbacks {
-  onEvent: (event: CoachSSEEvent) => void;
+  onEvent: (event: CoachSSEEvent, id?: string) => void;
   onError?: (error: Error) => void;
 }
 
@@ -138,12 +169,12 @@ export function createCoachSSEStream(
         const events = parser.push(chunk);
 
         for (const evt of events) {
-          handleSSEEvent(evt.event, evt.data, callbacks);
+          handleSSEEvent(evt.event, evt.data, callbacks, evt.id);
         }
       }
       // Flush any remaining event
       for (const evt of parser.flush()) {
-        handleSSEEvent(evt.event, evt.data, callbacks);
+        handleSSEEvent(evt.event, evt.data, callbacks, evt.id);
       }
     } finally {
       reader.releaseLock();
@@ -163,6 +194,7 @@ function handleSSEEvent(
   eventType: string,
   rawData: unknown,
   callbacks: CoachStreamCallbacks,
+  eventId?: string,
 ): void {
   const data = (rawData ?? {}) as Record<string, unknown>;
 
@@ -172,25 +204,25 @@ function handleSSEEvent(
         type: 'thinking',
         turn_no: (data.turn_no as number) ?? 0,
         stage: (data.stage as string) ?? '',
-      });
+      }, eventId);
       break;
 
     case 'suggestion':
       callbacks.onEvent({
         type: 'suggestion',
         suggestion: data as unknown as CoachSuggestion,
-      });
+      }, eventId);
       break;
 
     case 'error':
       callbacks.onEvent({
         type: 'error',
         message: (data.message as string) ?? 'Unknown error',
-      });
+      }, eventId);
       break;
 
     case 'done':
-      callbacks.onEvent({ type: 'done' });
+      callbacks.onEvent({ type: 'done' }, eventId);
       break;
 
     default:

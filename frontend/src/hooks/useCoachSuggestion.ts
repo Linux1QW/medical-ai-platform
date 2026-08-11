@@ -68,7 +68,12 @@ export function useCoachSuggestion(consultationId: number): UseCoachSuggestionRe
       .catch(() => setStatus('error'));
   }, [consultationId]);
 
-  const handleSSEEvent = useCallback((event: CoachSSEEvent) => {
+  const handleSSEEvent = useCallback((event: CoachSSEEvent, id?: string) => {
+    // Track the latest event ID for SSE reconnection
+    if (id) {
+      lastEventIdRef.current = id;
+    }
+
     switch (event.type) {
       case 'thinking':
         setStatus('thinking');
@@ -86,8 +91,9 @@ export function useCoachSuggestion(consultationId: number): UseCoachSuggestionRe
         break;
 
       case 'done':
-        // Stream finished — release the idempotency key
+        // Stream finished — release the idempotency key and reset event ID
         idempotencyKeyRef.current = null;
+        lastEventIdRef.current = undefined;
         break;
     }
   }, []);

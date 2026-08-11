@@ -88,4 +88,17 @@ describe('CoachPanel', () => {
     expect(screen.getByText('正在分析...')).toBeInTheDocument();
     expect(screen.getByText('正在分析您的问诊内容...')).toBeInTheDocument();
   });
+
+  it('has stable test ID on request button', () => {
+    setupHook({ status: 'idle' });
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
+    expect(screen.getByTestId('coach-request-btn')).toBeInTheDocument();
+  });
+
+  it('has stable test IDs on accept/reject buttons when suggestion is shown', () => {
+    setupHook({ status: 'suggestion', suggestion: mockSuggestion });
+    render(<CoachPanel consultationId={1} onApplySuggestion={vi.fn()} />);
+    expect(screen.getByTestId('coach-accept-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('coach-reject-btn')).toBeInTheDocument();
+  });
 });

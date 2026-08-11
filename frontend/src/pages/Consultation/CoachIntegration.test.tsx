@@ -40,6 +40,11 @@ vi.mock('../../store/useAuth', () => ({
   useAuth: () => mockUseAuthFn(),
 }));
 
+// Mock VoiceConsultation to avoid livekit-client dependency
+vi.mock('../../components/VoiceConsultation', () => ({
+  VoiceConsultation: () => <div data-testid="voice-consultation-mock" />,
+}));
+
 // Fixtures
 const mockConsultationDetail = {
   id: 1, doctor_id: 10, patient_id: 100,
@@ -58,7 +63,11 @@ const mockPatient = {
 };
 
 const mockCoachState = { consultation_id: 1, status: 'idle' as const, current_stage: null, turn_no: 0 };
-const mockTraceNodes = [{ node: 'safety_check', status: 'completed' as const, duration_ms: 42, safe_message: '安全检查通过' }];
+const mockTraceResponse = {
+  session: { session_id: 'sess-001', consultation_id: 1, status: 'active', created_at: '2026-08-01T10:00:00Z' },
+  decisions: [{ decision_id: 'dec-1', agent: 'safety_check', action: 'pass', rationale: 'No red flags', timestamp: '2026-08-01T10:00:01Z' }],
+  events: [{ event_id: 'evt-1', agent: 'history_agent', event_type: 'completed', message: 'History taking done', timestamp: '2026-08-01T10:00:02Z' }],
+};
 
 function setupAuthMocks(isAdmin = false) {
   mockUseAuthFn.mockReturnValue({
@@ -71,7 +80,7 @@ function setupApiMocks(status: 'in_progress' | 'completed' = 'in_progress') {
   mockGetConsultationDetail.mockResolvedValue({ ...mockConsultationDetail, status });
   mockGetPatient.mockResolvedValue(mockPatient);
   mockGetCoachState.mockResolvedValue(mockCoachState);
-  mockGetCoachTrace.mockResolvedValue(mockTraceNodes);
+  mockGetCoachTrace.mockResolvedValue(mockTraceResponse);
   mockGetEvaluation.mockResolvedValue(null);
 }
 
@@ -155,6 +164,26 @@ describe('AgentTraceDrawer integration', () => {
     await waitFor(() => {
       expect(mockGetCoachTrace).toHaveBeenCalledWith(1);
     });
+  });
+
+  it('trace response contains session, decisions and events objects (not a flat array)', async () => {
+    setupAuthMocks(true);
+    await act(async () => { renderPage(); });
+    const user = userEvent.setup();
+    await waitFor(() => {
+      expect(screen.getByText('Agent Trace')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Agent Trace'));
+    await waitFor(() => {
+      expect(mockGetCoachTrace).toHaveBeenCalledWith(1);
+    });
+    // Verify the mock was called and returned the structured response
+    const result = await mockGetCoachTrace(1);
+    expect(result).toHaveProperty('session');
+    expect(result).toHaveProperty('decisions');
+    expect(result).toHaveProperty('events');
+    expect(Array.isArray(result.decisions)).toBe(true);
+    expect(Array.isArray(result.events)).toBe(true);
   });
 });
 

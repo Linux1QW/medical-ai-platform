@@ -23,14 +23,15 @@ def upgrade() -> None:
     )
     # backfill public_id with uuid for existing rows (MySQL-safe: Python parameterized)
     bind = op.get_bind()
-    rows = bind.execute(
-        sa.text("SELECT id FROM coach_sessions WHERE public_id IS NULL")
-    ).mappings().all()
-    for row in rows:
-        bind.execute(
-            sa.text("UPDATE coach_sessions SET public_id=:public_id WHERE id=:id"),
-            {"public_id": str(uuid4()), "id": row["id"]},
-        )
+    if bind is not None:
+        rows = bind.execute(
+            sa.text("SELECT id FROM coach_sessions WHERE public_id IS NULL")
+        ).mappings().all()
+        for row in rows:
+            bind.execute(
+                sa.text("UPDATE coach_sessions SET public_id=:public_id WHERE id=:id"),
+                {"public_id": str(uuid4()), "id": row["id"]},
+            )
     op.alter_column(
         "coach_sessions", "public_id",
         existing_type=sa.String(36), nullable=False,
@@ -58,26 +59,27 @@ def upgrade() -> None:
     )
     # backfill (MySQL-safe: Python parameterized)
     bind = op.get_bind()
-    rows = bind.execute(
-        sa.text("SELECT id FROM coach_decisions WHERE suggestion_id IS NULL")
-    ).mappings().all()
-    for row in rows:
-        bind.execute(
-            sa.text(
-                "UPDATE coach_decisions SET suggestion_id=:suggestion_id WHERE id=:id"
-            ),
-            {"suggestion_id": str(uuid4()), "id": row["id"]},
-        )
-    rows = bind.execute(
-        sa.text("SELECT id FROM coach_decisions WHERE idempotency_key IS NULL")
-    ).mappings().all()
-    for row in rows:
-        bind.execute(
-            sa.text(
-                "UPDATE coach_decisions SET idempotency_key=:idempotency_key WHERE id=:id"
-            ),
-            {"idempotency_key": f"legacy-{row['id']}", "id": row["id"]},
-        )
+    if bind is not None:
+        rows = bind.execute(
+            sa.text("SELECT id FROM coach_decisions WHERE suggestion_id IS NULL")
+        ).mappings().all()
+        for row in rows:
+            bind.execute(
+                sa.text(
+                    "UPDATE coach_decisions SET suggestion_id=:suggestion_id WHERE id=:id"
+                ),
+                {"suggestion_id": str(uuid4()), "id": row["id"]},
+            )
+        rows = bind.execute(
+            sa.text("SELECT id FROM coach_decisions WHERE idempotency_key IS NULL")
+        ).mappings().all()
+        for row in rows:
+            bind.execute(
+                sa.text(
+                    "UPDATE coach_decisions SET idempotency_key=:idempotency_key WHERE id=:id"
+                ),
+                {"idempotency_key": f"legacy-{row['id']}", "id": row["id"]},
+            )
     op.alter_column(
         "coach_decisions", "suggestion_id",
         existing_type=sa.String(36), nullable=False,

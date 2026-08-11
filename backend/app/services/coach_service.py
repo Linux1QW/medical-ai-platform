@@ -15,15 +15,11 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent_runtime.context import compile_coach_context
-from app.agent_runtime.contracts import (
-    CoachContextView,
-    VisibleMessage,
-    VisiblePatientProfile,
-)
-from app.agent_runtime.graph import build_coach_graph, invoke_coach_graph
+from app.agent_runtime.graph import invoke_coach_graph
 from app.core.config import settings
 from app.repositories.coach import CoachRepository
+from app.services.coach_context_builder import CoachContextBuilder
+from app.services.coach_runtime_factory import CoachRuntimeFactory
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +105,11 @@ class CoachService:
         latest_message: str,
         idempotency_key: str,
         last_event_id: str | None = None,
-        patient_age: int = 45,
-        patient_gender: str = "男",
-        chief_complaint: str = "问诊",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream coach suggestion via SSE events.
 
+        - Uses real CoachContextBuilder for context from database.
+        - Uses CoachRuntimeFactory for real model, evidence, checkpointer.
         - Durable idempotency via repository unique keys.
         - Last-Event-ID replay from persisted events.
         - Heartbeat comments every 15 seconds during long model calls.
@@ -174,33 +169,38 @@ class CoachService:
             "id": thinking_event.event_id,
         }
 
-        # 5. Build context and run graph with heartbeat
+        # 5. Build real context and run graph with heartbeat
         try:
-            context_view = CoachContextView(
-                consultation_id=consultation_id,
-                doctor_id=doctor_id,
-                visible_patient=VisiblePatientProfile(
-                    age=patient_age,
-                    gender=patient_gender,
-                    chief_complaint=chief_complaint,
-                ),
-                messages=[
-                    VisibleMessage(
-                        sequence=decision.turn_no,
-                        role="doctor",
-                        content=latest_message,
-                    ),
-                ],
+            # Load consultation from DB for real context
+            from sqlalchemy import select as sa_select
+
+            from app.models.consultation import Consultation as ConsultationModel
+
+            stmt = sa_select(ConsultationModel).where(
+                ConsultationModel.id == consultation_id
+            )
+            consult_result = await self.db.execute(stmt)
+            consultation = consult_result.scalar_one_or_none()
+            if consultation is None:
+                raise ValueError(f"Consultation id={consultation_id} not found")
+
+            # Build real context view from database
+            context_builder = CoachContextBuilder()
+            context_view = await context_builder.build(
+                self.db,
+                consultation,
+                doctor_id,
             )
 
-            compiled = compile_coach_context(context_view)
+            # Create production runtime (real checkpointer, gateway, evidence)
+            runtime_factory = CoachRuntimeFactory()
+            runtime = await runtime_factory.create()
 
             # Run graph with heartbeat
-            graph = build_coach_graph()
             graph_task = asyncio.create_task(
                 invoke_coach_graph(
-                    graph,
-                    context=compiled,
+                    runtime.graph,
+                    context=context_view,
                     latest_message=latest_message,
                     turn=decision.turn_no,
                     session_id=UUID(session.public_id),

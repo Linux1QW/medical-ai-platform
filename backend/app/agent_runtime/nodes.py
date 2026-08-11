@@ -17,6 +17,7 @@ from app.agent_runtime.critic import (
     CriticFinding,
     CriticResult,
 )
+from app.agent_runtime.model_gateway import CoachModelError
 from app.agent_runtime.state import (
     CoachGraphState,
     DraftSuggestion,
@@ -67,6 +68,9 @@ async def intent_node(state: CoachGraphState, *, gateway: Any = None) -> dict[st
                 max_tokens=256,
             )
             return {"intent_result": decision, "trace_refs": ["intent:model"]}
+        except CoachModelError as exc:
+            import logging
+            logging.getLogger(__name__).warning("Intent model error: %s", exc.error_code)
         except Exception:
             pass
 
@@ -105,12 +109,20 @@ async def planner_node(state: CoachGraphState, **_: Any) -> dict[str, Any]:
 
 
 async def evidence_node(state: CoachGraphState, *, evidence_fn: Any = None, **_: Any) -> dict[str, Any]:
-    """Retrieve evidence via skill executor (RAG)."""
+    """Retrieve evidence via async skill executor (RAG).
+
+    evidence_fn must be an async callable: (intent, message) -> list[dict].
+    Production retrieval failures are logged with stable trace, never silently
+    using demo data.
+    """
     if evidence_fn is None or state.intent_result is None:
         return {"evidence": [], "trace_refs": ["evidence:skip"]}
 
     try:
-        raw_items = evidence_fn(state.intent_result.intent, state.latest_message)
+        raw_items = await evidence_fn(
+            state.intent_result.intent,
+            state.latest_message,
+        )
         items = [
             EvidenceItem(
                 source=item.get("source", "unknown"),
@@ -121,7 +133,13 @@ async def evidence_node(state: CoachGraphState, *, evidence_fn: Any = None, **_:
             for item in raw_items
         ]
         return {"evidence": items, "trace_refs": ["evidence:retrieved"]}
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Evidence retrieval failed (intent=%s): %s",
+            state.intent_result.intent,
+            exc,
+        )
         return {"evidence": [], "trace_refs": ["evidence:error"]}
 
 
@@ -190,6 +208,9 @@ async def draft_node(state: CoachGraphState, *, gateway: Any = None, **_: Any) -
                 citation_ids=[e.doc_id for e in state.evidence[:3] if e.doc_id],
             )
             return {"draft": draft, "trace_refs": ["draft:model"]}
+        except CoachModelError as exc:
+            import logging
+            logging.getLogger(__name__).warning("Draft model error: %s", exc.error_code)
         except Exception:
             pass
 

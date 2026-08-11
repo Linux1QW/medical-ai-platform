@@ -314,6 +314,8 @@ class Settings(BaseSettings):
     COACH_OUTPUT_TOKEN_LIMIT: int = 250
     COACH_HARD_TIMEOUT_SECONDS: int = 8
     COACH_SSE_EVENT_TTL_SECONDS: int = 3_600
+    COACH_MODEL: str = ""
+    COACH_TEMPERATURE: float = 0.2
 
     # ── Voice（语音问诊，LiveKit）──────────────────────────────
     LIVEKIT_URL: Optional[str] = None

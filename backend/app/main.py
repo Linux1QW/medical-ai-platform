@@ -64,6 +64,17 @@ async def lifespan(app: FastAPI):
         ttl=settings.REDIS_CHECKPOINT_TTL,
     )
 
+    # Validate Coach production dependencies when COACH_ENABLED=true
+    if settings.COACH_ENABLED and not settings.TESTING:
+        from app.services.coach_runtime_factory import validate_production_dependencies
+
+        missing = validate_production_dependencies()
+        if missing:
+            raise RuntimeError(
+                f"Coach enabled but missing dependencies: {', '.join(missing)}"
+            )
+        logger.info("Coach production dependencies validated.")
+
     # 初始化 Progress Bus（Redis Pub/Sub 跨进程进度广播）
     import redis.asyncio as aioredis
 

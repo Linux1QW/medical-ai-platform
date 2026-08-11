@@ -63,6 +63,8 @@ class EvidenceAgent:
     - search_medical_kb
 
     All outputs are marked as untrusted evidence.
+    In production mode (use_demo_fallback=False), retrieval failures return
+    empty results with stable trace instead of demo data.
     """
 
     ALLOWED_SKILLS = {"search_teaching_rubric", "search_medical_kb"}
@@ -74,11 +76,13 @@ class EvidenceAgent:
         policy: SkillPolicy | None = None,
         retrieval_fn: RetrievalFn | None = None,
         rubric_fn: RubricFn | None = None,
+        use_demo_fallback: bool = True,
     ) -> None:
         self.registry = registry
         self.policy = policy or SkillPolicy()
         self._retrieval_fn = retrieval_fn
         self._rubric_fn = rubric_fn
+        self._use_demo_fallback = use_demo_fallback
 
     async def search(
         self, skill_name: str, query: str, **kwargs: Any
@@ -86,15 +90,19 @@ class EvidenceAgent:
         """Execute a search skill. Returns untrusted evidence envelope.
 
         Routes to real hybrid retrieval if retrieval_fn/rubric_fn is provided;
-        otherwise falls back to MCP demo fixtures.
+        in non-production mode falls back to MCP demo fixtures.
+        In production mode, returns empty results on failure.
         """
         if skill_name not in self.ALLOWED_SKILLS:
             return {"error": f"Skill '{skill_name}' not allowed for EvidenceAgent", "data": None}
 
         manifest: SkillManifest | None = self.registry.get(skill_name) if self.registry else None
         if manifest is None:
-            # No registry: demo mode
-            return self._demo_fallback(skill_name, query, **kwargs)
+            # No registry: demo mode only if allowed
+            if self._use_demo_fallback:
+                return self._demo_fallback(skill_name, query, **kwargs)
+            logger.warning("No skill registry for '%s' and demo fallback disabled", skill_name)
+            return {"data": [], "total": 0, "trace": "evidence:no_registry"}
 
         # Policy check
         decision = self.policy.check_execution(
@@ -113,7 +121,7 @@ class EvidenceAgent:
     # ── Routing ────────────────────────────────────────────────────────────
 
     async def _route(self, skill_name: str, query: str, **kwargs: Any) -> dict[str, Any]:
-        """Route to real retrieval or demo fallback."""
+        """Route to real retrieval or fallback based on configuration."""
         top_k = min(int(kwargs.get("top_k", 3)), 5)
 
         if skill_name == "search_medical_kb":
@@ -124,7 +132,11 @@ class EvidenceAgent:
                     return {"data": normalized, "total": len(normalized)}
                 except Exception as exc:
                     logger.warning("RAG retrieval failed for search_medical_kb: %s", exc)
-            return self._demo_fallback(skill_name, query, **kwargs)
+                    if not self._use_demo_fallback:
+                        return {"data": [], "total": 0, "trace": "evidence:retrieval_error"}
+            if self._use_demo_fallback:
+                return self._demo_fallback(skill_name, query, **kwargs)
+            return {"data": [], "total": 0, "trace": "evidence:no_retrieval_fn"}
 
         if skill_name == "search_teaching_rubric":
             stage = kwargs.get("stage")
@@ -135,7 +147,11 @@ class EvidenceAgent:
                     return {"data": normalized, "total": len(normalized)}
                 except Exception as exc:
                     logger.warning("Rubric retrieval failed for search_teaching_rubric: %s", exc)
-            return self._demo_fallback(skill_name, query, **kwargs)
+                    if not self._use_demo_fallback:
+                        return {"data": [], "total": 0, "trace": "evidence:rubric_error"}
+            if self._use_demo_fallback:
+                return self._demo_fallback(skill_name, query, **kwargs)
+            return {"data": [], "total": 0, "trace": "evidence:no_rubric_fn"}
 
         return {"data": [], "total": 0}
 

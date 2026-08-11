@@ -318,6 +318,7 @@ class Settings(BaseSettings):
     COACH_TEMPERATURE: float = 0.2
 
     # ── Voice（语音问诊，LiveKit）──────────────────────────────
+    VOICE_ENABLED: bool = False               # 默认关闭；无真实 LiveKit 环境时不得开启
     LIVEKIT_URL: Optional[str] = None
     LIVEKIT_API_KEY: Optional[SecretStr] = None
     LIVEKIT_API_SECRET: Optional[SecretStr] = None

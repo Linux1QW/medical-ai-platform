@@ -1,9 +1,12 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { Room, RoomEvent } from 'livekit-client';
+import request from '../utils/request';
 
 interface VoiceSession {
   session_id: string;
   room_name: string;
   room_token: string;
+  consultation_id: number;
   status: string;
   expires_at: number;
 }
@@ -14,6 +17,9 @@ interface VoiceConsultationProps {
   consultationId: number;
   doctorId?: number;
 }
+
+/** LiveKit server URL — read from Vite env or fallback to localhost. */
+const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL?.trim() || 'ws://localhost:7880';
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '未知语音服务错误';
@@ -26,62 +32,78 @@ export const VoiceConsultation: React.FC<VoiceConsultationProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [transcriptState, setTranscriptState] = useState<string>('等待连接...');
-  const roomRef = useRef<unknown>(null);
+  const roomRef = useRef<Room | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (roomRef.current) {
+        roomRef.current.disconnect();
+        roomRef.current = null;
+      }
+    };
+  }, []);
 
   const startSession = useCallback(async () => {
     setConnectionState('connecting');
     setError(null);
     setTranscriptState('正在创建会话...');
     try {
-      const res = await fetch('/api/v1/voice/sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('access_token') || ''}`,
-        },
-        body: JSON.stringify({ consultation_id: consultationId }),
+      // Use unified request client (reads sessionStorage token automatically)
+      const data = await request.post<{
+        session_id: string;
+        room_name: string;
+        room_token: string;
+        consultation_id: number;
+        status: string;
+        expires_at: number;
+      }>('/voice/sessions', { consultation_id: consultationId });
+
+      setSession(data as unknown as VoiceSession);
+
+      // Connect to LiveKit Room
+      const room = new Room();
+
+      // Listen for room events
+      room.on(RoomEvent.Disconnected, (reason) => {
+        setConnectionState('disconnected');
+        setTranscriptState(reason ? `已断开: ${reason}` : '已断开');
+        roomRef.current = null;
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(
-          body?.detail?.message || `Failed to create voice session: ${res.status}`
-        );
-      }
-      const data: VoiceSession = await res.json();
-      setSession(data);
+
+      room.on(RoomEvent.Reconnecting, () => {
+        setTranscriptState('正在重新连接...');
+      });
+
+      room.on(RoomEvent.Reconnected, () => {
+        setConnectionState('connected');
+        setTranscriptState('已重新连接');
+      });
+
+      // Attempt real connection
+      await room.connect(LIVEKIT_URL, (data as unknown as VoiceSession).room_token);
+      roomRef.current = room;
       setConnectionState('connected');
       setTranscriptState('已连接，等待语音输入...');
-
-      // In production: join LiveKit room with data.room_token
-      // import { Room } from 'livekit-client';
-      // const room = new Room();
-      // await room.connect(livekitUrl, data.room_token);
-      // roomRef.current = room;
     } catch (err: unknown) {
       setConnectionState('error');
       setError(getErrorMessage(err));
-      // Failed start must NOT falsely clear local session state
+      // Clean up room on failure
+      if (roomRef.current) {
+        roomRef.current.disconnect();
+        roomRef.current = null;
+      }
     }
   }, [consultationId]);
 
   const endSession = useCallback(async () => {
     if (!session) return;
     try {
-      const res = await fetch(`/api/v1/voice/sessions/${session.room_name}/end`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token') || ''}`,
-        },
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(
-          body?.detail?.message || `Failed to end voice session: ${res.status}`
-        );
-      }
-      // Only clear session state after successful end
+      await request.post(`/voice/sessions/${session.room_name}/end`);
+
+      // Disconnect LiveKit room
       if (roomRef.current) {
-        // (roomRef.current as Room).disconnect();
+        roomRef.current.disconnect();
         roomRef.current = null;
       }
       setSession(null);
@@ -98,17 +120,43 @@ export const VoiceConsultation: React.FC<VoiceConsultationProps> = ({
       await startSession();
       return;
     }
-    // Reconnect with existing token (if not expired)
+    // Disconnect existing room if any
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
+    }
     setConnectionState('connecting');
     setError(null);
     setTranscriptState('正在重新连接...');
     try {
-      // In production: rejoin LiveKit room
+      const room = new Room();
+
+      room.on(RoomEvent.Disconnected, (reason) => {
+        setConnectionState('disconnected');
+        setTranscriptState(reason ? `已断开: ${reason}` : '已断开');
+        roomRef.current = null;
+      });
+
+      room.on(RoomEvent.Reconnecting, () => {
+        setTranscriptState('正在重新连接...');
+      });
+
+      room.on(RoomEvent.Reconnected, () => {
+        setConnectionState('connected');
+        setTranscriptState('已重新连接');
+      });
+
+      await room.connect(LIVEKIT_URL, session.room_token);
+      roomRef.current = room;
       setConnectionState('connected');
       setTranscriptState('已重新连接');
     } catch (err: unknown) {
       setConnectionState('error');
       setError(getErrorMessage(err));
+      if (roomRef.current) {
+        roomRef.current.disconnect();
+        roomRef.current = null;
+      }
     }
   }, [session, startSession]);
 

@@ -1,14 +1,19 @@
-"""Tests for voice session management and voice agent."""
+"""Tests for voice session management, voice agent, session store, and worker."""
 from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.voice.agent import VoiceAgent, VoiceAgentConfig, VoiceTranscript
-from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSessionManager
+from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession, VoiceSessionManager
+from app.voice.session_store import (
+    VoiceSessionStoreMemory,
+    create_voice_store,
+)
+from app.voice.worker import VoiceWorker
 
 # ---------------------------------------------------------------------------
 # VoiceSession / VoiceSessionManager tests
@@ -307,3 +312,232 @@ class TestVoiceAgent:
         # But not in summary (only final)
         summary = agent.get_transcript_summary()
         assert summary == ""
+
+
+# ---------------------------------------------------------------------------
+# VoiceSessionStoreMemory tests
+# ---------------------------------------------------------------------------
+
+
+class TestVoiceSessionStoreMemory:
+    """Tests for the in-memory session store."""
+
+    def _run(self, coro):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_create_and_get(self) -> None:
+        store = VoiceSessionStoreMemory()
+        manager = VoiceSessionManager()
+        session = manager.create_session(consultation_id=1, doctor_id=1)
+
+        self._run(store.create(session))
+        fetched = self._run(store.get(session.room_name))
+        assert fetched is not None
+        assert fetched.room_name == session.room_name
+
+    def test_get_nonexistent(self) -> None:
+        store = VoiceSessionStoreMemory()
+        result = self._run(store.get("nonexistent"))
+        assert result is None
+
+    def test_end_session(self) -> None:
+        store = VoiceSessionStoreMemory()
+        manager = VoiceSessionManager()
+        session = manager.create_session(consultation_id=1, doctor_id=1)
+
+        self._run(store.create(session))
+        self._run(store.end(session.room_name))
+        fetched = self._run(store.get(session.room_name))
+        assert fetched is not None
+        assert fetched.status == "ended"
+
+    def test_list_active(self) -> None:
+        store = VoiceSessionStoreMemory()
+        manager = VoiceSessionManager()
+        s1 = manager.create_session(consultation_id=1, doctor_id=1)
+        s2 = manager.create_session(consultation_id=2, doctor_id=2)
+
+        self._run(store.create(s1))
+        self._run(store.create(s2))
+        self._run(store.end(s2.room_name))
+
+        active = self._run(store.list_active())
+        assert len(active) == 1
+        assert active[0].room_name == s1.room_name
+
+    def test_expired_session_marked(self) -> None:
+        store = VoiceSessionStoreMemory()
+        manager = VoiceSessionManager()
+        session = manager.create_session(consultation_id=1, doctor_id=1)
+        session.expires_at = time.time() - 1
+
+        self._run(store.create(session))
+        fetched = self._run(store.get(session.room_name))
+        assert fetched is not None
+        assert fetched.status == "expired"
+
+
+class TestCreateVoiceStore:
+    """Tests for the store factory."""
+
+    def test_default_returns_memory(self) -> None:
+        store = create_voice_store()
+        assert isinstance(store, VoiceSessionStoreMemory)
+
+    def test_with_redis_url_returns_redis(self) -> None:
+        from app.voice.session_store import VoiceSessionStoreRedis
+        store = create_voice_store("redis://localhost:6379/9")
+        assert isinstance(store, VoiceSessionStoreRedis)
+
+
+# ---------------------------------------------------------------------------
+# VoiceWorker tests
+# ---------------------------------------------------------------------------
+
+
+class TestVoiceWorker:
+    """Tests for VoiceWorker."""
+
+    def _run(self, coro):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_worker_start_stop(self) -> None:
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        assert worker.is_running is False
+        self._run(worker.start())
+        assert worker.is_running is True
+        self._run(worker.stop())
+        assert worker.is_running is False
+
+    def test_worker_rejects_when_not_running(self) -> None:
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        result = self._run(worker.handle_final_transcript(
+            text="hello",
+            speaker="doctor",
+            room_sid="r1",
+            participant_sid="p1",
+            turn_id="t1",
+        ))
+        assert result["accepted"] is False
+        assert result["reason"] == "worker_not_running"
+
+    def test_worker_dedup_in_memory(self) -> None:
+        """Duplicate final transcript only accepted once (in-memory dedup)."""
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        self._run(worker.start())
+
+        r1 = self._run(worker.handle_final_transcript(
+            text="hello",
+            speaker="doctor",
+            room_sid="r1",
+            participant_sid="p1",
+            turn_id="t1",
+        ))
+        r2 = self._run(worker.handle_final_transcript(
+            text="hello",
+            speaker="doctor",
+            room_sid="r1",
+            participant_sid="p1",
+            turn_id="t1",
+        ))
+        assert r1["accepted"] is True
+        assert r2["accepted"] is False
+        assert r2["reason"] == "duplicate"
+
+        self._run(worker.stop())
+
+    def test_worker_calls_message_handler(self) -> None:
+        """Worker calls message_handler for doctor transcripts."""
+        handler = AsyncMock(return_value="我头疼")
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+            message_handler=handler,
+        )
+        self._run(worker.start())
+
+        result = self._run(worker.handle_final_transcript(
+            text="你好",
+            speaker="doctor",
+            room_sid="r1",
+            participant_sid="p1",
+            turn_id="t1",
+        ))
+        assert result["accepted"] is True
+        assert result["patient_response"] == "我头疼"
+        handler.assert_called_once_with(1, "你好")
+
+        self._run(worker.stop())
+
+    def test_worker_partial_transcript_buffer(self) -> None:
+        """Partial transcripts are buffered in memory."""
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        self._run(worker.start())
+
+        worker.buffer_partial_transcript(text="你", speaker="doctor")
+        worker.buffer_partial_transcript(text="你好", speaker="doctor")
+
+        assert len(worker._partial_cache) == 2
+        assert worker._partial_cache[0]["text"] == "你"
+        assert worker._partial_cache[1]["text"] == "你好"
+
+        self._run(worker.stop())
+
+    def test_worker_partial_cache_bounded(self) -> None:
+        """Partial cache evicts oldest when full."""
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        # Override max for testing
+        worker._PARTIAL_CACHE_MAX = 5
+
+        for i in range(10):
+            worker.buffer_partial_transcript(text=f"msg-{i}", speaker="doctor")
+
+        assert len(worker._partial_cache) <= 5
+
+    def test_worker_cleanup_on_stop(self) -> None:
+        """Stop clears partial cache and dedup state."""
+        worker = VoiceWorker(
+            room_name="test-room",
+            consultation_id=1,
+            doctor_id=1,
+        )
+        self._run(worker.start())
+
+        worker.buffer_partial_transcript(text="hello", speaker="doctor")
+        worker._seen_turns.add("some-key")
+
+        self._run(worker.stop())
+
+        assert worker.is_running is False
+        assert worker._task is None

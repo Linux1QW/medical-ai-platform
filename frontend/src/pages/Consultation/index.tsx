@@ -9,8 +9,12 @@ import { getEvaluation } from '../../api/evaluation';
 import type { Message, VirtualPatient, Evaluation } from '../../types';
 import { ScoreDisplay, getScoreColor, getScoreLevel, PersonalityTag } from '../../components';
 import { CoachPanel } from '../../components/CoachPanel';
+import { VoiceConsultation } from '../../components/VoiceConsultation';
 import { AgentTraceDrawer } from '../../components/AgentTraceDrawer';
 import { useAuth } from '../../store/useAuth';
+
+/** Voice feature flag — mirrors backend VOICE_ENABLED. Default false (no real LiveKit). */
+const VOICE_ENABLED = import.meta.env.VITE_VOICE_ENABLED === 'true';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -323,6 +327,15 @@ const ConsultationPage: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {/* 语音问诊 (Beta) — 仅当 VOICE_ENABLED=true 时显示 */}
+      {!isEnded && (
+        <div style={{ width: VOICE_ENABLED ? 280 : 0, flexShrink: 0, overflow: VOICE_ENABLED ? 'auto' : 'hidden' }}>
+          {VOICE_ENABLED ? (
+            <VoiceConsultation consultationId={Number(id)} />
+          ) : null}
+        </div>
+      )}
 
       {/* 问诊教练面板 */}
       {!isEnded && (

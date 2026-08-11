@@ -3,6 +3,7 @@
 All endpoints require authentication.
 Token generation uses LiveKit SDK.
 Non-owner access returns 403.
+VOICE_ENABLED=false → all endpoints return 503.
 """
 from __future__ import annotations
 
@@ -21,17 +22,38 @@ from app.schemas.voice import (
     VoiceSessionResponse,
     VoiceStateResponse,
 )
-from app.voice.session import VoiceSessionManager
+from app.voice.session import VOICE_ROOM_TTL_SECONDS, VoiceSession, VoiceSessionManager
+from app.voice.session_store import VoiceSessionStore, create_voice_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
+# Module-level session manager (for token generation — still sync)
 _manager = VoiceSessionManager()
+
+# Async session store (Redis-backed when configured, in-memory otherwise)
+_store: VoiceSessionStore = create_voice_store()
 
 
 def get_manager() -> VoiceSessionManager:
     return _manager
+
+
+def get_store() -> VoiceSessionStore:
+    return _store
+
+
+def _require_voice_enabled() -> None:
+    """Raise 503 if voice functionality is not enabled."""
+    if not settings.VOICE_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "VOICE_DISABLED",
+                "message": "语音功能未启用（VOICE_ENABLED=false）",
+            },
+        )
 
 
 def _require_livekit_config() -> tuple[str, str]:
@@ -57,10 +79,13 @@ async def create_voice_session(
 ) -> VoiceSessionResponse:
     """Create a new voice session.
 
+    - Requires VOICE_ENABLED=true
     - Requires authentication
     - Checks consultation ownership (non-owner → 403)
     - Returns LiveKit room token (TTL ≤ 10 min)
     """
+    _require_voice_enabled()
+
     # Verify ownership / access
     consultation = await require_consultation_access(
         db, request.consultation_id, current_user
@@ -72,6 +97,9 @@ async def create_voice_session(
         consultation_id=request.consultation_id,
         doctor_id=consultation.doctor_id,
     )
+
+    # Persist in async store
+    await _store.create(session)
 
     identity = f"doctor-{current_user.id}"
     token = _manager.generate_room_token(
@@ -99,10 +127,13 @@ async def get_voice_state(
 ) -> VoiceStateResponse:
     """Get voice session state.
 
+    - Requires VOICE_ENABLED=true
     - Requires authentication
     - Non-owner → 403
     """
-    session = _manager.get_session(room_name)
+    _require_voice_enabled()
+
+    session = await _store.get(room_name)
     if session is None:
         raise HTTPException(
             status_code=404,
@@ -128,10 +159,13 @@ async def end_voice_session(
 ) -> dict:
     """End a voice session.
 
+    - Requires VOICE_ENABLED=true
     - Requires authentication
     - Non-owner → 403
     """
-    session = _manager.get_session(room_name)
+    _require_voice_enabled()
+
+    session = await _store.get(room_name)
     if session is None:
         raise HTTPException(
             status_code=404,
@@ -141,5 +175,5 @@ async def end_voice_session(
     # Check ownership
     await require_consultation_access(db, session.consultation_id, current_user)
 
-    _manager.end_session(room_name)
+    await _store.end(room_name)
     return {"room_name": room_name, "status": "ended"}

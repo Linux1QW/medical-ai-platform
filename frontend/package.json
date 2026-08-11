@@ -17,6 +17,7 @@
     "@ant-design/icons": "^6.1.0",
     "antd": "^6.3.1",
     "axios": "^1.13.6",
+    "livekit-client": "^2.9.3",
     "dayjs": "^1.11.19",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

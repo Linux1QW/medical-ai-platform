@@ -20,7 +20,7 @@
 - **三层记忆**：Working Memory（对话槽位 + 隐藏事实校验）、Episodic Memory（历史问诊摘要）、Approved Trainee Profile（6 维度、consent 默认 false、PHI 校验、管理员审批）。
 - **Skill Registry + Policy Enforcement**：工具白名单、预算控制、UNTRUSTED_EVIDENCE 包装、控制指令清洗。
 - **MCP Demo Server**：stdio-only JSON-RPC 2.0，只读、去标识化、静态 fixture，不绑定网络端口。
-- **LiveKit Voice Beta（optional）**：房间令牌 TTL ≤600s、部分转录仅内存、原始录音不保存、去重 final transcript。
+- **LiveKit Voice Beta（optional, NOT ACCEPTED）**：房间令牌 TTL ≤600s、部分转录仅内存、原始录音不保存、去重 final transcript。默认关闭（VOICE_ENABLED=false），无真实 LiveKit 证据，未纳入验收。
 - **Prompt Registry + A/B Rollout**：PromptBundle 生命周期管理 + ExperimentAssignment 实验分配。
 - **Coach Attribution Flywheel**：trace → eval → attribution candidate → admin review + deidentify → eligible for training。
 - MySQL 8、双 Redis 7、Celery Worker/Beat、Evaluation Dispatcher、Prometheus/Grafana 和 Docker Compose。

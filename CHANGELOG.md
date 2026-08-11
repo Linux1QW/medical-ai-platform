@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - **三层记忆架构**：Working Memory（对话槽位 + 隐藏事实校验 `HiddenContextViolation`）、Episodic Memory（历史问诊摘要）、Approved Trainee Profile Memory（6 维度、consent 默认 false、PHI 正则校验、管理员审批、最多 5 条进入上下文）
 - **Skill Registry + Policy Enforcement**：工具白名单（per-agent least privilege）、预算控制、UNTRUSTED_EVIDENCE 包装、控制指令清洗、结果长度限制
 - **MCP Demo Server**：stdio-only JSON-RPC 2.0，两个只读工具（search_teaching_rubric、search_medical_kb），静态 fixture，去标识化，不绑定网络端口
-- **LiveKit Voice Beta（optional）**：房间令牌 TTL ≤600s、max 4 participants、部分转录仅内存不持久化、原始录音不保存、final transcript 去重 `(room_sid, participant_sid, turn_id)`
+- **LiveKit Voice Beta（optional, NOT ACCEPTED）**：房间令牌 TTL ≤600s、max 4 participants、部分转录仅内存不持久化、原始录音不保存、final transcript 去重 `(room_sid, participant_sid, turn_id)`。默认关闭（VOICE_ENABLED=false），无真实 LiveKit 证据，未纳入验收。
 - **Prompt Registry + A/B Rollout**：PromptBundle 生命周期（draft → active → deprecated）+ ExperimentAssignment 实验分配
 - **Coach Attribution Flywheel**：trace → eval → attribution candidate → admin review + deidentify → eligible for training
 - **Coach API 端点**：`/api/v1/coach/consultations/{id}/suggestions/stream`（SSE）、`/state`、`/feedback`、`/admin/traces`
@@ -45,9 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Note
 
 - Coach 为 opt-in 功能，默认关闭，需要显式配置 `COACH_ENABLED=true` 和 `COACH_HMAC_KEY`
-- Voice 为 optional beta，需要配置 LiveKit 凭据，不参与评估流程
+- Voice 为 optional beta（NOT ACCEPTED），需要配置 LiveKit 凭据，不参与评估流程，默认关闭（VOICE_ENABLED=false）
 - MCP Demo Server 为演示用途，使用静态 fixture，不连接生产数据库
 - 验收指标（Intent F1、hidden-fact leakage、latency 等）需要实测环境运行，当前未宣称通过
+- 验收证据由 `final-acceptance.json` 作为唯一事实来源，Markdown 文档由脚本自动生成
 
 ## [1.1.0] - 2026-08-10
 

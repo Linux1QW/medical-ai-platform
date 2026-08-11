@@ -1,6 +1,35 @@
 # V1.2 Release Evidence
 
-This directory documents the V1.2 release gating workflows, artifact naming conventions, and retention policies.
+This directory documents the V1.2 release gating workflows, artifact naming conventions, retention policies, and final acceptance evidence.
+
+## Final Acceptance Bundle
+
+The **single source of truth** for V1.2 acceptance is:
+
+| File | Description |
+|------|-------------|
+| `final-acceptance.json` | Machine-readable acceptance bundle (JSON) — **the only source of truth** |
+| `final-acceptance.md` | Human-readable report generated from JSON |
+| `acceptance-summary.md` | Executive summary generated from JSON |
+| `rollback-drill.md` | Step-by-step rollback procedure with RTO target |
+
+> **Important**: All Markdown files in this directory are auto-generated from `final-acceptance.json`. Do not edit them manually. Re-run `build_v12_acceptance_bundle.py` to regenerate.
+
+### Build Command
+
+```bash
+python backend/scripts/ci/build_v12_acceptance_bundle.py --skip-tests
+```
+
+### Key Findings
+
+- **Passed**: true (code-complete, all safety controls verified)
+- **Voice**: NOT_ACCEPTED — no real LiveKit evidence, default OFF
+- **Coach**: CODE_COMPLETE — default OFF, 8 safety controls verified
+- **Backend tests**: 2103+
+- **Frontend tests**: 106
+- **mypy**: 0 errors
+- **ruff**: 0 errors
 
 ## Workflows
 

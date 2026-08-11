@@ -177,6 +177,8 @@ intent → planner → evidence → draft → critic → finalize → persist
 
 ## 7. Rollback
 
+> **See also**: `docs/release-evidence/v1.2/rollback-drill.md` for the complete step-by-step rollback procedure with RTO target.
+
 ### App Rollback (schema-compatible)
 
 V1.2 tables are **additive** — they do not modify existing V1.1 tables. App rollback:
@@ -200,10 +202,12 @@ No REST API for RAG rollback. Manual procedure:
 3. Publish `rag:index-switched` event with correct manifest SHA-256
 4. Verify each Worker reconciles within 5s
 
-## 8. Voice (Optional, Local stdio, Deidentified, Read-only)
+## 8. Voice (Optional, NOT ACCEPTED for V1.2)
 
-LiveKit voice integration is **optional beta**:
+LiveKit voice integration is **optional beta** and **NOT ACCEPTED** for V1.2 release:
 
+- **Status**: NOT_ACCEPTED — no real LiveKit credentials configured
+- **Default**: `VOICE_ENABLED=false`
 - **Not required** for core evaluation functionality
 - Room tokens generated via LiveKit SDK JWT builder; API secret never logged
 - Token TTL capped at 600 seconds; max 4 participants

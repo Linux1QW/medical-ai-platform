@@ -63,50 +63,80 @@ jobs:
             echo "✓ migration_operator_id is empty (optional)"
           fi
 
-  # ── V1.2 Evidence Gate ────────────────────────────────────────────
+  # ── V1.2 Evidence Gate (fail-closed, NO bypass) ─────────────────────────
   v12-evidence-gate:
     needs: validate
     runs-on: ubuntu-latest
-    if: startsWith(inputs.image_tag, 'v1.2') || startsWith(github.ref, 'refs/tags/v1.2')
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.image_tag }}
 
-      - name: Verify CI workflow succeeded for this SHA
+      - name: Verify CI workflow succeeded for this exact SHA
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHA="${{ inputs.image_tag }}"
-          CI_STATUS=$(gh api repos/${{ github.repository }}/actions/runs \
-            --jq ".workflow_runs[] | select(.head_sha==\"$SHA\" and .name==\"CI\" and .conclusion==\"success\") | .id" | head -1)
-          if [ -z "$CI_STATUS" ]; then
-            echo "::error::CI workflow has not succeeded for commit $SHA. Deploy blocked."
+          # Strict: head_sha must exactly match inputs.image_tag (no branch/tag prefix, no short SHA)
+          CI_RUN=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq "[.workflow_runs[] | select(.name==\"CI\")] | map(select(.head_sha==\"$SHA\")) | map(select(.conclusion==\"success\")) | .[0].id // empty")
+          if [ -z "$CI_RUN" ]; then
+            echo "::error::CI workflow has not succeeded for exact commit SHA $SHA. Deploy blocked."
             exit 1
           fi
-          echo "CI workflow passed for $SHA (run: $CI_STATUS)"
+          # Verify the run's head_sha is exactly our image_tag (not a branch or tag prefix match)
+          RUN_SHA=$(gh api repos/${{ github.repository }}/actions/runs/$CI_RUN --jq '.head_sha')
+          if [ "$RUN_SHA" != "$SHA" ]; then
+            echo "::error::CI run head_sha ($RUN_SHA) does not exactly match image_tag ($SHA). Deploy blocked."
+            exit 1
+          fi
+          echo "✓ CI workflow passed for exact SHA $SHA (run: $CI_RUN)"
 
-      - name: Verify V1.2 RC workflow succeeded for this SHA
+      - name: Verify V1.2 RC workflow succeeded for this exact SHA
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHA="${{ inputs.image_tag }}"
-          RC_STATUS=$(gh api repos/${{ github.repository }}/actions/runs \
-            --jq ".workflow_runs[] | select(.head_sha==\"$SHA\" and .name==\"V1.2 Release Candidate Gate\" and .conclusion==\"success\") | .id" | head -1)
-          if [ -z "$RC_STATUS" ]; then
-            echo "::error::V1.2 RC workflow has not succeeded for commit $SHA. Deploy blocked."
+          # Strict: head_sha must exactly match inputs.image_tag
+          RC_RUN=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq "[.workflow_runs[] | select(.name==\"V1.2 Release Candidate Gate\")] | map(select(.head_sha==\"$SHA\")) | map(select(.conclusion==\"success\")) | .[0].id // empty")
+          if [ -z "$RC_RUN" ]; then
+            echo "::error::V1.2 RC workflow has not succeeded for exact commit SHA $SHA. Deploy blocked."
             exit 1
           fi
-          echo "V1.2 RC workflow passed for $SHA (run: $RC_STATUS)"
+          # Verify exact SHA match
+          RUN_SHA=$(gh api repos/${{ github.repository }}/actions/runs/$RC_RUN --jq '.head_sha')
+          if [ "$RUN_SHA" != "$SHA" ]; then
+            echo "::error::RC run head_sha ($RUN_SHA) does not exactly match image_tag ($SHA). Deploy blocked."
+            exit 1
+          fi
+          echo "✓ V1.2 RC workflow passed for exact SHA $SHA (run: $RC_RUN)"
+
+      - name: Verify release evidence manifest and signature
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          SHA="${{ inputs.image_tag }}"
+          EVIDENCE_DIR=".github/evidence/${SHA}"
+          if [ ! -d "$EVIDENCE_DIR" ]; then
+            echo "::error::Evidence directory not found: $EVIDENCE_DIR. Deploy blocked."
+            exit 1
+          fi
+          python backend/scripts/ci/verify_v12_release_evidence.py \
+            --candidate-sha "$SHA" \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --signing-key "$RELEASE_SIGNING_KEY"
 
       - name: Evidence gate passed
-        run: echo "All V1.2 release evidence requirements satisfied for ${{ inputs.image_tag }}"
+        run: echo "✓ All V1.2 release evidence requirements satisfied for ${{ inputs.image_tag }}"
 
   # ── Deploy ────────────────────────────────────────────────────────
   deploy:
     needs: [validate, v12-evidence-gate]
-    if: always() && needs.validate.result == 'success' && (needs.v12-evidence-gate.result == 'success' || needs.v12-evidence-gate.result == 'skipped')
+    if: >-
+      needs.validate.result == 'success' &&
+      needs.v12-evidence-gate.result == 'success'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:

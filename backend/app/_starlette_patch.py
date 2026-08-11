@@ -9,7 +9,7 @@ by gc / __del__ and emitted as a ResourceWarning, which pytest -W error promotes
 to a test failure.
 
 The patch makes two surgical changes to __call__:
-  1. close_recv_stream_on_response_sent uses try/finally so recv_stream.close()
+  1. close_recv_stream_on_response_sent uses try/finally so recv_stream.close()  # type: ignore[attr-defined]
      runs even if the task is cancelled.
   2. response_sent.set() is moved into a finally block so it is always called,
      allowing the cleanup task to finish before the task group exits.
@@ -24,72 +24,108 @@ import typing
 
 import anyio
 from anyio.abc import ObjectReceiveStream, ObjectSendStream
-
 from starlette._utils import collapse_excgroups
 from starlette.middleware.base import BaseHTTPMiddleware, _CachedRequest, _StreamingResponse
-from starlette.requests import Request
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 T = typing.TypeVar("T")
-RequestResponseEndpoint = typing.Callable[[Request], typing.Awaitable[typing.Any]]
 
 
-async def _patched_call(self: BaseHTTPMiddleware, scope: Scope, receive: Receive, send: Send) -> None:
-    if scope["type"] != "http":
-        await self.app(scope, receive, send)
+async def _wrap_and_cancel(
+    func: typing.Callable[[], typing.Awaitable[T]],
+    task_group: anyio.abc.TaskGroup,
+) -> T:
+    """Wrap a callable to cancel the task group upon completion."""
+    result = await func()
+    task_group.cancel_scope.cancel()
+    return result
+
+
+async def _receive_or_disconnect(
+    response_sent: anyio.Event,
+    wrapped_receive: typing.Callable[..., typing.Awaitable[Message]],
+) -> Message:
+    """Return the next receive message or an http.disconnect if the response was sent."""
+    if response_sent.is_set():
+        return {"type": "http.disconnect"}
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_wrap_and_cancel, response_sent.wait, tg)
+        message = await _wrap_and_cancel(wrapped_receive, tg)
+
+    if response_sent.is_set():
+        return {"type": "http.disconnect"}
+
+    return message
+
+
+async def _close_recv_stream_on_response_sent(
+    response_sent: anyio.Event,
+    recv_stream: ObjectReceiveStream[typing.MutableMapping[str, typing.Any]],
+) -> None:
+    """Wait for response_sent then close recv_stream (guaranteed via try/finally)."""
+    try:
+        await response_sent.wait()
+    finally:
+        recv_stream.close()  # type: ignore[attr-defined]
+
+
+async def _send_no_error(
+    send_stream: ObjectSendStream[typing.MutableMapping[str, typing.Any]],
+    message: Message,
+) -> None:
+    """Send a message, silently ignoring BrokenResourceError."""
+    try:
+        await send_stream.send(message)
+    except anyio.BrokenResourceError:
         return
 
-    request = _CachedRequest(scope, receive)
-    wrapped_receive = request.wrapped_receive
-    response_sent = anyio.Event()
 
-    async def call_next(request: Request) -> typing.Any:
+async def _make_body_stream(
+    recv_stream: ObjectReceiveStream[typing.MutableMapping[str, typing.Any]],
+    app_exc: Exception | None,
+) -> typing.AsyncGenerator[bytes, None]:
+    """Read the response body from recv_stream, then re-raise app exception if any."""
+    async with recv_stream:
+        async for message in recv_stream:
+            assert message["type"] == "http.response.body"
+            body = message.get("body", b"")
+            if body:
+                yield body
+            if not message.get("more_body", False):
+                break
+
+    if app_exc is not None:
+        raise app_exc  # noqa: B904
+
+
+def _build_call_next(
+    app: typing.Any,
+    scope: Scope,
+    task_group: anyio.abc.TaskGroup,
+    response_sent: anyio.Event,
+    wrapped_receive: typing.Callable[..., typing.Awaitable[Message]],
+) -> typing.Callable[..., typing.Awaitable[typing.Any]]:
+    """Build a call_next closure bound to the current task group and scope."""
+
+    async def call_next(request: typing.Any) -> typing.Any:
         app_exc: Exception | None = None
         send_stream: ObjectSendStream[typing.MutableMapping[str, typing.Any]]
         recv_stream: ObjectReceiveStream[typing.MutableMapping[str, typing.Any]]
         send_stream, recv_stream = anyio.create_memory_object_stream()
 
-        async def receive_or_disconnect() -> Message:
-            if response_sent.is_set():
-                return {"type": "http.disconnect"}
-
-            async with anyio.create_task_group() as task_group:
-
-                async def wrap(func: typing.Callable[[], typing.Awaitable[T]]) -> T:
-                    result = await func()
-                    task_group.cancel_scope.cancel()
-                    return result
-
-                task_group.start_soon(wrap, response_sent.wait)
-                message = await wrap(wrapped_receive)
-
-            if response_sent.is_set():
-                return {"type": "http.disconnect"}
-
-            return message
-
-        # FIX (1): try/finally ensures recv_stream.close() runs even on cancellation
-        async def close_recv_stream_on_response_sent() -> None:
-            try:
-                await response_sent.wait()
-            finally:
-                recv_stream.close()
-
-        async def send_no_error(message: Message) -> None:
-            try:
-                await send_stream.send(message)
-            except anyio.BrokenResourceError:
-                return
-
         async def coro() -> None:
             nonlocal app_exc
             async with send_stream:
                 try:
-                    await self.app(scope, receive_or_disconnect, send_no_error)
+                    await app(scope, receive_or_disconnect, send_no_error)
                 except Exception as exc:
                     app_exc = exc
 
-        task_group.start_soon(close_recv_stream_on_response_sent)
+        receive_or_disconnect = lambda: _receive_or_disconnect(response_sent, wrapped_receive)  # noqa: E731
+        send_no_error = lambda msg: _send_no_error(send_stream, msg)  # noqa: E731
+
+        task_group.start_soon(_close_recv_stream_on_response_sent, response_sent, recv_stream)
         task_group.start_soon(coro)
 
         try:
@@ -99,31 +135,38 @@ async def _patched_call(self: BaseHTTPMiddleware, scope: Scope, receive: Receive
                 message = await recv_stream.receive()
         except anyio.EndOfStream:
             if app_exc is not None:
-                raise app_exc
-            raise RuntimeError("No response returned.")
+                raise app_exc from None
+            raise RuntimeError("No response returned.") from None
 
         assert message["type"] == "http.response.start"
 
-        async def body_stream() -> typing.AsyncGenerator[bytes, None]:
-            async with recv_stream:
-                async for message in recv_stream:
-                    assert message["type"] == "http.response.body"
-                    body = message.get("body", b"")
-                    if body:
-                        yield body
-                    if not message.get("more_body", False):
-                        break
-
-            if app_exc is not None:
-                raise app_exc
-
-        response = _StreamingResponse(status_code=message["status"], content=body_stream(), info=info)
+        response = _StreamingResponse(
+            status_code=message["status"],
+            content=_make_body_stream(recv_stream, app_exc),
+            info=info,
+        )
         response.raw_headers = message["headers"]
         return response
 
-    # FIX (2): try/finally ensures response_sent.set() is always called
+    return call_next
+
+
+async def _patched_call(self: BaseHTTPMiddleware, scope: Scope, receive: Receive, send: Send) -> None:
+    """Patched BaseHTTPMiddleware.__call__ that prevents MemoryObjectReceiveStream leaks."""
+    if scope["type"] != "http":
+        await self.app(scope, receive, send)
+        return
+
+    request = _CachedRequest(scope, receive)
+    wrapped_receive = request.wrapped_receive
+    response_sent = anyio.Event()
+
+    # FIX (1): _close_recv_stream_on_response_sent uses try/finally so recv_stream.close()
+    #          runs even if the task is cancelled.
+    # FIX (2): try/finally ensures response_sent.set() is always called.
     with collapse_excgroups():
         async with anyio.create_task_group() as task_group:
+            call_next = _build_call_next(self.app, scope, task_group, response_sent, wrapped_receive)
             try:
                 response = await self.dispatch_func(request, call_next)
                 await response(scope, wrapped_receive, send)
@@ -132,4 +175,4 @@ async def _patched_call(self: BaseHTTPMiddleware, scope: Scope, receive: Receive
 
 
 # Apply the monkey-patch
-BaseHTTPMiddleware.__call__ = _patched_call  # type: ignore[assignment]
+BaseHTTPMiddleware.__call__ = _patched_call  # type: ignore[method-assign]

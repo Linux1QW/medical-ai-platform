@@ -2,11 +2,8 @@ import logging
 import time
 import traceback
 from contextlib import asynccontextmanager
+from importlib import import_module
 from uuid import uuid4
-
-# Patch starlette BaseHTTPMiddleware to prevent MemoryObjectReceiveStream leaks
-# Must be imported before any @app.middleware("http") decorator runs.
-import app._starlette_patch  # noqa: F401
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -130,6 +127,10 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
     lifespan=lifespan,
 )
+
+# Patch starlette BaseHTTPMiddleware to prevent MemoryObjectReceiveStream leaks.
+# Must be imported before any @app.middleware("http") decorator runs.
+import_module("app._starlette_patch")
 
 # ── 速率限制中间件 ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter

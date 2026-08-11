@@ -33,7 +33,17 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 _manager = VoiceSessionManager()
 
 # Async session store (Redis-backed when configured, in-memory otherwise)
-_store: VoiceSessionStore = create_voice_store()
+_store: VoiceSessionStore | None = None
+
+
+def _get_or_create_store() -> VoiceSessionStore:
+    """Lazily create the voice store on first access."""
+    global _store
+    if _store is None:
+        _store = create_voice_store(
+            redis_url=None if settings.TESTING else settings.REDIS_CHECKPOINT_URL,
+        )
+    return _store
 
 
 def get_manager() -> VoiceSessionManager:
@@ -41,7 +51,7 @@ def get_manager() -> VoiceSessionManager:
 
 
 def get_store() -> VoiceSessionStore:
-    return _store
+    return _get_or_create_store()
 
 
 def _require_voice_enabled() -> None:
@@ -99,7 +109,8 @@ async def create_voice_session(
     )
 
     # Persist in async store
-    await _store.create(session)
+    store = _get_or_create_store()
+    await store.create(session)
 
     identity = f"doctor-{current_user.id}"
     token = _manager.generate_room_token(
@@ -133,7 +144,7 @@ async def get_voice_state(
     """
     _require_voice_enabled()
 
-    session = await _store.get(room_name)
+    session = await _get_or_create_store().get(room_name)
     if session is None:
         raise HTTPException(
             status_code=404,
@@ -165,7 +176,7 @@ async def end_voice_session(
     """
     _require_voice_enabled()
 
-    session = await _store.get(room_name)
+    session = await _get_or_create_store().get(room_name)
     if session is None:
         raise HTTPException(
             status_code=404,
@@ -175,5 +186,5 @@ async def end_voice_session(
     # Check ownership
     await require_consultation_access(db, session.consultation_id, current_user)
 
-    await _store.end(room_name)
+    await _get_or_create_store().end(room_name)
     return {"room_name": room_name, "status": "ended"}

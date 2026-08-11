@@ -318,33 +318,50 @@ class CoachService:
 
         events = await self.repo.list_events_after(session.id, 0, limit=500)
 
+        # -- Projection: map ORM → front-end contract (excludes PII) --
         return {
             "session": {
-                "id": session.public_id,
+                "session_id": session.public_id,
                 "consultation_id": session.consultation_id,
-                "doctor_id": session.doctor_id,
-                "mode": session.mode,
                 "status": session.status,
-                "state_version": session.state_version,
+                "created_at": (
+                    session.started_at.isoformat() if session.started_at else None
+                ),
             },
             "decisions": [
                 {
-                    "turn_no": d.turn_no,
-                    "intent": d.intent,
-                    "stage": d.stage,
-                    "confidence": d.confidence,
-                    "risk_level": d.risk_level,
-                    "feedback_value": d.feedback_value,
+                    "decision_id": d.suggestion_id or str(d.id),
+                    "agent": d.intent,
+                    "action": d.stage,
+                    "rationale": (
+                        (d.suggestion_json or {}).get("rationale_summary")
+                        if isinstance(d.suggestion_json, dict)
+                        else None
+                    ),
+                    "timestamp": (
+                        d.created_at.isoformat() if d.created_at else None
+                    ),
                 }
                 for d in decisions
             ],
             "events": [
                 {
                     "event_id": e.event_id,
-                    "sequence": e.sequence,
+                    "agent": (
+                        (e.data_json or {}).get("agent")
+                        if isinstance(e.data_json, dict)
+                        else None
+                    ),
                     "event_type": e.event_type,
-                    "data_json": e.data_json,
-                    "decision_id": e.decision_id,
+                    "message": (
+                        (e.data_json or {}).get("message")
+                        or (e.data_json or {}).get("suggestion_id")
+                        if isinstance(e.data_json, dict)
+                        else None
+                    ),
+                    "timestamp": (
+                        e.created_at.isoformat() if e.created_at else None
+                    ),
                 }
                 for e in events
             ],

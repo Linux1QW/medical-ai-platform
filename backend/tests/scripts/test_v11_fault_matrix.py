@@ -1,11 +1,11 @@
-"""Tests for V1.1 fault matrix controller."""
+"""Tests for V1.2 fault matrix controller."""
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "ci"))
 
-from run_v11_fault_matrix import FAULTS, FaultResult, run_fault_matrix
+from run_v12_fault_matrix import FAULTS, FaultResult, run_fault_matrix
 
 
 def test_fault_matrix_defines_four_scenarios():
@@ -17,7 +17,7 @@ def test_fault_matrix_defines_four_scenarios():
     assert "execution_owner_fencing" in FAULTS
 
 
-@patch("run_v11_fault_matrix._run_single_fault")
+@patch("run_v12_fault_matrix._run_single_fault")
 def test_run_fault_matrix_returns_all_results(mock_single):
     """Verify that run_fault_matrix returns results for all scenarios."""
     mock_single.return_value = FaultResult(passed=True, message="ok")
@@ -26,7 +26,7 @@ def test_run_fault_matrix_returns_all_results(mock_single):
     assert all(r["passed"] for r in results.values())
 
 
-@patch("run_v11_fault_matrix._run_single_fault")
+@patch("run_v12_fault_matrix._run_single_fault")
 def test_run_fault_matrix_handles_failure(mock_single):
     """Verify that failures are captured correctly."""
     mock_single.return_value = FaultResult(passed=False, message="simulated failure")
@@ -36,7 +36,7 @@ def test_run_fault_matrix_handles_failure(mock_single):
     assert all(r["message"] == "simulated failure" for r in results.values())
 
 
-@patch("run_v11_fault_matrix._run_single_fault")
+@patch("run_v12_fault_matrix._run_single_fault")
 def test_run_fault_matrix_mixed_results(mock_single):
     """Verify mixed pass/fail results."""
     call_count = 0

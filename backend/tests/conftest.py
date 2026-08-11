@@ -12,6 +12,24 @@ import pytest
 
 import app.services.llm_cache as llm_cache_module
 
+# ── 全局 voice store mock（避免测试连接真实 Redis）─────────────────────────────
+
+@pytest.fixture(scope="session", autouse=True)
+def _mock_voice_store_memory():
+    """
+    Session-level fixture: 将 voice session store 强制替换为内存实现，
+    避免测试时连接真实 Redis。
+    """
+    import app.api.v1.voice as voice_module
+    from app.voice.session_store import VoiceSessionStoreMemory
+
+    original_store = voice_module._store
+    voice_module._store = VoiceSessionStoreMemory()
+
+    yield
+
+    voice_module._store = original_store
+
 # ── 全局 mock Redis（llm_cache 模块专用）────────────────────────────────────
 
 def _build_mock_redis():

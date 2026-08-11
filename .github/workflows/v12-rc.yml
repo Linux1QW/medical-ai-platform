@@ -483,8 +483,24 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Start backend for E2E
+      - name: Migrate and seed browser E2E database
         env:
+          ENVIRONMENT: test
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          alembic upgrade head
+          python -m tests.fixtures.seed_production_smoke
+          E2E_ADMIN_USER=admin_v12 E2E_DOCTOR_USER=doctor_v12 E2E_PASSWORD=e2e_test_password_2026 \
+            python -m tests.fixtures.seed_v12_coach_e2e
+
+      - name: Start Backend A for E2E
+        env:
+          ENVIRONMENT: test
           MYSQL_HOST: "127.0.0.1"
           MYSQL_PORT: "3306"
           MYSQL_USER: root
@@ -494,14 +510,41 @@ jobs:
           SECRET_KEY: rc-test-secret-key-for-live-gate
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
           TESTING: 'false'
+          PROCESS_ID: backend-a
         run: |
           cd backend
-          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-e2e.log 2>&1 &
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a-e2e.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break
             sleep 2
           done
+          curl -sf http://127.0.0.1:8000/health
+
+      - name: Start Backend B for E2E
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
+          SECRET_KEY: rc-test-secret-key-for-live-gate
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
+          TESTING: 'false'
+          PROCESS_ID: backend-b
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b-e2e.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8001/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8001/health
 
       - name: Start frontend for E2E
         env:
@@ -516,7 +559,12 @@ jobs:
 
       - name: Run Playwright browser E2E
         env:
-          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:5173
+          E2E_BASE_URL: http://127.0.0.1:5173
+          E2E_BACKEND_A: http://127.0.0.1:8000
+          E2E_BACKEND_B: http://127.0.0.1:8001
+          E2E_ADMIN_USER: admin_v12
+          E2E_DOCTOR_USER: doctor_v12
+          E2E_PASSWORD: e2e_test_password_2026
           VITE_API_BASE_URL: http://127.0.0.1:8000
         run: |
           cd frontend
@@ -599,6 +647,20 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Migrate and seed dual-load database
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: "127.0.0.1"
+          MYSQL_PORT: "3306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: rc-test-password
+          MYSQL_DATABASE: medical_ai_rc
+        run: |
+          cd backend
+          alembic upgrade head
+          E2E_ADMIN_USER=admin_v12 E2E_DOCTOR_USER=doctor_v12 E2E_PASSWORD=e2e_test_password_2026 \
+            python -m tests.fixtures.seed_v12_coach_e2e
+
       - name: Start backend-a (port 8000)
         env:
           MYSQL_HOST: "127.0.0.1"
@@ -676,26 +738,19 @@ jobs:
   disconnect-replay:
     needs: [setup-services, db-migrate-seed]
     runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: rc-test-password
-          MYSQL_DATABASE: medical_ai_rc
-        ports: ['3306:3306']
-        options: >-
-          --health-cmd="mysqladmin ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
+    env:
+      ENVIRONMENT: test
+      MYSQL_USER: medical_e2e
+      MYSQL_PASSWORD: e2e-medical-password
+      MYSQL_DATABASE: medical_ai_e2e
+      MYSQL_MIGRATION_USER: medical_e2e
+      MYSQL_MIGRATION_PASSWORD: e2e-medical-password
+      SECRET_KEY: e2e-test-secret-key-not-for-production
+      DASHSCOPE_API_KEY: e2e-mock-key
+      OBSERVABILITY_HMAC_KEY: e2e-observability-hmac-key
+      COACH_HMAC_KEY: e2e-coach-hmac-key
+      COACH_ENABLED: "true"
+      LANGGRAPH_ENABLED: "true"
 
     steps:
       # v5.0.0
@@ -717,41 +772,16 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Start backend for disconnect/replay
-        env:
-          MYSQL_HOST: "127.0.0.1"
-          MYSQL_PORT: "3306"
-          MYSQL_USER: root
-          MYSQL_PASSWORD: rc-test-password
-          MYSQL_DATABASE: medical_ai_rc
-          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
-          SECRET_KEY: rc-test-secret-key-for-live-gate
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          LANGGRAPH_ENABLED: 'true'
-          TESTING: 'false'
+      - name: Start isolated Compose fault environment
         run: |
-          cd backend
-          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-dr.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break
-            sleep 2
-          done
+          docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+          docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml ps
 
       - name: Run fault recovery / disconnect-replay tests
-        env:
-          MYSQL_HOST: "127.0.0.1"
-          MYSQL_PORT: "3306"
-          MYSQL_USER: root
-          MYSQL_PASSWORD: rc-test-password
-          MYSQL_DATABASE: medical_ai_rc
-          REDIS_CHECKPOINT_URL: redis://127.0.0.1:6379/1
-          SECRET_KEY: rc-test-secret-key-for-live-gate
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          LANGGRAPH_ENABLED: 'true'
-          TESTING: 'false'
         run: |
-          cd backend
-          python scripts/ci/run_v12_fault_matrix.py
+          python backend/scripts/ci/run_v12_fault_matrix.py \
+            --project medical-ai-v12-e2e \
+            --output backend/benchmark_reports/fault-matrix.json
 
       - name: Generate disconnect-replay report
         if: always()
@@ -762,7 +792,7 @@ jobs:
           {
             "candidate_sha": "${{ inputs.candidate_sha }}",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "test_type": "disconnect_replay",
+            "test_type": "fault_recovery_matrix",
             "status": "$DR_STATUS"
           }
           EOF
@@ -774,6 +804,20 @@ jobs:
           name: rc-disconnect-replay-report
           path: backend/benchmark_reports/rc_disconnect_replay_report.json
           retention-days: 90
+
+      - name: Upload fault matrix evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc-fault-matrix-report
+          path: backend/benchmark_reports/fault-matrix.json
+          retention-days: 90
+
+      - name: Tear down isolated Compose fault environment
+        if: always()
+        run: |
+          docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml logs --no-color > backend/benchmark_reports/fault-compose.log || true
+          docker compose -p medical-ai-v12-e2e -f docker-compose.yml -f docker-compose.e2e.yml down -v
 
   # ============================================================================
   # migration-verify: verify migration integrity against candidate SHA

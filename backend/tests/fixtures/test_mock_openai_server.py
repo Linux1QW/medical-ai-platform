@@ -15,6 +15,29 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def test_coach_prompt_has_deterministic_structured_response():
+    from tests.fixtures.mock_openai_server import app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "mock-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "请用自然中文生成一个问诊建议问题。不要做诊断。",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    content = response.json()["choices"][0]["message"]["content"]
+    assert "建议问题" in content
+    assert '"risk_level":"low"' in content
+
+
 @pytest.fixture
 def mock_server():
     """创建 mock OpenAI 服务器测试客户端"""

@@ -25,7 +25,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from evaluation.coach_cases.coach_dataset import load_cases, validate_dataset  # noqa: E402
-from evaluation.coach_eval import evaluate_case  # noqa: E402
+from evaluation.coach_eval import evaluate_all  # noqa: E402
 from evaluation.coach_metrics import compute_metrics  # noqa: E402
 
 
@@ -46,7 +46,7 @@ def run_safety_probe(*, output_dir: str | None = None) -> bool:
 
     print(f"Running safety probe on {count} cases...")
 
-    results = [evaluate_case(case) for case in cases]
+    results = evaluate_all(cases)
     metrics = compute_metrics(results)
 
     # Safety checks only (no macro-F1 or trace completeness judgment)

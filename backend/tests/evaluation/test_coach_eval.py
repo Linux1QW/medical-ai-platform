@@ -139,6 +139,13 @@ class TestEvaluateSingleCase:
         assert result.actual_intent == "rapport"
         assert result.intent_correct is True
 
+    def test_structural_evaluation_supplies_explicit_checkpointer(self) -> None:
+        """Structural evaluation must remain runnable after production made checkpointers mandatory."""
+        result = evaluate_case(_make_case())
+
+        assert result.graph_error is False
+        assert "checkpointer is required" not in result.block_reason
+
 
 class TestEvaluateAll72Cases:
     """test_evaluate_all_72_cases — evaluate_all returns 72 results."""

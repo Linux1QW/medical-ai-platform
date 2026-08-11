@@ -1,128 +1,184 @@
 # -*- coding: utf-8 -*-
-"""E2E 测试数据种子脚本
+"""Persist deterministic V1.1 browser-smoke fixtures in the isolated E2E DB.
 
-幂等创建：
-- 管理员 admin_v11、医生 doctor_v11 账号
-- 一个虚拟患者、一个已结束问诊和不少于 4 条有序消息
-- 低证据索引 fixture（ACTIVE_INDEX_VERSION=e2e-low-evidence-v1）
+Creates idempotently:
+- admin_v11 and doctor_v11;
+- patient id=2;
+- ended consultation id=2 with ordered messages.
 
-使用方式：
-    python -m tests.fixtures.seed_production_smoke
-
-仅在 ENVIRONMENT=test 的独立数据库运行。
+The command is intentionally refused unless ``ENVIRONMENT=test``.
 """
+from __future__ import annotations
 
 import hashlib
 import json
 import os
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
-# 确保可以 import app 模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-
-# ──────────────────────────────────────────
-# 配置
-# ──────────────────────────────────────────
 E2E_ADMIN_USER = os.environ.get("E2E_ADMIN_USER", "admin_v11")
 E2E_DOCTOR_USER = os.environ.get("E2E_DOCTOR_USER", "doctor_v11")
 E2E_PASSWORD = os.environ.get("E2E_PASSWORD", "e2e_test_password_2026")
 E2E_INDEX_VERSION = "e2e-low-evidence-v1"
+FIXED_PATIENT_ID = 2
+FIXED_CONSULTATION_ID = 2
 
 
-def check_environment():
-    """确保在测试环境运行"""
-    env = os.environ.get("ENVIRONMENT", "")
-    if env != "test":
-        print(f"ERROR: ENVIRONMENT must be 'test', got '{env}'")
-        print("Set ENVIRONMENT=test before running this script.")
-        sys.exit(1)
+def check_environment() -> None:
+    if os.environ.get("ENVIRONMENT") != "test":
+        raise RuntimeError("ENVIRONMENT must be 'test' for production-smoke seed")
 
 
-# ──────────────────────────────────────────
-# 用户数据
-# ──────────────────────────────────────────
-def seed_users():
-    """幂等创建 admin_v11 和 doctor_v11 账号"""
+def _get_sync_engine():
+    host = os.environ.get("MYSQL_HOST", "localhost")
+    port = os.environ.get("MYSQL_PORT", "3306")
+    user = os.environ.get("MYSQL_USER", "root")
+    password = os.environ.get("MYSQL_PASSWORD", "")
+    database = os.environ.get("MYSQL_DATABASE", "medical_ai_e2e")
+    url = (
+        f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{quote_plus(database)}"
+    )
+    from sqlalchemy import create_engine
+
+    return create_engine(url, pool_pre_ping=True)
+
+
+def seed_users(session):
     from passlib.context import CryptContext
+    from sqlalchemy import text
 
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    password_hash = pwd_context.hash(E2E_PASSWORD)
-
+    password_hash = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(
+        E2E_PASSWORD
+    )
     users = [
         {
             "username": E2E_ADMIN_USER,
             "email": f"{E2E_ADMIN_USER}@e2e.test",
-            "real_name": "E2E 管理员",
+            "real_name": "V1.1 E2E 管理员",
             "role": "admin",
             "department": "系统管理",
-            "password_hash": password_hash,
+            "hashed_password": password_hash,
+            "permissions": json.dumps(["review:manage", "evaluation:create"]),
         },
         {
             "username": E2E_DOCTOR_USER,
             "email": f"{E2E_DOCTOR_USER}@e2e.test",
-            "real_name": "E2E 测试医生",
+            "real_name": "V1.1 E2E 测试医生",
             "role": "doctor",
             "department": "内科",
-            "password_hash": password_hash,
+            "hashed_password": password_hash,
+            "permissions": json.dumps(["evaluation:create"]),
         },
     ]
+    statement = text(
+        """
+        INSERT INTO users
+            (username, email, hashed_password, real_name, role, department, permissions)
+        VALUES
+            (:username, :email, :hashed_password, :real_name, :role, :department, :permissions)
+        ON DUPLICATE KEY UPDATE
+            hashed_password=VALUES(hashed_password), real_name=VALUES(real_name),
+            role=VALUES(role), department=VALUES(department), permissions=VALUES(permissions)
+        """
+    )
+    for user in users:
+        session.execute(statement, user)
 
-    print(f"[seed] Users: {E2E_ADMIN_USER} (admin), {E2E_DOCTOR_USER} (doctor)")
-    return users
+    doctor_id = session.execute(
+        text("SELECT id FROM users WHERE username=:username"),
+        {"username": E2E_DOCTOR_USER},
+    ).scalar_one()
+    admin_id = session.execute(
+        text("SELECT id FROM users WHERE username=:username"),
+        {"username": E2E_ADMIN_USER},
+    ).scalar_one()
+    return users, doctor_id, admin_id
 
 
-# ──────────────────────────────────────────
-# 患者和问诊数据
-# ──────────────────────────────────────────
-def seed_patient_and_consultation():
-    """幂等创建虚拟患者和已结束问诊"""
+def seed_patient_and_consultation(session, doctor_id: int):
+    from sqlalchemy import text
+
     patient = {
-        "name": "E2E合成患者",
+        "id": FIXED_PATIENT_ID,
+        "case_id": "e2e-v11-patient-001",
+        "name": "V1.1 合成患者",
         "age": 50,
-        "gender": "男",
+        "gender": "male",
         "personality_type": "配合型",
-        "chief_complaint": "E2E测试头痛",
+        "chief_complaint": "头痛伴低热三天",
         "medical_history": "无特殊病史",
-        "symptoms": json.dumps(["头痛", "低热"]),
-        "system_prompt": "这是E2E测试合成患者，非真实患者信息。",
+        "symptoms": json.dumps(["头痛", "低热"], ensure_ascii=False),
+        "system_prompt": "这是 V1.1 E2E 合成患者，不包含真实患者信息。",
         "expected_diagnosis": "普通感冒",
+        "difficulty_level": 1,
     }
-
     consultation = {
-        "status": "ended",
+        "id": FIXED_CONSULTATION_ID,
+        "doctor_id": doctor_id,
+        "patient_id": FIXED_PATIENT_ID,
+        "status": "completed",
         "max_rounds": 20,
+        "consultation_type": "initial",
     }
-
     messages = [
         {"role": "doctor", "content": "您好，请描述一下您的症状。", "sequence": 1},
-        {"role": "patient", "content": "我头痛已经三天了，伴有低热。", "sequence": 2},
-        {"role": "doctor", "content": "头痛是持续性还是阵发性的？有没有恶心呕吐？", "sequence": 3},
+        {"role": "patient", "content": "我头痛三天了，还伴有低热。", "sequence": 2},
+        {"role": "doctor", "content": "头痛是持续性还是阵发性？", "sequence": 3},
         {"role": "patient", "content": "持续性的，没有恶心呕吐。", "sequence": 4},
-        {"role": "doctor", "content": "好的，建议做一下血常规检查。", "sequence": 5},
+        {"role": "doctor", "content": "建议先完善血常规检查。", "sequence": 5},
     ]
-
-    print(f"[seed] Patient: {patient['name']}, Consultation: {consultation['status']}, Messages: {len(messages)}")
+    session.execute(
+        text(
+            """
+            INSERT INTO virtual_patients
+                (id, case_id, name, age, gender, personality_type, chief_complaint,
+                 medical_history, symptoms, expected_diagnosis, system_prompt, difficulty_level)
+            VALUES
+                (:id, :case_id, :name, :age, :gender, :personality_type, :chief_complaint,
+                 :medical_history, :symptoms, :expected_diagnosis, :system_prompt, :difficulty_level)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name), chief_complaint=VALUES(chief_complaint),
+                medical_history=VALUES(medical_history), symptoms=VALUES(symptoms)
+            """
+        ),
+        patient,
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO consultations
+                (id, doctor_id, patient_id, status, max_rounds, consultation_type)
+            VALUES
+                (:id, :doctor_id, :patient_id, :status, :max_rounds, :consultation_type)
+            ON DUPLICATE KEY UPDATE
+                doctor_id=VALUES(doctor_id), patient_id=VALUES(patient_id), status=VALUES(status)
+            """
+        ),
+        consultation,
+    )
+    message_statement = text(
+        """
+        INSERT INTO consultation_messages (consultation_id, role, content, sequence)
+        VALUES (:consultation_id, :role, :content, :sequence)
+        ON DUPLICATE KEY UPDATE content=VALUES(content)
+        """
+    )
+    for message in messages:
+        session.execute(
+            message_statement,
+            {**message, "consultation_id": FIXED_CONSULTATION_ID},
+        )
     return patient, consultation, messages
 
 
-# ──────────────────────────────────────────
-# 低证据索引 fixture
-# ──────────────────────────────────────────
-def seed_low_evidence_index():
-    """
-    幂等创建低证据索引 fixture
-
-    ACTIVE_INDEX_VERSION=e2e-low-evidence-v1
-    只含 1 个明确标记为合成测试的 chunk
-    """
-    # 合成测试 chunk
-    synthetic_chunk = {
+def seed_low_evidence_index() -> tuple[dict, dict]:
+    chunk = {
         "id": "e2e-synthetic-chunk-001",
-        "content": "本段落为合成测试内容，用于验证E2E系统的RAG检索功能。"
-        "不包含任何真实医学知识或临床建议。"
-        "此chunk专门用于确保索引非空，同时不会产生真实的医学证据。",
+        "content": "V1.1 E2E synthetic low-evidence fixture.",
         "metadata": {
             "source": "e2e-synthetic-test",
             "is_synthetic": True,
@@ -130,80 +186,50 @@ def seed_low_evidence_index():
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     }
-
-    # Manifest
-    chunk_json = json.dumps(synthetic_chunk, sort_keys=True, ensure_ascii=False)
-    checksum = hashlib.sha256(chunk_json.encode()).hexdigest()
-
+    checksum = hashlib.sha256(
+        json.dumps(chunk, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     manifest = {
         "version": E2E_INDEX_VERSION,
         "schema_version": "1.0",
         "candidate_count": 1,
         "source_count": 1,
-        "chunks": [
-            {
-                "id": synthetic_chunk["id"],
-                "checksum": checksum,
-                "source": synthetic_chunk["metadata"]["source"],
-            }
-        ],
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "chunks": [{"id": chunk["id"], "checksum": checksum}],
     }
-
-    print(f"[seed] Low-evidence index: {E2E_INDEX_VERSION}")
-    print(f"[seed]   candidate_count={manifest['candidate_count']}, source_count={manifest['source_count']}")
-    print("[seed]   confidence=low (single synthetic chunk)")
-
-    return synthetic_chunk, manifest
+    return chunk, manifest
 
 
-# ──────────────────────────────────────────
-# 清理函数
-# ──────────────────────────────────────────
-def cleanup_e2e_data():
-    """清理 E2E 测试数据（按稳定 case_id 清理）"""
-    print("[cleanup] Removing E2E test records...")
-    # 实际清理需要数据库连接，这里只打印意图
-    print("[cleanup] Done (dry-run without DB connection)")
-
-
-# ──────────────────────────────────────────
-# 主入口
-# ──────────────────────────────────────────
-def main():
-    """主入口：幂等创建所有 E2E 测试数据"""
+def main() -> dict:
     check_environment()
-
-    print("=" * 60)
-    print("E2E Production Smoke Seed")
-    print(f"ENVIRONMENT: {os.environ.get('ENVIRONMENT')}")
-    print(f"INDEX_VERSION: {E2E_INDEX_VERSION}")
-    print("=" * 60)
-
-    # 1. 用户
-    users = seed_users()
-
-    # 2. 患者和问诊
-    patient, consultation, messages = seed_patient_and_consultation()
-
-    # 3. 低证据索引
+    engine = _get_sync_engine()
+    with engine.connect() as connection:
+        try:
+            users, doctor_id, admin_id = seed_users(connection)
+            patient, consultation, messages = seed_patient_and_consultation(
+                connection, doctor_id
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     chunk, manifest = seed_low_evidence_index()
-
-    # 验证
-    assert manifest["candidate_count"] == 1
-    assert manifest["source_count"] == 1
     assert len(messages) >= 4
-
-    print("=" * 60)
-    print("Seed complete. All assertions passed.")
-    print("=" * 60)
-
+    engine.dispose()
+    print(
+        "V1.1 production-smoke seed persisted: "
+        f"doctor_id={doctor_id}, admin_id={admin_id}, consultation_id={FIXED_CONSULTATION_ID}"
+    )
     return {
         "users": users,
         "patient": patient,
         "consultation": consultation,
         "messages": messages,
+        "chunk": chunk,
         "manifest": manifest,
+        "doctor_id": doctor_id,
+        "admin_id": admin_id,
+        "patient_id": FIXED_PATIENT_ID,
+        "consultation_id": FIXED_CONSULTATION_ID,
     }
 
 

@@ -137,21 +137,3 @@ test.describe('V1.1 Evaluation and Review Closure', () => {
 // ──────────────────────────────────────────
 // Fault Case 测试（非浏览器，由 run_v11_fault_matrix.py 执行）
 // ──────────────────────────────────────────
-test.describe('V1.1 Fault Cases', () => {
-  test.skip('dispatcher outage recovery', async () => {
-    // 此测试需要在 docker compose 环境中运行
-    // 停止 evaluation-dispatcher，提交评估，恢复 dispatcher，验证完成
-  });
-
-  test.skip('redis-state fail-closed', async () => {
-    // 停止 redis-state，验证认证/API 返回 503
-  });
-
-  test.skip('cache saturation', async () => {
-    // 写满 redis-cache，验证核心功能不受影响
-  });
-
-  test.skip('execution-owner fencing', async () => {
-    // Worker A 停止心跳，Worker B 接管，验证只有一份 Evaluation
-  });
-});

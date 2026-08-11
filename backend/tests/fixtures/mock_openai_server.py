@@ -44,6 +44,13 @@ def get_counters() -> dict:
 # 固定响应表格
 # ──────────────────────────────────────────
 PROMPT_RESPONSES: list[tuple[str, str]] = [
+    # V1.2 Coach structured suggestion
+    (
+        "请用自然中文生成一个问诊建议问题",
+        '{"question":"建议问题：这些症状从什么时候开始，是否持续加重？",'
+        '"rationale":"补充症状起病时间与进展有助于完善问诊信息。",'
+        '"confidence":0.9,"risk_level":"low"}',
+    ),
     # 槽位填充
     (
         "请提取槽位填充信息。",

@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -23,9 +24,23 @@ from evaluation.coach_cases.coach_dataset import load_cases, validate_dataset  #
 from evaluation.coach_eval import (  # noqa: E402
     build_report,
     evaluate_all,
+    evaluate_all_async,
     evaluate_release_policy,
 )
 from evaluation.coach_metrics import collect_provenance, validate_provenance  # noqa: E402
+
+
+async def _evaluate_live_cases(cases: list) -> list:
+    """Evaluate live cases with the production Redis-backed Coach runtime."""
+    from app.orchestration.checkpointer import close_checkpointer, init_checkpointer
+    from app.services.coach_runtime_factory import CoachRuntimeFactory
+
+    await init_checkpointer()
+    try:
+        runtime = await CoachRuntimeFactory().create()
+        return await evaluate_all_async(cases, graph=runtime.graph)
+    finally:
+        await close_checkpointer()
 
 
 def run_gate(
@@ -77,7 +92,10 @@ def run_gate(
     # Step 3: Run benchmark
     print(f"\n[3/5] Running {count}-case benchmark...")
     try:
-        results = evaluate_all(cases)
+        if execution_mode == "live":
+            results = asyncio.run(_evaluate_live_cases(cases))
+        else:
+            results = evaluate_all(cases)
     except Exception as e:
         print(f"  Benchmark FAILED with exception: {e}")
         _write_failure_report(output_dir, "benchmark_exception", [str(e)])

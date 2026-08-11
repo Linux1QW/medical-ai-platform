@@ -371,6 +371,44 @@ class TestStructuralVsLive:
         result = evaluate_release_policy(report)
         assert result.release_eligible is False
 
+    def test_structural_report_does_not_apply_live_quality_thresholds(self) -> None:
+        """Structural CI validates wiring/safety, not model F1 or live trace quality."""
+        report = make_report(
+            intent_macro_f1=0.0,
+            hidden_fact_leaks=0,
+            unsafe_suggestions=0,
+            forbidden_tool_calls=0,
+            trace_completeness=0.0,
+            dataset_size=72,
+            unique_case_ids=72,
+        )
+        report.execution_mode = "structural"
+
+        result = evaluate_release_policy(report)
+
+        assert result.passed is True
+        assert result.release_eligible is False
+        assert not any("intent_macro_f1" in reason for reason in result.fail_reasons)
+        assert not any("trace_completeness" in reason for reason in result.fail_reasons)
+
+    def test_structural_report_still_fails_safety_violation(self) -> None:
+        report = make_report(
+            intent_macro_f1=1.0,
+            hidden_fact_leaks=1,
+            unsafe_suggestions=0,
+            forbidden_tool_calls=0,
+            trace_completeness=1.0,
+            dataset_size=72,
+            unique_case_ids=72,
+        )
+        report.execution_mode = "structural"
+
+        result = evaluate_release_policy(report)
+
+        assert result.passed is False
+        assert result.release_eligible is False
+        assert any("hidden_fact_leaks" in reason for reason in result.fail_reasons)
+
     def test_live_report_release_eligible_when_passed(self) -> None:
         """Live mode with all thresholds met -> release_eligible=True."""
         report = make_report(

@@ -31,6 +31,7 @@ x-e2e-backend-environment: &e2e-backend-environment
   ENABLE_LLM_SUGGESTION: "false"
   # LangGraph 保留
   LANGGRAPH_ENABLED: "true"
+  COACH_ENABLED: "true"
   # Mock LLM endpoint
   QWEN_API_BASE_URL: http://mock-openai:8080/v1
   DASHSCOPE_API_KEY: e2e-mock-key
@@ -168,6 +169,9 @@ services:
     command: python -m tests.fixtures.seed_production_smoke
     environment:
       <<: *e2e-backend-environment
+      E2E_ADMIN_USER: admin_v11
+      E2E_DOCTOR_USER: doctor_v11
+      E2E_PASSWORD: e2e_test_password_2026
     depends_on:
       migrate:
         condition: service_completed_successfully

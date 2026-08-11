@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from langgraph.checkpoint.memory import MemorySaver
+
 from app.agent_runtime.contracts import (
     CoachContextView,
     VisibleMessage,
@@ -180,8 +182,8 @@ def _run_critic(case: CoachCase, result: CaseResult, suggestion_text: str) -> No
 
 # ── Single case evaluation ─────────────────────────────────────────────
 
-def evaluate_case(case: CoachCase) -> CaseResult:
-    """Evaluate a single benchmark case through the coach graph."""
+async def evaluate_case_async(case: CoachCase, *, graph: Any) -> CaseResult:
+    """Evaluate a single benchmark case through an explicitly supplied graph."""
     result = CaseResult(
         case_id=case.case_id,
         specialty=case.specialty,
@@ -219,8 +221,8 @@ def evaluate_case(case: CoachCase) -> CaseResult:
                 last_doctor_msg = msg["content"]
                 break
 
-        # Run coach graph
-        graph = CoachGraph()
+        # The caller owns graph construction: MemorySaver for structural
+        # evaluation, Redis-backed CoachRuntimeFactory for live evaluation.
         session_id = uuid4()
         initial_state: dict = {
             "context": context_view,
@@ -240,19 +242,15 @@ def evaluate_case(case: CoachCase) -> CaseResult:
             "block_reason": "",
         }
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         config = {"configurable": {"thread_id": f"probe:{session_id}"}}
         try:
-            final_state = loop.run_until_complete(
-                asyncio.wait_for(graph.ainvoke(initial_state, config=config), timeout=30)
+            final_state = await asyncio.wait_for(
+                graph.ainvoke(initial_state, config=config), timeout=30
             )
         except asyncio.TimeoutError:
             result.timeout = True
             result.failure_labels.append("timeout")
             return result
-        finally:
-            loop.close()
 
         intent_result = final_state.get("intent_result")
         result.actual_intent = intent_result.intent if intent_result else ""
@@ -296,8 +294,18 @@ def evaluate_case(case: CoachCase) -> CaseResult:
 
 # ── Batch evaluation with validation ───────────────────────────────────
 
-def evaluate_all(cases: list[CoachCase] | None = None) -> list[CaseResult]:
-    """Run all benchmark cases with dataset validation.
+def evaluate_case(case: CoachCase) -> CaseResult:
+    """Evaluate one case in deterministic structural/test mode."""
+    graph = CoachGraph(checkpointer=MemorySaver())
+    return asyncio.run(evaluate_case_async(case, graph=graph))
+
+
+async def evaluate_all_async(
+    cases: list[CoachCase] | None = None,
+    *,
+    graph: Any,
+) -> list[CaseResult]:
+    """Run all benchmark cases on one explicit graph and event loop.
 
     Raises ValueError if dataset doesn't have exactly 72 unique case IDs
     covering all strata.
@@ -327,12 +335,18 @@ def evaluate_all(cases: list[CoachCase] | None = None) -> list[CaseResult]:
             results.append(r)
             continue
         seen_ids.add(case.case_id)
-        results.append(evaluate_case(case))
+        results.append(await evaluate_case_async(case, graph=graph))
 
     return results
 
 
 # ── Report generation ──────────────────────────────────────────────────
+
+def evaluate_all(cases: list[CoachCase] | None = None) -> list[CaseResult]:
+    """Run the structural benchmark with one in-memory checkpointer."""
+    graph = CoachGraph(checkpointer=MemorySaver())
+    return asyncio.run(evaluate_all_async(cases, graph=graph))
+
 
 @dataclass
 class CoachReport:
@@ -525,8 +539,10 @@ def evaluate_release_policy(
     if report.graph_error_count > 0:
         fail_reasons.append(f"graph_error_count={report.graph_error_count}")
 
-    # Metric checks (F1 gate independent of safety)
-    if report.intent_macro_f1 < f1_min:
+    # Model-quality checks are meaningful only for the production-equivalent
+    # live runtime. Structural CI verifies graph/schema/safety wiring and must
+    # never publish a model-quality conclusion.
+    if report.execution_mode == "live" and report.intent_macro_f1 < f1_min:
         fail_reasons.append(
             f"intent_macro_f1={report.intent_macro_f1:.4f} < {f1_min}"
         )
@@ -542,7 +558,7 @@ def evaluate_release_policy(
         fail_reasons.append(
             f"forbidden_tool_calls={report.forbidden_tool_calls} > {forbidden_max}"
         )
-    if report.trace_completeness < trace_min:
+    if report.execution_mode == "live" and report.trace_completeness < trace_min:
         fail_reasons.append(
             f"trace_completeness={report.trace_completeness:.4f} < {trace_min}"
         )

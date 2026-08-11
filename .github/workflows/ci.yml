@@ -557,8 +557,34 @@ jobs:
           cd frontend
           npx playwright install --with-deps chromium
 
-      - name: Start backend API
+      - name: Migrate and seed E2E database
         env:
+          ENVIRONMENT: test
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        run: |
+          cd backend
+          alembic upgrade head
+          python -m tests.fixtures.seed_production_smoke
+          E2E_ADMIN_USER=admin_v12 E2E_DOCTOR_USER=doctor_v12 E2E_PASSWORD=e2e_test_password_2026 \
+            python -m tests.fixtures.seed_v12_coach_e2e
+
+      - name: Start deterministic mock LLM
+        run: |
+          cd backend
+          nohup python -m tests.fixtures.mock_openai_server > /tmp/mock-openai.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:8080/health
+
+      - name: Start Backend A
+        env:
+          ENVIRONMENT: test
           MYSQL_HOST: localhost
           MYSQL_PORT: 3306
           MYSQL_USER: root
@@ -567,15 +593,54 @@ jobs:
           REDIS_CHECKPOINT_URL: redis://localhost:6379/1
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
-          LANGGRAPH_ENABLED: 'false'
+          QWEN_API_BASE_URL: http://localhost:8080/v1
+          QWEN_MODEL: mock-chat
+          LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
           TESTING: 'true'
+          PROCESS_ID: backend-a
+          ENABLE_TOOL_USE: 'false'
+          ENABLE_REACT_KNOWLEDGE: 'false'
+          ENABLE_REACT_REFLECTION: 'false'
+          ENABLE_LLM_SUGGESTION: 'false'
         run: |
           cd backend
-          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8000/health && break
+            curl -sf http://localhost:8000/health > /dev/null 2>&1 && break
             sleep 1
           done
+          curl -sf http://localhost:8000/health
+
+      - name: Start Backend B
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          SECRET_KEY: test-secret-key-for-ci
+          DASHSCOPE_API_KEY: test-key
+          QWEN_API_BASE_URL: http://localhost:8080/v1
+          QWEN_MODEL: mock-chat
+          LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
+          TESTING: 'true'
+          PROCESS_ID: backend-b
+          ENABLE_TOOL_USE: 'false'
+          ENABLE_REACT_KNOWLEDGE: 'false'
+          ENABLE_REACT_REFLECTION: 'false'
+          ENABLE_LLM_SUGGESTION: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8001/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:8001/health
 
       - name: Start frontend dev server
         env:
@@ -590,7 +655,12 @@ jobs:
 
       - name: Run Playwright browser E2E tests
         env:
-          PLAYWRIGHT_TEST_BASE_URL: http://localhost:5173
+          E2E_BASE_URL: http://localhost:5173
+          E2E_BACKEND_A: http://localhost:8000
+          E2E_BACKEND_B: http://localhost:8001
+          E2E_ADMIN_USER: admin_v12
+          E2E_DOCTOR_USER: doctor_v12
+          E2E_PASSWORD: e2e_test_password_2026
           VITE_API_BASE_URL: http://localhost:8000
         run: |
           cd frontend

@@ -5,6 +5,7 @@ Revises: 4d5e6f7a8b9c
 """
 
 import sqlalchemy as sa
+from uuid import uuid4
 
 from alembic import op
 
@@ -20,15 +21,16 @@ def upgrade() -> None:
         "coach_sessions",
         sa.Column("public_id", sa.String(36), nullable=True),
     )
-    # backfill public_id with uuid for existing rows
-    op.execute(
-        "UPDATE coach_sessions SET public_id = "
-        "(SELECT lower(hex(randomblob(4))) || '-' || hex(randomblob(2)) || '-4' "
-        "|| substr(hex(randomblob(2)),2) || '-' "
-        "|| substr('89ab', abs(random()) % 4 + 1, 1) "
-        "|| substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) "
-        "WHERE public_id IS NULL"
-    )
+    # backfill public_id with uuid for existing rows (MySQL-safe: Python parameterized)
+    bind = op.get_bind()
+    rows = bind.execute(
+        sa.text("SELECT id FROM coach_sessions WHERE public_id IS NULL")
+    ).mappings().all()
+    for row in rows:
+        bind.execute(
+            sa.text("UPDATE coach_sessions SET public_id=:public_id WHERE id=:id"),
+            {"public_id": str(uuid4()), "id": row["id"]},
+        )
     op.alter_column(
         "coach_sessions", "public_id",
         existing_type=sa.String(36), nullable=False,
@@ -54,20 +56,28 @@ def upgrade() -> None:
         "coach_decisions",
         sa.Column("idempotency_key", sa.String(64), nullable=True),
     )
-    # backfill
-    op.execute(
-        "UPDATE coach_decisions SET suggestion_id = "
-        "(SELECT lower(hex(randomblob(4))) || '-' || hex(randomblob(2)) || '-4' "
-        "|| substr(hex(randomblob(2)),2) || '-' "
-        "|| substr('89ab', abs(random()) % 4 + 1, 1) "
-        "|| substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))) "
-        "WHERE suggestion_id IS NULL"
-    )
-    op.execute(
-        "UPDATE coach_decisions SET idempotency_key = "
-        "'legacy-' || CAST(id AS TEXT) "
-        "WHERE idempotency_key IS NULL"
-    )
+    # backfill (MySQL-safe: Python parameterized)
+    bind = op.get_bind()
+    rows = bind.execute(
+        sa.text("SELECT id FROM coach_decisions WHERE suggestion_id IS NULL")
+    ).mappings().all()
+    for row in rows:
+        bind.execute(
+            sa.text(
+                "UPDATE coach_decisions SET suggestion_id=:suggestion_id WHERE id=:id"
+            ),
+            {"suggestion_id": str(uuid4()), "id": row["id"]},
+        )
+    rows = bind.execute(
+        sa.text("SELECT id FROM coach_decisions WHERE idempotency_key IS NULL")
+    ).mappings().all()
+    for row in rows:
+        bind.execute(
+            sa.text(
+                "UPDATE coach_decisions SET idempotency_key=:idempotency_key WHERE id=:id"
+            ),
+            {"idempotency_key": f"legacy-{row['id']}", "id": row["id"]},
+        )
     op.alter_column(
         "coach_decisions", "suggestion_id",
         existing_type=sa.String(36), nullable=False,

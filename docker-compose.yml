@@ -189,7 +189,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
       target: production
-    command: python scripts/migrate_v11.py
+    command: python scripts/migrate.py
     environment: *migration-environment
     depends_on:
       mysql:

@@ -12,7 +12,6 @@ import inspect
 from typing import Any, TypedDict
 from uuid import UUID, uuid4
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -181,14 +180,21 @@ def build_coach_graph(
 
     Args:
         checkpointer: LangGraph checkpointer for thread-based persistence.
-                      If None, uses MemorySaver().
+                      Required in production. Tests may pass MemorySaver().
         dependencies: Injectable dependencies (gateway, evidence_fn, timeout).
 
     Returns:
         CompiledStateGraph ready for ainvoke().
+
+    Raises:
+        ValueError: If checkpointer is None (production must use real checkpointer).
     """
     if checkpointer is None:
-        checkpointer = MemorySaver()
+        raise ValueError(
+            "checkpointer is required. "
+            "Production must use Redis checkpointer via CoachRuntimeFactory. "
+            "Tests may pass MemorySaver() explicitly."
+        )
     if dependencies is None:
         dependencies = CoachDependencies()
 

@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent_runtime.contracts import (
     CoachContextView,
@@ -54,7 +55,7 @@ def _make_state(**overrides: Any) -> CoachGraphState:
 @pytest.mark.asyncio
 async def test_graph_full_pipeline() -> None:
     """Full pipeline with valid context produces a suggestion."""
-    graph = build_coach_graph()
+    graph = build_coach_graph(checkpointer=MemorySaver())
     view = _make_test_view()
     result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
@@ -69,7 +70,7 @@ async def test_graph_full_pipeline() -> None:
 @pytest.mark.asyncio
 async def test_graph_blocks_unsafe_intent() -> None:
     """Message classified as unsafe → blocked."""
-    graph = build_coach_graph()
+    graph = build_coach_graph(checkpointer=MemorySaver())
     view = _make_test_view()
     result = await invoke_coach_graph(
         graph, context=view, latest_message="我想伤害自己", turn=1, timeout_seconds=10,
@@ -83,7 +84,7 @@ async def test_graph_blocks_unsafe_intent() -> None:
 @pytest.mark.asyncio
 async def test_graph_intent_classification() -> None:
     """'你好' → intent='rapport'."""
-    graph = build_coach_graph()
+    graph = build_coach_graph(checkpointer=MemorySaver())
     view = _make_test_view()
     result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
@@ -103,7 +104,7 @@ async def test_graph_evidence_fn_called() -> None:
         return [{"source": "rubric", "text": "evidence"}]
 
     deps = CoachDependencies(evidence_fn=evidence_fn)
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_test_view()
     result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
@@ -117,7 +118,7 @@ async def test_graph_evidence_fn_called() -> None:
 @pytest.mark.asyncio
 async def test_graph_node_trace_recorded() -> None:
     """Verify trace_refs has entries for each node."""
-    graph = build_coach_graph()
+    graph = build_coach_graph(checkpointer=MemorySaver())
     view = _make_test_view()
     result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
@@ -133,7 +134,7 @@ async def test_graph_node_trace_recorded() -> None:
 async def test_graph_empty_messages() -> None:
     """Context with no messages still works."""
     view = _make_test_view(messages=[])
-    graph = build_coach_graph()
+    graph = build_coach_graph(checkpointer=MemorySaver())
     result = await invoke_coach_graph(
         graph, context=view, latest_message="你好", turn=1, timeout_seconds=10,
     )

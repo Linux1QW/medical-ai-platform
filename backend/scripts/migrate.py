@@ -30,7 +30,7 @@ _V11_PRE_HEAD = "2b3c4d5e6f7a"
 # V1.1 head: last V1.1 revision
 _V11_HEAD = "3c4d5e6f7a8b"
 # Target final head
-_TARGET_HEAD = "5e6f7a8b9c0d"
+_TARGET_HEAD = "6f7a8b9c0d1e"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

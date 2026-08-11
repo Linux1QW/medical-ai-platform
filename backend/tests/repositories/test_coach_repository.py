@@ -50,6 +50,22 @@ async def second_session(db_session: AsyncSession) -> CoachSession:
     return s
 
 
+@pytest.fixture
+async def decision(repo: CoachRepository, session: CoachSession) -> CoachDecision:
+    """Create a test decision for event association."""
+    d = await repo.reserve_turn(session.id, "test-decision-key")
+    return d
+
+
+@pytest.fixture
+async def second_decision(
+    repo: CoachRepository, second_session: CoachSession
+) -> CoachDecision:
+    """Create a test decision for the second session."""
+    d = await repo.reserve_turn(second_session.id, "test-decision-key-2")
+    return d
+
+
 class TestGetOrCreateSession:
     """Tests for get_or_create_session."""
 
@@ -167,24 +183,24 @@ class TestStreamEvents:
     """Tests for append_stream_event and list_events_after."""
 
     async def test_events_have_monotonic_sequence(
-        self, repo: CoachRepository, session: CoachSession
+        self, repo: CoachRepository, session: CoachSession, decision: CoachDecision
     ):
         """Events should have strictly increasing sequence numbers."""
-        e1 = await repo.append_stream_event(session.id, "suggestion", {"text": "a"})
-        e2 = await repo.append_stream_event(session.id, "heartbeat", None)
-        e3 = await repo.append_stream_event(session.id, "error", {"msg": "fail"})
+        e1 = await repo.append_stream_event(session.id, "suggestion", {"text": "a"}, decision_id=decision.id)
+        e2 = await repo.append_stream_event(session.id, "heartbeat", None, decision_id=decision.id)
+        e3 = await repo.append_stream_event(session.id, "error", {"msg": "fail"}, decision_id=decision.id)
 
         assert e1.sequence == 1
         assert e2.sequence == 2
         assert e3.sequence == 3
 
     async def test_list_events_after_replays_in_order(
-        self, repo: CoachRepository, session: CoachSession
+        self, repo: CoachRepository, session: CoachSession, decision: CoachDecision
     ):
         """list_events_after should return events in sequence order."""
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 1})
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 2})
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 3})
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 1}, decision_id=decision.id)
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 2}, decision_id=decision.id)
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 3}, decision_id=decision.id)
 
         events = await repo.list_events_after(session.id, after_sequence=0)
         assert len(events) == 3
@@ -193,12 +209,12 @@ class TestStreamEvents:
         assert events[2].sequence == 3
 
     async def test_list_events_after_partial_replay(
-        self, repo: CoachRepository, session: CoachSession
+        self, repo: CoachRepository, session: CoachSession, decision: CoachDecision
     ):
         """Should only return events after the given sequence."""
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 1})
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 2})
-        await repo.append_stream_event(session.id, "suggestion", {"idx": 3})
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 1}, decision_id=decision.id)
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 2}, decision_id=decision.id)
+        await repo.append_stream_event(session.id, "suggestion", {"idx": 3}, decision_id=decision.id)
 
         events = await repo.list_events_after(session.id, after_sequence=2)
         assert len(events) == 1
@@ -209,14 +225,16 @@ class TestStreamEvents:
         repo: CoachRepository,
         session: CoachSession,
         second_session: CoachSession,
+        decision: CoachDecision,
+        second_decision: CoachDecision,
     ):
         """Events from session A should not leak into session B's replay."""
         # Add events to session A
-        await repo.append_stream_event(session.id, "suggestion", {"session": "A"})
-        await repo.append_stream_event(session.id, "suggestion", {"session": "A"})
+        await repo.append_stream_event(session.id, "suggestion", {"session": "A"}, decision_id=decision.id)
+        await repo.append_stream_event(session.id, "suggestion", {"session": "A"}, decision_id=decision.id)
 
         # Add events to session B
-        await repo.append_stream_event(second_session.id, "suggestion", {"session": "B"})
+        await repo.append_stream_event(second_session.id, "suggestion", {"session": "B"}, decision_id=second_decision.id)
 
         # Query session B events — should only see session B's events
         events_b = await repo.list_events_after(second_session.id, after_sequence=0)
@@ -238,11 +256,13 @@ class TestTwoSessionBehavior:
         repo: CoachRepository,
         session: CoachSession,
         second_session: CoachSession,
+        decision: CoachDecision,
+        second_decision: CoachDecision,
     ):
         """Each session should have its own sequence counter."""
-        e_a1 = await repo.append_stream_event(session.id, "suggestion", None)
-        e_b1 = await repo.append_stream_event(second_session.id, "suggestion", None)
-        e_a2 = await repo.append_stream_event(session.id, "suggestion", None)
+        e_a1 = await repo.append_stream_event(session.id, "suggestion", None, decision_id=decision.id)
+        e_b1 = await repo.append_stream_event(second_session.id, "suggestion", None, decision_id=second_decision.id)
+        e_a2 = await repo.append_stream_event(session.id, "suggestion", None, decision_id=decision.id)
 
         assert e_a1.sequence == 1
         assert e_b1.sequence == 1  # Independent counter

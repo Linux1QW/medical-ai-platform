@@ -204,144 +204,23 @@ class CoachService:
         await self.db.commit()  # Commit the lease acquisition
 
         # 5. Execute graph and collect results
-        collected_events: list[dict[str, Any]] = []
-        try:
-            # Emit thinking event (will be persisted after commit)
-            collected_events.append({
-                "event_type": "thinking",
-                "data": {"turn_no": decision.turn_no},
-            })
-
-            # Load consultation from DB for real context
-            from sqlalchemy import select as sa_select
-
-            from app.models.consultation import Consultation as ConsultationModel
-
-            stmt = sa_select(ConsultationModel).where(
-                ConsultationModel.id == consultation_id
-            )
-            consult_result = await self.db.execute(stmt)
-            consultation = consult_result.scalar_one_or_none()
-            if consultation is None:
-                raise ValueError(f"Consultation id={consultation_id} not found")
-
-            # Build real context view from database
-            context_builder = CoachContextBuilder()
-            context_view = await context_builder.build(
-                self.db,
-                consultation,
-                doctor_id,
-            )
-
-            # Create production runtime (real checkpointer, gateway, evidence)
-            runtime_factory = CoachRuntimeFactory()
-            runtime = await runtime_factory.create()
-
-            # Run graph with heartbeat
-            graph_task = asyncio.create_task(
-                invoke_coach_graph(
-                    runtime.graph,
-                    context=context_view,
-                    latest_message=latest_message,
-                    turn=decision.turn_no,
-                    session_id=UUID(session.public_id),
-                    thread_id=session.thread_id,
-                    timeout_seconds=settings.COACH_HARD_TIMEOUT_SECONDS,
-                )
-            )
-
-            # Heartbeat loop: emit heartbeat every 15s while graph runs
-            heartbeat_task = asyncio.create_task(
-                self._heartbeat_loop(session.id, decision.id, graph_task)
-            )
-
-            try:
-                result = await graph_task
-            finally:
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-
-            # 6. Process result and build events to persist
-            final_stage: str
-            if result.get("blocked"):
-                final_stage = "blocked"
-                collected_events.append({
-                    "event_type": "error",
-                    "data": {"message": result.get("block_reason", "COACH_ERROR")},
-                })
-            elif result.get("final_suggestion"):
-                final_stage = "completed"
-                suggestion_data = result["final_suggestion"]
-                if hasattr(suggestion_data, "model_dump"):
-                    suggestion_data = suggestion_data.model_dump(mode="json")
-                collected_events.append({
-                    "event_type": "suggestion",
-                    "data": suggestion_data,
-                })
-            else:
-                final_stage = "degraded"
-                collected_events.append({
-                    "event_type": "error",
-                    "data": {"message": "No suggestion produced"},
-                })
-
-        except Exception:
-            logger.exception("Coach graph error for consultation=%s", consultation_id)
-            final_stage = "error"
-            collected_events.append({
-                "event_type": "error",
-                "data": {"message": "Internal coach error"},
-            })
-
-        # 7. Open short transaction: save decision + events → commit
-        # Update decision with result
-        intent = "unknown"
-        if result and isinstance(result.get("intent_result"), dict):
-            intent = result["intent_result"].get("intent", "unknown")
-
-        suggestion_json = None
-        suggestion_id = None
-        confidence = 0.0
-        risk_level = "low"
-        if final_stage == "completed" and collected_events:
-            for evt in collected_events:
-                if evt["event_type"] == "suggestion":
-                    suggestion_json = evt["data"]
-                    suggestion_id = evt["data"].get("suggestion_id", str(uuid4()))
-                    confidence = evt["data"].get("confidence", 0.0)
-                    risk_level = evt["data"].get("risk_level", "low")
-                    break
-
-        # Save decision update
-        await self.repo.save_decision(
-            session_id=session.id,
-            decision_data={
-                "idempotency_key": idempotency_key,
-                "intent": intent,
-                "stage": final_stage,
-                "suggestion_json": suggestion_json,
-                "suggestion_id": suggestion_id,
-                "confidence": confidence,
-                "risk_level": risk_level,
-            },
+        collected_events, result, final_stage = await self._execute_graph_and_collect(
+            session=session,
+            decision=decision,
+            consultation_id=consultation_id,
+            doctor_id=doctor_id,
+            latest_message=latest_message,
         )
 
-        # Save all events with decision_id
-        persisted_events = []
-        for evt_data in collected_events:
-            event = await self.repo.append_stream_event(
-                session_id=session.id,
-                event_type=evt_data["event_type"],
-                data=evt_data["data"],
-                decision_id=decision.id,
-            )
-            persisted_events.append(event)
-
-        # Release lease and set final stage
-        await self.repo.release_decision_lease(decision.id, final_stage)
+        # 7. Open short transaction: save decision + events → commit
+        persisted_events = await self._persist_decision_results(
+            session=session,
+            decision=decision,
+            idempotency_key=idempotency_key,
+            collected_events=collected_events,
+            result=result,
+            final_stage=final_stage,
+        )
 
         # COMMIT the transaction
         await self.db.commit()
@@ -524,13 +403,163 @@ class CoachService:
             for e in events
         ]
 
+    async def _persist_decision_results(
+        self,
+        *,
+        session: Any,
+        decision: Any,
+        idempotency_key: str,
+        collected_events: list[dict[str, Any]],
+        result: dict[str, Any],
+        final_stage: str,
+    ) -> list[Any]:
+        """Persist decision + events in a short transaction, release lease."""
+        intent = "unknown"
+        if result and isinstance(result.get("intent_result"), dict):
+            intent = result["intent_result"].get("intent", "unknown")
+
+        suggestion_json = None
+        suggestion_id = None
+        confidence = 0.0
+        risk_level = "low"
+        for evt in collected_events:
+            if evt["event_type"] == "suggestion":
+                suggestion_json = evt["data"]
+                suggestion_id = evt["data"].get("suggestion_id", str(uuid4()))
+                confidence = evt["data"].get("confidence", 0.0)
+                risk_level = evt["data"].get("risk_level", "low")
+                break
+
+        await self.repo.save_decision(
+            session_id=session.id,
+            decision_data={
+                "idempotency_key": idempotency_key,
+                "intent": intent,
+                "stage": final_stage,
+                "suggestion_json": suggestion_json,
+                "suggestion_id": suggestion_id,
+                "confidence": confidence,
+                "risk_level": risk_level,
+            },
+        )
+
+        persisted_events = []
+        for evt_data in collected_events:
+            event = await self.repo.append_stream_event(
+                session_id=session.id,
+                event_type=evt_data["event_type"],
+                data=evt_data["data"],
+                decision_id=decision.id,
+            )
+            persisted_events.append(event)
+
+        await self.repo.release_decision_lease(decision.id, final_stage)
+        return persisted_events
+
+    async def _execute_graph_and_collect(
+        self,
+        *,
+        session: Any,
+        decision: Any,
+        consultation_id: int,
+        doctor_id: int,
+        latest_message: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+        """Execute the coach graph and collect events + final stage.
+
+        Returns (collected_events, result_dict, final_stage).
+        """
+        collected_events: list[dict[str, Any]] = [{
+            "event_type": "thinking",
+            "data": {"turn_no": decision.turn_no},
+        }]
+        result: dict[str, Any] = {}
+        final_stage: str = "error"
+
+        try:
+            from sqlalchemy import select as sa_select
+
+            from app.models.consultation import Consultation as ConsultationModel
+
+            stmt = sa_select(ConsultationModel).where(
+                ConsultationModel.id == consultation_id
+            )
+            consult_result = await self.db.execute(stmt)
+            consultation = consult_result.scalar_one_or_none()
+            if consultation is None:
+                raise ValueError(f"Consultation id={consultation_id} not found")
+
+            context_builder = CoachContextBuilder()
+            context_view = await context_builder.build(
+                self.db, consultation, doctor_id,
+            )
+
+            runtime_factory = CoachRuntimeFactory()
+            runtime = await runtime_factory.create()
+
+            graph_task = asyncio.create_task(
+                invoke_coach_graph(
+                    runtime.graph,
+                    context=context_view,
+                    latest_message=latest_message,
+                    turn=decision.turn_no,
+                    session_id=UUID(session.public_id),
+                    thread_id=session.thread_id,
+                    timeout_seconds=settings.COACH_HARD_TIMEOUT_SECONDS,
+                )
+            )
+
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(session.id, decision.id, graph_task)
+            )
+
+            try:
+                result = await graph_task
+            finally:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
+            # Process result into events
+            if result.get("blocked"):
+                final_stage = "blocked"
+                collected_events.append({
+                    "event_type": "error",
+                    "data": {"message": result.get("block_reason", "COACH_ERROR")},
+                })
+            elif result.get("final_suggestion"):
+                final_stage = "completed"
+                suggestion_data = result["final_suggestion"]
+                if hasattr(suggestion_data, "model_dump"):
+                    suggestion_data = suggestion_data.model_dump(mode="json")
+                collected_events.append({
+                    "event_type": "suggestion", "data": suggestion_data,
+                })
+            else:
+                final_stage = "degraded"
+                collected_events.append({
+                    "event_type": "error",
+                    "data": {"message": "No suggestion produced"},
+                })
+
+        except Exception:
+            logger.exception("Coach graph error for consultation=%s", consultation_id)
+            final_stage = "error"
+            collected_events.append({
+                "event_type": "error",
+                "data": {"message": "Internal coach error"},
+            })
+
+        return collected_events, result, final_stage
+
     async def _write_error_terminal_state(
         self,
         decision_id: int,
         error_message: str,
     ) -> None:
         """Write a stable error terminal state for an expired decision."""
-        from datetime import datetime
 
         from sqlalchemy import select
 

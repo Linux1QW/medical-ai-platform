@@ -5,6 +5,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent_runtime.contracts import (
     CoachContextView,
@@ -40,7 +41,7 @@ def _run(coro: Any) -> Any:
 
 def test_graph_contains_required_nodes() -> None:
     """Compiled graph must have all required node names."""
-    compiled = build_coach_graph()
+    compiled = build_coach_graph(checkpointer=MemorySaver())
     node_names = set(compiled.get_graph().nodes)
     required = {"intent", "planner", "evidence", "draft", "critic", "persist"}
     assert node_names >= required, f"Missing nodes: {required - node_names}"
@@ -48,7 +49,7 @@ def test_graph_contains_required_nodes() -> None:
 
 def test_graph_has_finalize_node() -> None:
     """Compiled graph includes the finalize node."""
-    compiled = build_coach_graph()
+    compiled = build_coach_graph(checkpointer=MemorySaver())
     assert "finalize" in compiled.get_graph().nodes
 
 
@@ -59,7 +60,7 @@ def test_graph_has_finalize_node() -> None:
 async def test_full_pipeline_rapport() -> None:
     """Full pipeline with '你好' produces a suggestion."""
     deps = CoachDependencies()
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     result = await invoke_coach_graph(
@@ -80,7 +81,7 @@ async def test_full_pipeline_rapport() -> None:
 async def test_unsafe_intent_blocked() -> None:
     """Unsafe intent → blocked, no suggestion."""
     deps = CoachDependencies()
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     result = await invoke_coach_graph(
@@ -107,7 +108,7 @@ async def test_evidence_fn_called() -> None:
         return [{"source": "rubric", "text": "evidence text", "score": 0.9, "doc_id": "doc1"}]
 
     deps = CoachDependencies(evidence_fn=evidence_fn)
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     result = await invoke_coach_graph(
@@ -129,7 +130,7 @@ async def test_evidence_fn_called() -> None:
 async def test_same_thread_resumes_after_retry() -> None:
     """Same thread_id produces consistent turn_no across invocations."""
     deps = CoachDependencies()
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     first = await invoke_coach_graph(
@@ -167,7 +168,7 @@ async def test_hard_timeout_returns_degraded() -> None:
             raise RuntimeError("should not reach")
 
     deps = CoachDependencies(gateway=HangingGateway())
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     result = await invoke_coach_graph(
@@ -189,7 +190,7 @@ async def test_hard_timeout_returns_degraded() -> None:
 async def test_repetition_penalized_once() -> None:
     """Repeating the same dimension within 1 turn penalizes confidence."""
     deps = CoachDependencies()
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     # First invocation — ask about chief_complaint
@@ -224,7 +225,7 @@ async def test_repetition_penalized_once() -> None:
 async def test_trace_refs_are_bounded() -> None:
     """trace_refs should not grow unbounded."""
     deps = CoachDependencies()
-    graph = build_coach_graph(dependencies=deps)
+    graph = build_coach_graph(checkpointer=MemorySaver(), dependencies=deps)
     view = _make_view()
 
     result = await invoke_coach_graph(

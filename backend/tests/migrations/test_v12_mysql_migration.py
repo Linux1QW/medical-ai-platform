@@ -29,7 +29,7 @@ ALEMBIC_VERSIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versio
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = BACKEND_DIR / "scripts"
 
-TARGET_HEAD = "5e6f7a8b9c0d"
+TARGET_HEAD = "6f7a8b9c0d1e"
 
 
 def _ensure_mocks():
@@ -454,6 +454,7 @@ class TestDowngradeReUpgrade:
             ("3c4d5e6f7a8b_v11_review_audit_indexes", "3c4d5e6f7a8b", "2b3c4d5e6f7a"),
             ("4d5e6f7a8b9c_v12_agent_runtime", "4d5e6f7a8b9c", "3c4d5e6f7a8b"),
             ("5e6f7a8b9c0d_v12_runtime_remediation", "5e6f7a8b9c0d", "4d5e6f7a8b9c"),
+            ("6f7a8b9c0d1e_v12_durable_streaming", "6f7a8b9c0d1e", "5e6f7a8b9c0d"),
         ]
         for filename, expected_rev, expected_down in chain:
             mod = _load_migration(filename)

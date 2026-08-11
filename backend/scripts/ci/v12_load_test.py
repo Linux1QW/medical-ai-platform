@@ -1,4 +1,4 @@
-"""V1.2 load test: HTTP load against two real API instances.
+"""V1.2 load test: HTTP Load against two real API instances.
 
 Exercises the full coach path through the HTTP layer:
   login → create consultation → POST SSE stream → parse completion
@@ -11,7 +11,19 @@ A request counts *successful* only when ALL of:
   - no policy error in the stream
   - trace required fields present (admin trace endpoint)
 
-Exceptions are recorded under stable categories, never silently swallowed.
+Preflight checks (fail-fast):
+  - Both backend ports must be reachable and distinct
+  - Both backends must be migrated (schema present)
+  - Both backends must be seeded (doctor_v12 user exists)
+  - Coach must be enabled (coach state endpoint returns non-error)
+
+Thresholds (non-negotiable):
+  - p95 <= 2500 ms
+  - error_rate < 1%
+  - duplicate_decisions == 0
+  - replay_failures == 0
+  - trace_completeness == 100%
+  - both backends must receive requests
 
 Usage:
     python -m scripts.ci.v12_load_test [--concurrency N] [--total N]
@@ -49,6 +61,13 @@ API_PREFIX = "/api/v1"
 SSE_TIMEOUT_S = int(os.environ.get("V12_SSE_TIMEOUT", "30"))
 REQUEST_TIMEOUT_S = int(os.environ.get("V12_REQUEST_TIMEOUT", "60"))
 
+# ── Thresholds (non-negotiable) ──
+THRESHOLD_P95_MS = 2500
+THRESHOLD_ERROR_RATE = 0.01  # < 1%
+THRESHOLD_DUPLICATE_DECISIONS = 0
+THRESHOLD_REPLAY_FAILURES = 0
+THRESHOLD_TRACE_COMPLETENESS = 1.0  # 100%
+
 
 # ──────────────────────────────────────────────────────────────
 # Error categories (stable, never silently counted)
@@ -84,6 +103,7 @@ class RequestResult:
     suggestion_id: str | None = None
     turn_no: int = 0
     trace_complete: bool = False
+    backend_url: str = ""
 
 
 # ──────────────────────────────────────────────────────────────
@@ -229,6 +249,76 @@ async def login_admin(session: aiohttp.ClientSession, base_url: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
+# Preflight checks (fail-fast)
+# ──────────────────────────────────────────────────────────────
+
+async def preflight_check() -> None:
+    """Validate both backends are ready before starting load test.
+
+    Checks:
+    1. Backend URLs must be distinct
+    2. Both ports must be reachable (health endpoint)
+    3. Both must be migrated (users table exists — login works)
+    4. Both must be seeded (doctor_v12 can login)
+    5. Coach must be enabled (state endpoint returns non-500)
+    """
+    print("Running preflight checks...")
+
+    # 1. Distinct URLs
+    if BACKEND_URLS[0] == BACKEND_URLS[1]:
+        print(f"FATAL: Backend URLs must be distinct: {BACKEND_URLS}")
+        sys.exit(2)
+
+    async with aiohttp.ClientSession() as session:
+        for url in BACKEND_URLS:
+            label = "A" if url == BACKEND_URLS[0] else "B"
+
+            # 2. Health check
+            try:
+                async with session.get(
+                    f"{url}/health",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status != 200:
+                        print(f"FATAL: Backend {label} ({url}) health check failed: {resp.status}")
+                        sys.exit(2)
+            except Exception as exc:
+                print(f"FATAL: Backend {label} ({url}) unreachable: {exc}")
+                sys.exit(2)
+
+            # 3 & 4. Login check (verifies migrated + seeded)
+            try:
+                token = await login(session, url)
+                if not token:
+                    print(f"FATAL: Backend {label} ({url}) login returned empty token")
+                    sys.exit(2)
+            except Exception as exc:
+                print(f"FATAL: Backend {label} ({url}) login failed (not migrated or not seeded?): {exc}")
+                sys.exit(2)
+
+            # 5. Coach enabled check
+            try:
+                # Use a dummy consultation_id to check coach endpoint availability
+                async with session.get(
+                    f"{url}{API_PREFIX}/coach/consultations/0/state",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    # 404 is acceptable (consultation 0 doesn't exist), but not 500
+                    if resp.status == 500:
+                        body = await resp.text()
+                        print(f"FATAL: Backend {label} ({url}) Coach endpoint returned 500: {body}")
+                        sys.exit(2)
+            except Exception as exc:
+                print(f"FATAL: Backend {label} ({url}) Coach check failed: {exc}")
+                sys.exit(2)
+
+            print(f"  Backend {label} ({url}): OK")
+
+    print("Preflight checks passed.")
+
+
+# ──────────────────────────────────────────────────────────────
 # Single request lifecycle
 # ──────────────────────────────────────────────────────────────
 
@@ -253,7 +343,7 @@ async def run_single_request(
     except Exception as exc:
         elapsed = (time.perf_counter() - start) * 1000
         errors.append(ErrorRecord(ErrorCategory.CONSULTATION_CREATE_FAILURE, str(exc)))
-        return RequestResult(success=False, latency_ms=elapsed, errors=errors)
+        return RequestResult(success=False, latency_ms=elapsed, errors=errors, backend_url=base_url)
 
     idem_key = f"load-{uuid4().hex[:32]}"
     suggestion_id: str | None = None
@@ -270,15 +360,15 @@ async def run_single_request(
     except asyncio.TimeoutError:
         elapsed = (time.perf_counter() - start) * 1000
         errors.append(ErrorRecord(ErrorCategory.SSE_TIMEOUT, f"SSE timed out for consultation {consultation_id}"))
-        return RequestResult(success=False, latency_ms=elapsed, errors=errors)
+        return RequestResult(success=False, latency_ms=elapsed, errors=errors, backend_url=base_url)
     except aiohttp.ClientError as exc:
         elapsed = (time.perf_counter() - start) * 1000
         errors.append(ErrorRecord(ErrorCategory.SSE_CONNECTION_ERROR, str(exc)))
-        return RequestResult(success=False, latency_ms=elapsed, errors=errors)
+        return RequestResult(success=False, latency_ms=elapsed, errors=errors, backend_url=base_url)
     except Exception as exc:
         elapsed = (time.perf_counter() - start) * 1000
         errors.append(ErrorRecord(ErrorCategory.UNEXPECTED_EXCEPTION, f"SSE: {exc}"))
-        return RequestResult(success=False, latency_ms=elapsed, errors=errors)
+        return RequestResult(success=False, latency_ms=elapsed, errors=errors, backend_url=base_url)
 
     # 3. Validate events
     event_names = [e["event"] for e in events]
@@ -342,6 +432,7 @@ async def run_single_request(
         suggestion_id=suggestion_id,
         turn_no=turn_no,
         trace_complete=trace_complete,
+        backend_url=base_url,
     )
 
 
@@ -383,13 +474,20 @@ async def run_load_test(
     patient_id: int = 1,
 ) -> dict[str, Any]:
     """Run load test against two API instances."""
-    print(f"V1.2 Load Test: {total_requests} requests, concurrency={concurrency}")
+    # Preflight
+    await preflight_check()
+
+    print(f"\nV1.2 Load Test: {total_requests} requests, concurrency={concurrency}")
     print(f"  Targets: {BACKEND_URLS}")
+    print(f"  Thresholds: p95<={THRESHOLD_P95_MS}ms, err<{THRESHOLD_ERROR_RATE:.0%}, "
+          f"dup={THRESHOLD_DUPLICATE_DECISIONS}, replay={THRESHOLD_REPLAY_FAILURES}, "
+          f"trace={THRESHOLD_TRACE_COMPLETENESS:.0%}")
 
     sem = asyncio.Semaphore(concurrency)
     results: list[RequestResult] = []
     all_errors: list[ErrorRecord] = []
     seen_suggestion_ids: list[str] = []
+    backend_hit_count: dict[str, int] = {url: 0 for url in BACKEND_URLS}
 
     async def bounded_request(turn: int) -> None:
         # Alternate between backend instances
@@ -405,6 +503,7 @@ async def run_load_test(
                     )
                     results.append(result)
                     all_errors.extend(result.errors)
+                    backend_hit_count[base_url] = backend_hit_count.get(base_url, 0) + 1
                     if result.suggestion_id:
                         seen_suggestion_ids.append(result.suggestion_id)
             except Exception as exc:
@@ -436,8 +535,14 @@ async def run_load_test(
     # Duplicate decisions
     duplicate_count = len(seen_suggestion_ids) - len(set(seen_suggestion_ids))
 
+    # Replay failures
+    replay_failures = error_counts.get(ErrorCategory.REPLAY_FAILURE, 0)
+
+    # Trace completeness
     total_completed = len(results)
     success_count = len(successful)
+    trace_complete_count = sum(1 for r in results if r.trace_complete)
+    trace_completeness = trace_complete_count / total_completed if total_completed > 0 else 0.0
     error_rate = (total_completed - success_count) / total_completed if total_completed > 0 else 0
 
     # ── Report ──
@@ -446,19 +551,48 @@ async def run_load_test(
     print(f"  Completed:         {total_completed}/{total_requests}")
     print(f"  Successful:        {success_count}/{total_completed}")
     print(f"  p50 latency:       {p50:.1f}ms")
-    print(f"  p95 latency:       {p95:.1f}ms (threshold: ≤2500ms)")
+    print(f"  p95 latency:       {p95:.1f}ms (threshold: ≤{THRESHOLD_P95_MS}ms)")
     print(f"  p99 latency:       {p99:.1f}ms")
-    print(f"  Error rate:        {error_rate:.1%} (threshold: <1%)")
-    print(f"  Duplicate IDs:     {duplicate_count}")
-    print(f"  Trace complete:    {sum(1 for r in results if r.trace_complete)}/{total_completed}")
+    print(f"  Error rate:        {error_rate:.1%} (threshold: <{THRESHOLD_ERROR_RATE:.0%})")
+    print(f"  Duplicate IDs:     {duplicate_count} (threshold: {THRESHOLD_DUPLICATE_DECISIONS})")
+    print(f"  Replay failures:   {replay_failures} (threshold: {THRESHOLD_REPLAY_FAILURES})")
+    print(f"  Trace complete:    {trace_complete_count}/{total_completed} "
+          f"({trace_completeness:.0%}, threshold: {THRESHOLD_TRACE_COMPLETENESS:.0%})")
+    print(f"  Backend hits:")
+    for url, count in backend_hit_count.items():
+        label = "A" if url == BACKEND_URLS[0] else "B"
+        print(f"    Backend {label} ({url}): {count} requests")
     if error_counts:
         print("  Error breakdown:")
         for cat, cnt in sorted(error_counts.items()):
             print(f"    {cat}: {cnt}")
     print(f"{'='*60}")
 
-    passed = p95 <= 2500 and error_rate < 0.01 and duplicate_count == 0
-    print(f"\nLoad test: {'PASS' if passed else 'FAIL'}")
+    # ── Evaluate all thresholds ──
+    failures: list[str] = []
+    if p95 > THRESHOLD_P95_MS:
+        failures.append(f"p95 {p95:.1f}ms > {THRESHOLD_P95_MS}ms")
+    if error_rate >= THRESHOLD_ERROR_RATE:
+        failures.append(f"error_rate {error_rate:.1%} >= {THRESHOLD_ERROR_RATE:.0%}")
+    if duplicate_count > THRESHOLD_DUPLICATE_DECISIONS:
+        failures.append(f"duplicates {duplicate_count} > {THRESHOLD_DUPLICATE_DECISIONS}")
+    if replay_failures > THRESHOLD_REPLAY_FAILURES:
+        failures.append(f"replay_failures {replay_failures} > {THRESHOLD_REPLAY_FAILURES}")
+    if trace_completeness < THRESHOLD_TRACE_COMPLETENESS:
+        failures.append(f"trace_completeness {trace_completeness:.0%} < {THRESHOLD_TRACE_COMPLETENESS:.0%}")
+
+    # Both backends must receive requests
+    for url in BACKEND_URLS:
+        if backend_hit_count.get(url, 0) == 0:
+            failures.append(f"Backend {url} received 0 requests")
+
+    passed = len(failures) == 0
+    if failures:
+        print(f"\nLoad test FAIL reasons:")
+        for f in failures:
+            print(f"  - {f}")
+    else:
+        print(f"\nLoad test: PASS")
 
     return {
         "p50": p50,
@@ -466,9 +600,12 @@ async def run_load_test(
         "p99": p99,
         "error_rate": error_rate,
         "duplicate_decisions": duplicate_count,
+        "replay_failures": replay_failures,
+        "trace_completeness": trace_completeness,
         "total_completed": total_completed,
         "successful": success_count,
         "errors_by_category": error_counts,
+        "backend_hits": backend_hit_count,
         "passed": passed,
     }
 

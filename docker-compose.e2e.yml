@@ -17,6 +17,8 @@ x-e2e-backend-environment: &e2e-backend-environment
   ENVIRONMENT: test
   # 独立数据库名
   MYSQL_DATABASE: medical_ai_e2e
+  # 进程身份 — 每个 Backend 实例必须有唯一 PROCESS_ID
+  PROCESS_ID: backend-a
   # JWT
   SECRET_KEY: e2e-test-secret-key-not-for-production
   ACCESS_TOKEN_EXPIRE_MINUTES: 60
@@ -110,6 +112,7 @@ services:
     command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
       <<: *e2e-backend-environment
+      PROCESS_ID: backend-b
     ports:
       - "${E2E_BACKEND_B_PORT:-8001}:8000"
     depends_on:

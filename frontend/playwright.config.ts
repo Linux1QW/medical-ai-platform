@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
  * Playwright 配置 for V1.2 Coach Intelligence E2E
  *
  * 测试 Coach 建议 → 反馈 → 持久化闭环流程
+ * 双 Backend 实例 + 共享 MySQL/Redis 基础设施
  */
 export default defineConfig({
   testDir: './e2e',
@@ -24,6 +25,14 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
 
+  /* 环境变量传递给测试 */
+  metadata: {
+    backendA: process.env.E2E_BACKEND_A || 'http://localhost:8000',
+    backendB: process.env.E2E_BACKEND_B || 'http://localhost:8001',
+    consultationId: process.env.E2E_CONSULTATION_ID || '1',
+    doctorUser: process.env.E2E_DOCTOR_USER || 'doctor_v12',
+  },
+
   /* 项目配置 */
   projects: [
     {
@@ -40,7 +49,7 @@ export default defineConfig({
   // },
 
   /* 超时配置 */
-  timeout: 90_000, // 单个测试超时 (V1.2 Coach SSE may take longer)
+  timeout: 120_000, // 单个测试超时 (V1.2 Coach SSE + 双 Backend 验证)
   expect: {
     timeout: 15_000, // 断言超时
   },

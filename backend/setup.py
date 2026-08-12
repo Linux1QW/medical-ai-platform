@@ -2,13 +2,14 @@ from setuptools import find_packages, setup
 
 setup(
     name="medical-ai-platform-backend",
-    version="1.0.0",
+    version="1.2.0",
     packages=find_packages(),
     install_requires=[
         "fastapi==0.115.6",
         "uvicorn[standard]==0.34.0",
         "sqlalchemy[asyncio]==2.0.36",
         "aiomysql==0.2.0",
+        "aiosqlite==0.22.1",
         "pymysql==1.1.1",
         "pydantic==2.10.4",
         "pydantic-settings==2.10.1",
@@ -25,7 +26,7 @@ setup(
         "pytest-asyncio>=0.21.0",
         "langgraph==1.2.6",
         "langgraph-checkpoint-redis==0.4.1",
-        "redis==7.4.1",
+        "redis==6.4.0",
         "celery[redis]==5.6.3",
         "slowapi>=0.1.9",
     ],

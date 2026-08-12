@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -11,6 +11,7 @@ class Evaluation(Base):
     """问诊评估报告 — 五维度评估"""
 
     __tablename__ = "evaluations"
+    __table_args__ = (Index("ux_evaluations_run_id", "run_id", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     consultation_id: Mapped[int] = mapped_column(
@@ -91,7 +92,14 @@ class Evaluation(Base):
 
     # LangGraph 审计字段
     run_id: Mapped[Optional[str]] = mapped_column(
-        String(36), nullable=True, comment="关联的评估运行ID"
+        String(36),
+        ForeignKey(
+            "evaluation_runs.id",
+            name="fk_evaluations_run_id_evaluation_runs",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        comment="关联的评估运行ID",
     )
     safety_data: Mapped[Optional[Any]] = mapped_column(
         JSON, nullable=True, comment="Safety检查结果"

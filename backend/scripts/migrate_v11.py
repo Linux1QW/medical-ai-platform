@@ -24,9 +24,15 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# ``python scripts/migrate_v11.py`` makes ``scripts`` the import root.  Add the
+# backend directory before the lazy backfill imports below need ``app.*``.
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
 # Alembic revision 常量
 _PRE_HEAD_REVISION = "2b3c4d5e6f7a"
-_HEAD_REVISION = "3c4d5e6f7a8b"
+_HEAD_REVISION = "7a8b9c0d1e2f"
 
 
 def _run_command(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedProcess:

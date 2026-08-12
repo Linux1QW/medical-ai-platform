@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -41,12 +42,12 @@ class CoachDecision(Base):
         nullable=False,
     )
     turn_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    suggestion_id: Mapped[Optional[str]] = mapped_column(
-        String(36), unique=True, nullable=True,
+    suggestion_id: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid4()),
         comment="durable public identifier for the suggestion",
     )
-    idempotency_key: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True,
+    idempotency_key: Mapped[str] = mapped_column(
+        String(64), nullable=False,
         comment="client-provided idempotency key",
     )
     intent: Mapped[str] = mapped_column(String(120), nullable=False)

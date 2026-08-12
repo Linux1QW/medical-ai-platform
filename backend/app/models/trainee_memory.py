@@ -5,12 +5,14 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,13 +61,16 @@ class TraineeMemoryConsent(Base):
     """Persist memory consent separately from the memory record."""
 
     __tablename__ = "trainee_memory_consents"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", name="uq_trainee_memory_consent_doctor_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     doctor_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=False, unique=True,
+        Integer, ForeignKey("users.id"), nullable=False,
     )
     granted: Mapped[bool] = mapped_column(
-        Integer, nullable=False, default=0,
+        Boolean, nullable=False, default=False,
         comment="boolean: 1=granted, 0=not granted",
     )
     granted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

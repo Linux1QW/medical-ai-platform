@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -11,6 +11,11 @@ from app.models.base import Base
 
 class EvaluationRun(Base):
     __tablename__ = "evaluation_runs"
+    __table_args__ = (
+        Index("ix_evaluation_runs_consultation_created", "consultation_id", "created_at"),
+        Index("ix_evaluation_runs_status_updated", "status", "updated_at"),
+        Index("ix_evaluation_runs_evaluation_id", "evaluation_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, comment="run_id (UUID)")
     consultation_id: Mapped[int] = mapped_column(

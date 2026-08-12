@@ -34,6 +34,9 @@ def test_ci_playwright_job_is_self_contained_and_targets_real_base_url() -> None
     assert "--port 8000" in job
     assert "--port 8001" in job
     assert "curl -sf http://localhost:8001/health" in job
+    assert "image: redis/redis-stack-server:7.4.0-v8" in job
+    assert "cat /tmp/backend-a.log" in job
+    assert "cat /tmp/backend-b.log" in job
 
 
 def test_ci_dependency_and_integration_gates_are_fail_closed() -> None:
@@ -91,6 +94,13 @@ def test_rc_job_ids_and_needs_expressions_are_github_compatible() -> None:
     assert "needs.72-case-live" not in workflow
     assert "needs['coach-72-case-live'].result" in workflow
     assert not re.search(r"needs\.[A-Za-z0-9_]+-", workflow)
+
+
+def test_rc_langgraph_jobs_use_module_capable_redis() -> None:
+    workflow = RC.read_text(encoding="utf-8")
+
+    for name in ("setup-services", "coach-72-case-live", "dual-load", "browser-e2e"):
+        assert "image: redis/redis-stack-server:7.4.0-v8" in _job(workflow, name)
 
 
 def test_rc_database_seed_is_fail_closed_and_verified() -> None:

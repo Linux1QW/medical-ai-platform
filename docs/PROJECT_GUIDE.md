@@ -86,7 +86,7 @@ Prometheus/Grafana ── optional monitoring profile
 
 | 实例 | 策略 | 承载 | DB 分配 |
 |---|---|---|---|
-| `redis-state` | AOF + noeviction | checkpoint、broker、result、JWT 黑名单、progress bus、evaluation control | db=1 checkpoint, db=4 broker, db=5 result, db=6 progress, db=7 JWT blacklist, db=8 evaluation control |
+| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint、broker、result、JWT 黑名单、progress bus、evaluation control | db=1 checkpoint, db=4 broker, db=5 result, db=6 progress, db=7 JWT blacklist, db=8 evaluation control |
 | `redis-cache` | allkeys-LRU | LLM 响应缓存、检索缓存 | db=0 LLM cache, db=1 retrieval cache |
 
 本地开发使用 `localhost:6379`（state）和 `localhost:6380`（cache）；Compose 使用 `redis-state` 和 `redis-cache` 服务名。
@@ -189,7 +189,7 @@ Outbox 状态：`pending → leased → published → cancelled/dead_letter`
 
 - 后端镜像/CI：Python 3.10；FastAPI 0.115.6、Uvicorn 0.34.0、Pydantic 2.10.4。
 - 数据：SQLAlchemy 2.0.36、Alembic 1.18.5、aiomysql/pymysql、MySQL 8.0。
-- 编排与队列：LangGraph 1.2.6、Redis 6.4 Python client、Redis 7 server、Celery 5.6.3。
+- 编排与队列：LangGraph 1.2.6、Redis 6.4 Python client、Redis Stack 7 state server（RedisJSON/RediSearch）、Redis 7 cache server、Celery 5.6.3。
 - RAG：ChromaDB 1.5.7、PyMuPDF、jieba、bm25s 0.3.9；可选 FlagEmbedding/BGE-M3 未写入默认 requirements。
 - LLM：OpenAI-compatible client、DashScope；默认 Provider adapter 为 `openai_compatible`。
 - 前端：Node 18 构建；React 19.2、TypeScript 5.9、Vite 7.3、Ant Design 6.3、Axios、Recharts。
@@ -269,7 +269,7 @@ Celery 全局 hard/soft time limit 为 600/300 秒，`worker_prefetch_multiplier
 
 ### 7.1 本地进程：推荐的可控路径
 
-前置：Python 3.10、Node 18、MySQL 8、Redis 7。先创建空数据库，不要先运行 `database/init.sql`。
+前置：Python 3.10、Node 18、MySQL 8、Redis Stack 7 state（必须包含 RedisJSON/RediSearch）和 Redis 7 cache。先创建空数据库，不要先运行 `database/init.sql`。
 
 ```powershell
 cd backend

@@ -164,12 +164,13 @@ while running:
 
 | 实例 | 策略 | 承载 | 本地端口 |
 |---|---|---|---|
-| `redis-state` | AOF + noeviction | checkpoint(db=1)、broker(db=4)、result(db=5)、progress(db=6)、JWT blacklist(db=7)、evaluation control(db=8) | 6379 |
+| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint(db=1)、broker(db=4)、result(db=5)、progress(db=6)、JWT blacklist(db=7)、evaluation control(db=8) | 6379 |
 | `redis-cache` | allkeys-LRU | LLM cache(db=0)、retrieval cache(db=1) | 6380 |
 
 **设计权衡**：
 
 - **分离原因**：状态数据（checkpoint、broker）不能因缓存淘汰而丢失；缓存数据不应受 AOF 持久化拖累
+- **模块要求**：LangGraph Redis checkpointer 在 Redis 8 以下依赖 RedisJSON 和 RediSearch，因此 `redis-state` 使用 Redis Stack；普通 `redis:7` 仅用于 `redis-cache`
 - **noeviction**：redis-state 满时拒绝写入而非丢数据，保证 checkpoint/broker 完整性
 - **allkeys-LRU**：redis-cache 满时自动淘汰最少使用 key，对缓存场景可接受
 - **本地开发**：两个实例都可用 `localhost:6379` 不同 DB，但生产必须物理分离

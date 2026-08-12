@@ -93,8 +93,14 @@ class TestHealthReady:
             resp = client.get("/health/ready")
             assert resp.status_code == 503
 
-    def test_ready_returns_503_when_checkpointer_down(self, client):
+    def test_ready_returns_503_when_checkpointer_down(self, client, monkeypatch):
         """checkpointer 不可用时返回 503"""
+        # The suite-wide CI baseline disables LangGraph. This test exercises
+        # the enabled/fail-closed branch explicitly and must not inherit that
+        # unrelated process setting.
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "LANGGRAPH_ENABLED", True)
         with patch("app.main.engine") as mock_engine, \
              patch("app.main.get_checkpointer") as mock_cp, \
              patch("app.main._check_progress_bus") as mock_pb:

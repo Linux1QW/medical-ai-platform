@@ -110,8 +110,11 @@ async def _claim_rows(engine, worker_id: str, batch_size: int) -> list[str]:
 async def test_concurrent_claim_disjoint_event_ids():
     """Two dispatchers claiming concurrently must get disjoint event_id sets."""
     from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
 
-    engine = create_async_engine(MYSQL_URL, echo=False)
+    # Own every connection opened by this test. This prevents pooled MySQL
+    # sockets surviving the test event loop as unraisable ResourceWarnings.
+    engine = create_async_engine(MYSQL_URL, echo=False, poolclass=NullPool)
 
     try:
         await _create_test_table(engine)
@@ -131,8 +134,16 @@ async def test_concurrent_claim_disjoint_event_ids():
             f"Concurrent claims overlapped: {worker_a_ids & worker_b_ids}"
         )
 
-        # Together they should have claimed all 20 rows
-        assert len(worker_a_ids) + len(worker_b_ids) == 20
+        # SKIP LOCKED guarantees non-overlap and non-blocking, but InnoDB may
+        # return an undersized batch while the leading range is locked. A later
+        # dispatcher tick must claim every row once those locks are released.
+        assert worker_a_ids or worker_b_ids
+        recovery_ids = set(
+            await _claim_rows(engine, worker_id="worker-recovery", batch_size=20)
+        )
+        assert worker_a_ids.isdisjoint(recovery_ids)
+        assert worker_b_ids.isdisjoint(recovery_ids)
+        assert len(worker_a_ids | worker_b_ids | recovery_ids) == 20
     finally:
         async with engine.begin() as conn:
             from sqlalchemy import text
@@ -144,8 +155,9 @@ async def test_concurrent_claim_disjoint_event_ids():
 async def test_skip_locked_prevents_blocking():
     """A second claim should not block when first holds FOR UPDATE locks."""
     from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
 
-    engine = create_async_engine(MYSQL_URL, echo=False)
+    engine = create_async_engine(MYSQL_URL, echo=False, poolclass=NullPool)
 
     try:
         await _create_test_table(engine)

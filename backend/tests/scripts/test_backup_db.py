@@ -33,9 +33,35 @@ requires_bash = pytest.mark.skipif(not HAS_BASH, reason="bash not available")
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # repo root
-SCRIPT = REPO_ROOT / "backend" / "scripts" / "backup_db.sh"
+PRODUCTION_SCRIPT = REPO_ROOT / "backend" / "scripts" / "backup_db.sh"
+SCRIPT = PRODUCTION_SCRIPT
 
 ALLOWED_BACKUP_DIR = "/var/backups/medical-ai"
+
+
+@pytest.fixture(autouse=True)
+def isolated_allowed_backup_root(tmp_path: Path):
+    """Run behavioral tests with an isolated copy of the production script.
+
+    Only the compile-time allowed prefix is replaced. The production script
+    remains locked to /var/backups/medical-ai, while CI can exercise the full
+    success and failure pipelines without root filesystem permissions.
+    """
+    global SCRIPT
+    test_script = tmp_path / "backup_db.test.sh"
+    source = PRODUCTION_SCRIPT.read_text(encoding="utf-8")
+    source = source.replace(
+        'ALLOWED_PREFIX="/var/backups/medical-ai"',
+        f'ALLOWED_PREFIX="{tmp_path.resolve().as_posix()}"',
+        1,
+    )
+    test_script.write_text(source, encoding="utf-8", newline="\n")
+    test_script.chmod(test_script.stat().st_mode | stat.S_IXUSR)
+    SCRIPT = test_script
+    try:
+        yield
+    finally:
+        SCRIPT = PRODUCTION_SCRIPT
 
 
 def _write_fake_bin(directory: Path, name: str, body: str) -> Path:
@@ -398,7 +424,7 @@ class TestPathTraversalRejection:
         env = _prepend_path(env, fake_bins)
 
         result = subprocess.run(
-            ["bash", str(SCRIPT), str(evil_dir)],
+            ["bash", str(PRODUCTION_SCRIPT), str(evil_dir)],
             env=env,
             capture_output=True,
             text=True,
@@ -420,7 +446,7 @@ class TestPathTraversalRejection:
         env = _prepend_path(env, fake_bins)
 
         result = subprocess.run(
-            ["bash", str(SCRIPT), escape_path],
+            ["bash", str(PRODUCTION_SCRIPT), escape_path],
             env=env,
             capture_output=True,
             text=True,
@@ -465,7 +491,7 @@ class TestIdentityNotVisible:
         # Script should succeed using only the recipient (public key)
         assert result.returncode == 0, f"stderr: {result.stderr}"
         # Verify the script source does not reference identity files
-        script_content = SCRIPT.read_text(encoding="utf-8")
+        script_content = PRODUCTION_SCRIPT.read_text(encoding="utf-8")
         assert "AGE_IDENTITY" not in script_content, (
             "Script must not reference AGE_IDENTITY"
         )
@@ -481,7 +507,7 @@ class TestStatusFileAtomicity:
         self, tmp_path: Path, fake_bins: Path
     ):
         """Verify the script uses a temp file + mv pattern for status."""
-        script_content = SCRIPT.read_text(encoding="utf-8")
+        script_content = PRODUCTION_SCRIPT.read_text(encoding="utf-8")
         # The script should contain a pattern like: write to .tmp then mv
         assert "mv " in script_content and (
             ".tmp" in script_content or "tmp" in script_content

@@ -528,7 +528,8 @@ jobs:
           --health-timeout=5s
           --health-retries=5
       redis:
-        image: redis:7-alpine
+        # LangGraph RedisSaver requires RedisJSON and RediSearch on Redis < 8.
+        image: redis/redis-stack-server:7.4.0-v8
         ports: ['6379:6379']
         options: >-
           --health-cmd="redis-cli ping"
@@ -619,11 +620,20 @@ jobs:
         run: |
           cd backend
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
+          backend_pid=$!
           for i in $(seq 1 30); do
             curl -sf http://localhost:8000/health > /dev/null 2>&1 && break
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "Backend A exited before becoming healthy"
+              cat /tmp/backend-a.log
+              exit 1
+            fi
             sleep 1
           done
-          curl -sf http://localhost:8000/health
+          curl -sf http://localhost:8000/health || {
+            cat /tmp/backend-a.log
+            exit 1
+          }
 
       - name: Start Backend B
         env:
@@ -649,11 +659,20 @@ jobs:
         run: |
           cd backend
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
+          backend_pid=$!
           for i in $(seq 1 30); do
             curl -sf http://localhost:8001/health > /dev/null 2>&1 && break
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "Backend B exited before becoming healthy"
+              cat /tmp/backend-b.log
+              exit 1
+            fi
             sleep 1
           done
-          curl -sf http://localhost:8001/health
+          curl -sf http://localhost:8001/health || {
+            cat /tmp/backend-b.log
+            exit 1
+          }
 
       - name: Start frontend dev server
         env:

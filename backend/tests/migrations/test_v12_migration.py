@@ -38,6 +38,7 @@ def _load_migration(name: str):
 
 
 MIGRATION_NAME = "5e6f7a8b9c0d_v12_runtime_remediation"
+RECONCILIATION_MIGRATION_NAME = "7a8b9c0d1e2f_v12_orm_schema_reconciliation"
 
 
 def test_migration_module_importable():
@@ -81,3 +82,34 @@ def test_downgrade_removes_remediation_additions():
     assert "trainee_memory_consents" in source
     assert "public_id" in source
     assert "suggestion_id" in source
+
+
+def test_orm_schema_reconciliation_follows_durable_streaming() -> None:
+    """The head revision must reconcile ORM changes after durable streaming."""
+    mod = _load_migration(RECONCILIATION_MIGRATION_NAME)
+
+    assert mod.revision == "7a8b9c0d1e2f"
+    assert mod.down_revision == "6f7a8b9c0d1e"
+    assert callable(mod.upgrade)
+    assert callable(mod.downgrade)
+
+
+def test_orm_schema_reconciliation_covers_reported_drift() -> None:
+    """Keep the fresh-MySQL ``alembic check`` drift categories covered."""
+    import inspect
+
+    mod = _load_migration(RECONCILIATION_MIGRATION_NAME)
+    upgrade = inspect.getsource(mod.upgrade)
+    downgrade = inspect.getsource(mod.downgrade)
+
+    for source in (upgrade, downgrade):
+        assert "coach_stream_events" in source
+        assert "consultations" in source
+        assert "evaluation_runs" in source
+        assert "trainee_memory_consents" in source
+
+    assert "memory_state" in upgrade
+    assert "execution_owner" in upgrade
+    assert "uq_coach_stream_event_id" in upgrade
+    assert "uq_trainee_memory_consent_doctor_id" in upgrade
+    assert "evaluation_runs WHERE started_at IS NULL" in downgrade

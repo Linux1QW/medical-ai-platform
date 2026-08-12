@@ -11,7 +11,30 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+MIGRATE_V11_PATH = BACKEND_ROOT / "scripts" / "migrate_v11.py"
+
+
+def test_migrate_v11_makes_backend_package_importable_when_executed_as_script(
+    monkeypatch,
+) -> None:
+    """``python scripts/migrate_v11.py`` must be able to import ``app`` later."""
+    monkeypatch.setattr(sys, "path", [str(MIGRATE_V11_PATH.parent)])
+    module_name = "migrate_v11_script_import_contract"
+    spec = importlib.util.spec_from_file_location(module_name, MIGRATE_V11_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        assert str(BACKEND_ROOT) in sys.path
+    finally:
+        sys.modules.pop(module_name, None)
 
 # ── 1. 全新库无 operator ────────────────────────────────────────────────────
 

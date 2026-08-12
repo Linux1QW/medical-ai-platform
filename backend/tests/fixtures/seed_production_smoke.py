@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -23,6 +22,7 @@ E2E_ADMIN_USER = os.environ.get("E2E_ADMIN_USER", "admin_v11")
 E2E_DOCTOR_USER = os.environ.get("E2E_DOCTOR_USER", "doctor_v11")
 E2E_PASSWORD = os.environ.get("E2E_PASSWORD", "e2e_test_password_2026")
 E2E_INDEX_VERSION = "e2e-low-evidence-v1"
+E2E_INDEX_CREATED_AT = "2026-01-01T00:00:00Z"
 FIXED_PATIENT_ID = 2
 FIXED_CONSULTATION_ID = 2
 
@@ -183,7 +183,9 @@ def seed_low_evidence_index() -> tuple[dict, dict]:
             "source": "e2e-synthetic-test",
             "is_synthetic": True,
             "version": E2E_INDEX_VERSION,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            # This fixture is hashed into the manifest, so its content must be
+            # stable across repeated seed runs and CI hosts.
+            "created_at": E2E_INDEX_CREATED_AT,
         },
     }
     checksum = hashlib.sha256(

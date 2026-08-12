@@ -46,12 +46,9 @@ STATUS_FILE="${BACKUP_STATUS_FILE:?BACKUP_STATUS_FILE is required}"
 
 # ── Path validation: only allow known safe prefixes ──
 ALLOWED_PREFIX="/var/backups/medical-ai"
-REAL_BACKUP_DIR="$(cd / 2>/dev/null && cd "$BACKUP_DIR" 2>/dev/null && pwd)" || REAL_BACKUP_DIR="$BACKUP_DIR"
-# Resolve to absolute for comparison
-case "$BACKUP_DIR" in
-  /*) ABS_BACKUP_DIR="$BACKUP_DIR" ;;
-  *)  ABS_BACKUP_DIR="$(pwd)/$BACKUP_DIR" ;;
-esac
+# Canonicalize even when the final directory does not exist. Validating the
+# raw argument would allow an allowed-prefix/../../ traversal to escape.
+ABS_BACKUP_DIR="$(realpath -m -- "$BACKUP_DIR")"
 
 # Check the resolved path starts with the allowed prefix
 if [ "$ABS_BACKUP_DIR" != "$ALLOWED_PREFIX" ] && \
@@ -61,6 +58,8 @@ if [ "$ABS_BACKUP_DIR" != "$ALLOWED_PREFIX" ] && \
   umask "$OLD_UMASK"
   exit 1
 fi
+
+BACKUP_DIR="$ABS_BACKUP_DIR"
 
 # ── Create backup directory ──
 mkdir -p "$BACKUP_DIR"

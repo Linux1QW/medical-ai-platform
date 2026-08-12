@@ -135,7 +135,7 @@ queued → running → completed
 | Agent | LangGraph、OpenAI-compatible Provider、DashScope/Qwen、外置 Prompt |
 | 异步任务 | Celery 5.6、Redis broker/result、Transactional Outbox、Dispatcher |
 | RAG | ChromaDB、`bm25s`、jieba、可选 FlagEmbedding/BGE-M3、PyMuPDF |
-| 数据 | MySQL 8、Redis 7 state/cache 双实例 |
+| 数据 | MySQL 8、Redis Stack 7 state（含 RedisJSON/RediSearch）与 Redis 7 cache 双实例 |
 | 可观测性 | JSON 日志、Prometheus、Grafana、可选 Langfuse、HMAC 隐私遥测 |
 | 工程质量 | pytest、mypy、Ruff、ESLint、Vitest、Playwright、Trivy、GitHub Actions |
 
@@ -223,7 +223,7 @@ medical-ai-platform/
 - Python 3.10
 - Node.js 18 或更高版本
 - MySQL 8
-- Redis 7；完整拓扑建议分别提供 state 和 cache 实例
+- Redis Stack 7（state，必须包含 RedisJSON/RediSearch）和 Redis 7（cache）；完整拓扑应物理分离
 - 可用的 OpenAI-compatible 或 DashScope/Qwen API 凭据（运行真实 Agent 时）
 
 Windows 上的 Celery Worker 建议使用 `-P solo`。生产环境不要使用 solo pool。

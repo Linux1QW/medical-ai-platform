@@ -50,7 +50,7 @@ LangGraph checkpointer 都是进程级单例对象。`asyncio.run()` 在返回�
 
 - `LLM_CACHE_REDIS_URL=redis://localhost:6380/0`（独立 redis-cache 实例）
 - `RETRIEVAL_CACHE_REDIS_URL=redis://localhost:6380/1`
-- `REDIS_CHECKPOINT_URL=redis://localhost:6379/1`（redis-state 实例）
+- `REDIS_CHECKPOINT_URL=redis://localhost:6379/0`（独立 redis-state 实例；RedisVL/RediSearch 要求 DB 0）
 - 本地 6379 保留给 redis-state（broker/backend/checkpoint/control），6380 对应独立 redis-cache。
 
 ### Shutdown 顺序

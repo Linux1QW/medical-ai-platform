@@ -97,8 +97,8 @@ async def test_init_checkpointer_passes_ttl_in_minutes(monkeypatch):
     monkeypatch.setattr(aio_mod.AsyncRedisSaver, "from_conn_string", fake_from_conn_string)
 
     try:
-        await cp.init_checkpointer(redis_url="redis://test:6379/1", ttl=86400)
-        assert captured["redis_url"] == "redis://test:6379/1"
+        await cp.init_checkpointer(redis_url="redis://test:6379/0", ttl=86400)
+        assert captured["redis_url"] == "redis://test:6379/0"
         assert captured["ttl"] == {"default_ttl": 1440}  # 86400s = 1440min
     finally:
         await cp.close_checkpointer()
@@ -122,7 +122,7 @@ async def test_init_checkpointer_zero_ttl_means_no_expiry(monkeypatch):
     monkeypatch.setattr(aio_mod.AsyncRedisSaver, "from_conn_string", fake_from_conn_string)
 
     try:
-        await cp.init_checkpointer(redis_url="redis://test:6379/1", ttl=0)
+        await cp.init_checkpointer(redis_url="redis://test:6379/0", ttl=0)
         assert captured["ttl"] is None
     finally:
         await cp.close_checkpointer()

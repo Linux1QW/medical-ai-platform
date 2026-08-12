@@ -10,7 +10,7 @@
 React/Nginx
     │ REST + SSE + WebSocket
 FastAPI ── SQLAlchemy async ── MySQL
-    ├─ LangGraph ── redis-state Checkpoint (db=1)
+    ├─ LangGraph ── redis-state Checkpoint (db=0, RediSearch requirement)
     ├─ Outbox enqueue ── MySQL evaluation_dispatch_outbox
     ├─ Celery client ── redis-state broker(db=4)/result(db=5)
     └─ RAG ── Chroma Dense + BM25 + optional BGE-M3 Sparse
@@ -164,7 +164,7 @@ while running:
 
 | 实例 | 策略 | 承载 | 本地端口 |
 |---|---|---|---|
-| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint(db=1)、broker(db=4)、result(db=5)、progress(db=6)、JWT blacklist(db=7)、evaluation control(db=8) | 6379 |
+| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint(db=0，RediSearch 要求)、broker(db=4)、result(db=5)、progress(db=6)、JWT blacklist(db=7)、evaluation control(db=8) | 6379 |
 | `redis-cache` | allkeys-LRU | LLM cache(db=0)、retrieval cache(db=1) | 6380 |
 
 **设计权衡**：

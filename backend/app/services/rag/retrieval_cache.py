@@ -5,7 +5,7 @@
 相同查询在 TTL 内直接返回缓存结果，避免重复检索和 LLM 调用。
 
 设计要点：
-- 使用 Redis db=3，与 LLM 缓存 (db=2) 和 Checkpointer (db=1) 隔离
+- 使用独立 redis-cache 实例的 db=1；Checkpointer 使用 redis-state 实例的 db=0
 - 缓存键包含 index_version，索引重建后自动失效
 - 超过 RETRIEVAL_CACHE_MAX_SIZE 时概率性清理最旧条目
 - 所有 Redis 操作 try/except 包裹，缓存失败不影响正常检索

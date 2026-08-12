@@ -8,8 +8,8 @@
 ```text
 Browser → React/Nginx → FastAPI (Uvicorn ×N)
                          ├─ SQLAlchemy async ── MySQL 8
-                         ├─ LangGraph Coach ── redis-state checkpoint (db=1)
-                         ├─ LangGraph Evaluation ── redis-state checkpoint (db=1)
+                         ├─ LangGraph Coach ── redis-state checkpoint (db=0)
+                         ├─ LangGraph Evaluation ── redis-state checkpoint (db=0)
                          ├─ Outbox enqueue ── MySQL evaluation_dispatch_outbox
                          ├─ Celery submit ── redis-state broker(db=4)/result(db=5)
                          ├─ JWT/cache/control ── redis-state (db=2/3/6/7/8)
@@ -68,7 +68,7 @@ intent → planner → evidence → draft → critic → finalize → persist
 
 | Instance | Strategy |承载 |
 |---|---|---|
-| `redis-state` | AOF + noeviction | Checkpoint (db=1), JWT blacklist (db=2/3/7), broker (db=4), result (db=5), progress bus (db=6), evaluation control (db=8) |
+| `redis-state` | AOF + noeviction | Checkpoint (db=0，RedisVL/RediSearch 要求), JWT blacklist (db=2/3/7), broker (db=4), result (db=5), progress bus (db=6), evaluation control (db=8) |
 | `redis-cache` | allkeys-LRU | LLM response cache (db=0), retrieval cache (db=1) |
 
 ## 2. Failure Modes

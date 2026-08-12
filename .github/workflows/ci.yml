@@ -76,7 +76,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
@@ -94,7 +94,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
@@ -110,7 +110,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
@@ -393,7 +393,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           TESTING: 'true'
           LANGGRAPH_ENABLED: 'false'
@@ -604,7 +604,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           QWEN_API_BASE_URL: http://localhost:8080/v1
@@ -643,7 +643,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           QWEN_API_BASE_URL: http://localhost:8080/v1

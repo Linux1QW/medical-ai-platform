@@ -336,7 +336,7 @@ docker compose down
 | `LANGFUSE_ENABLED` | `false` | staging/production 启用时要求 HMAC 密钥且禁止原始内容采集 |
 | `METRICS_TOKEN` | 空 | 生产必须配置，否则 `/metrics` 拒绝访问 |
 
-Redis 默认逻辑分工：checkpoint DB 1、Celery broker DB 4、result DB 5、progress DB 6、evaluation control DB 8；缓存 Redis 使用独立实例的 DB 0/1。数据库编号不能替代 state/cache 的物理隔离。
+Redis 默认逻辑分工：checkpoint DB 0（RedisVL/RediSearch 要求）、Celery broker DB 4、result DB 5、progress DB 6、evaluation control DB 8；缓存 Redis 使用独立实例的 DB 0/1。数据库编号不能替代 state/cache 的物理隔离。
 
 ## 11. 数据、迁移与持久化
 

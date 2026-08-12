@@ -59,7 +59,7 @@ React SPA (5173 / Nginx 80,443)
 FastAPI (8000)
   ├─ Auth/RBAC/Audit/Rate limit/Security headers
   ├─ SQLAlchemy async ───────────── MySQL 8
-  ├─ LangGraph orchestration ────── redis-state checkpoint db=1
+  ├─ LangGraph orchestration ────── redis-state checkpoint db=0
   ├─ cache/JWT/token/RAG pointers ─ redis-state db=2/3/6/7/8
   ├─ task submission ────────────── redis-state broker db=4/result db=5
   ├─ Outbox enqueue ─────────────── MySQL evaluation_dispatch_outbox
@@ -86,7 +86,7 @@ Prometheus/Grafana ── optional monitoring profile
 
 | 实例 | 策略 | 承载 | DB 分配 |
 |---|---|---|---|
-| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint、broker、result、JWT 黑名单、progress bus、evaluation control | db=1 checkpoint, db=4 broker, db=5 result, db=6 progress, db=7 JWT blacklist, db=8 evaluation control |
+| `redis-state` | Redis Stack 7；AOF + noeviction | checkpoint、broker、result、JWT 黑名单、progress bus、evaluation control | db=0 checkpoint（RediSearch 要求）, db=4 broker, db=5 result, db=6 progress, db=7 JWT blacklist, db=8 evaluation control |
 | `redis-cache` | allkeys-LRU | LLM 响应缓存、检索缓存 | db=0 LLM cache, db=1 retrieval cache |
 
 本地开发使用 `localhost:6379`（state）和 `localhost:6380`（cache）；Compose 使用 `redis-state` 和 `redis-cache` 服务名。
@@ -228,7 +228,7 @@ Outbox 状态：`pending → leased → published → cancelled/dead_letter`
 | `LLM_MAX_CONCURRENT` / `LLM_SEMAPHORE_TIMEOUT` | `10` / `60` 秒 | 全局 LLM 并发 |
 | `LANGGRAPH_ENABLED` / `LANGGRAPH_SHADOW_MODE` | `true` / `false` | Shadow 配置存在，返回仍以实现路径为准 |
 | `LANGGRAPH_GRAPH_VERSION` | `evaluation-graph-v1` | 写入运行/评估记录 |
-| `REDIS_CHECKPOINT_URL` / `REDIS_CHECKPOINT_TTL` | `redis://localhost:6379/1` / `86400` | Checkpoint |
+| `REDIS_CHECKPOINT_URL` / `REDIS_CHECKPOINT_TTL` | `redis://localhost:6379/0` / `86400` | Checkpoint；RedisVL/RediSearch 仅支持 DB 0 |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `redis://localhost:6379/4` / `redis://localhost:6379/5` | API 与 Worker 必须一致 |
 | `EVALUATION_RUN_TIMEOUT_SECONDS` | `240` | 应小于 Celery soft limit 300 秒 |
 | `AGENT_TIMEOUT_SECONDS` | `180` | 旧编排单 Agent 超时 |

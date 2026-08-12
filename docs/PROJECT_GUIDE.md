@@ -1,6 +1,6 @@
 # 项目总手册：基于多智能体的医生临床问诊评估平台
 
-本文是项目的权威说明，事实基线为分支 `codex/v1.1-a-runtime` 的当前代码（v1.1.0）。内容由代码、配置、FastAPI 路由、Docker Compose、SQLAlchemy/Alembic、前端调用、测试和 CI 交叉核对。其他文档如与本文冲突，应回到对应源码确认并同步本文。
+本文是项目的源码级权威说明，事实基线为当前仓库代码和 V1.2 迭代范围。内容由配置、FastAPI 路由、Docker Compose、SQLAlchemy/Alembic、前端调用、测试、CI 和发布证据交叉核对。其他文档如与本文冲突，应回到对应源码确认并同步本文；生产验收状态只以 `release-evidence/v1.2/final-acceptance.json` 为准。
 
 ## 1. 项目定位、安全与边界
 
@@ -211,7 +211,7 @@ Outbox 状态：`pending → leased → published → cancelled/dead_letter`
 | `ALGORITHM` | `HS256` | JWT 算法 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | access token 24 小时 |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | refresh token |
-| `JWT_TOKEN_BLACKLIST_ENABLED` | `true` | 黑名单 Redis 不可用时当前实现会 fail open |
+| `JWT_TOKEN_BLACKLIST_ENABLED` | `true` | 启用 JWT 吊销检查；staging/production 同时强制 `JWT_BLACKLIST_FAIL_CLOSED=true`，Redis 不可用时返回 503 |
 | `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `localhost/3306/root/空/medical_ai` | 应用账户应最小授权 |
 | `DB_POOL_SIZE/MAX_OVERFLOW/RECYCLE/TIMEOUT` | `20/10/3600/30` | SQLAlchemy 连接池 |
 | `CORS_ORIGINS` | `localhost:5173`、`localhost:3000` | JSON 数组格式 |
@@ -772,19 +772,15 @@ CI 在 push/PR 到 `main/master` 时执行：
 
 ## 20. 已知限制
 
-1. `POST /api/v1/evaluations/` 的生产异步返回体与 `EvaluationOut` 响应模型不一致。
-2. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；Compose 首次初始化不可视为迁移完成（V1.1 已通过 `migrate` 服务自动执行 Alembic）。
-3. Task 8 候选真实性能尚未以完整一致性遥测实测通过；当前不得宣称门禁已通过。
-4. `evaluate_bm25.py` CLI 当前不能传入真实一致性计数，完整 gate 会把它们判为 unavailable。
-5. RAG generation 没有受支持的回滚 REST/CLI；旧 `switch_index_version` 不是集群 immutable generation 回滚。
-6. `VITE_API_BASE_URL` 未被 Axios 使用；部署依赖同源 `/api/v1` 和反向代理。
-7. `AdminReviews` 页面未接路由；知识库、模型版本、监控也缺少完整 UI。
-8. 模型版本 GET 路由当前公开；review status 和 evaluation task status 只要求登录，未做对象归属校验。
-9. JWT 黑名单 Redis 不可用时 fail open；登出不保证立刻吊销。
-10. ChromaDB 1.5.7 使用极大 `hnsw:sync_threshold` 规避已知跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
-11. BGE-M3 依赖默认未安装，Sparse/OCR/多项增强默认关闭；启用前必须做资源和质量验证。
-12. CI 安全扫描为告警模式，前端单元测试未在 CI frontend job 中执行。
-13. 单主机限制：当前不支持多节点水平扩展，Dispatcher 和 Beat 均必须单实例。
+1. 功能迭代名称为 V1.2，但 `settings.VERSION` 和 `/health/live` 仍报告 `1.1.0`；正式发布前必须对齐版本元数据和测试。
+2. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；新环境必须以 Alembic 为准，不能把 init.sql 与 baseline 迁移盲目串联。
+3. 当前 `release-evidence/v1.2/final-acceptance.json` 为 `passed=false`；真实 LLM 性能、负载、迁移、部署 E2E 与人工审批未齐全前不得宣称生产验收通过。
+4. Voice 仍是默认关闭的 `NOT_ACCEPTED` Beta，缺少真实 LiveKit 房间、音频链路和转录持久化证据。
+5. RAG generation 没有面向运维的正式回滚 REST/CLI；模型版本登记接口的 rollback 不会回滚 immutable RAG generation。
+6. `AdminReviews` 已接入 `/admin/reviews`，但知识库、模型版本和监控等管理能力仍缺少完整 UI，部分操作需使用 API。
+7. ChromaDB 1.5.7 使用较大的 `hnsw:sync_threshold` 规避跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
+8. BGE-M3 依赖默认未安装，Sparse、OCR 和多项检索增强默认关闭；启用前必须做资源、质量和稳定性验证。
+9. API/Worker 可以在共享依赖和共享 artifact 前提下扩展，但 Dispatcher 与 Beat 必须分别保持单实例；跨主机部署需重新验证 fencing、缓存和 generation 一致性。
 
 ## 21. 文档维护规则
 

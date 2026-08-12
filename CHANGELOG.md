@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Documentation
+
+- 重写根 README，补充项目状态、角色边界、业务数据流、EvaluationRun 状态机、技术栈、目录结构、前端/API 路由、本地与 Compose 启动、配置、数据迁移、RAG 发布、安全、测试验收、运维和已知限制。
+- 新增 `docs/README.md` 文档中心，明确文档优先级、角色化阅读路径和“代码质量通过不等于生产验收通过”的证据口径。
+- 将 PROJECT_GUIDE 和平台操作说明的事实基线更新到 V1.2，并移除已经被代码修复的旧限制描述。
+
 ## [1.2.0] - 2026-08-10
 
 ### Added

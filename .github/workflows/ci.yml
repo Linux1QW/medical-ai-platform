@@ -622,7 +622,7 @@ jobs:
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
           backend_pid=$!
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8000/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:8000/health/ready > /dev/null 2>&1 && break
             if ! kill -0 "$backend_pid" 2>/dev/null; then
               echo "Backend A exited before becoming healthy"
               cat /tmp/backend-a.log
@@ -630,7 +630,7 @@ jobs:
             fi
             sleep 1
           done
-          curl -sf http://localhost:8000/health || {
+          curl -sf http://localhost:8000/health/ready || {
             cat /tmp/backend-a.log
             exit 1
           }
@@ -661,7 +661,7 @@ jobs:
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
           backend_pid=$!
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8001/health > /dev/null 2>&1 && break
+            curl -sf http://localhost:8001/health/ready > /dev/null 2>&1 && break
             if ! kill -0 "$backend_pid" 2>/dev/null; then
               echo "Backend B exited before becoming healthy"
               cat /tmp/backend-b.log
@@ -669,7 +669,7 @@ jobs:
             fi
             sleep 1
           done
-          curl -sf http://localhost:8001/health || {
+          curl -sf http://localhost:8001/health/ready || {
             cat /tmp/backend-b.log
             exit 1
           }
@@ -797,7 +797,7 @@ jobs:
         run: |
           docker compose -f docker-compose.yml up -d --wait
           sleep 10
-          curl -f http://localhost:8000/health || exit 1
+          curl -f http://localhost:8000/health/ready || exit 1
           docker compose down -v
 
       - name: Upload logs on failure

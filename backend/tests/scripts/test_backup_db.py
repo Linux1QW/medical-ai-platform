@@ -204,8 +204,9 @@ def fake_bins(tmp_path: Path) -> Path:
     # du – report fake size
     _write_fake_bin(bin_dir, "du", 'echo "1.0M"')
 
-    # wc – passthrough
-    _write_fake_bin(bin_dir, "wc", "wc")
+    # Do not shadow ``wc`` with a wrapper that recursively invokes itself.
+    # The host command is deterministic enough for the cleanup count and size
+    # fallback exercised by this suite.
 
     return bin_dir
 

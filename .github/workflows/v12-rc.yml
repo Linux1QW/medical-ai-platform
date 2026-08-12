@@ -203,8 +203,8 @@ jobs:
       - name: Verify all services
         run: |
           echo "=== Service Health Check ==="
-          curl -sf http://127.0.0.1:8000/health && echo " backend-a: OK" || echo " backend-a: FAIL"
-          curl -sf http://127.0.0.1:8001/health && echo " backend-b: OK" || echo " backend-b: FAIL"
+          curl -sf http://127.0.0.1:8000/health/ready && echo " backend-a: OK" || echo " backend-a: FAIL"
+          curl -sf http://127.0.0.1:8001/health/ready && echo " backend-b: OK" || echo " backend-b: FAIL"
           curl -sf http://127.0.0.1:5173 > /dev/null && echo " frontend: OK" || echo " frontend: FAIL"
           redis-cli ping && echo " redis: OK" || echo " redis: FAIL"
 
@@ -521,10 +521,10 @@ jobs:
           cd backend
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a-e2e.log 2>&1 &
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break
+            curl -sf http://127.0.0.1:8000/health/ready > /dev/null 2>&1 && break
             sleep 2
           done
-          curl -sf http://127.0.0.1:8000/health
+          curl -sf http://127.0.0.1:8000/health/ready
 
       - name: Start Backend B for E2E
         env:
@@ -545,10 +545,10 @@ jobs:
           cd backend
           nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b-e2e.log 2>&1 &
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8001/health > /dev/null 2>&1 && break
+            curl -sf http://127.0.0.1:8001/health/ready > /dev/null 2>&1 && break
             sleep 2
           done
-          curl -sf http://127.0.0.1:8001/health
+          curl -sf http://127.0.0.1:8001/health/ready
 
       - name: Start frontend for E2E
         env:
@@ -701,12 +701,12 @@ jobs:
         run: |
           for port in 8000 8001; do
             for i in $(seq 1 60); do
-              curl -sf http://127.0.0.1:$port/health > /dev/null 2>&1 && break
+              curl -sf http://127.0.0.1:$port/health/ready > /dev/null 2>&1 && break
               sleep 2
             done
           done
-          curl -sf http://127.0.0.1:8000/health || { echo "backend-a failed to start"; exit 1; }
-          curl -sf http://127.0.0.1:8001/health || { echo "backend-b failed to start"; exit 1; }
+          curl -sf http://127.0.0.1:8000/health/ready || { echo "backend-a failed to start"; exit 1; }
+          curl -sf http://127.0.0.1:8001/health/ready || { echo "backend-b failed to start"; exit 1; }
           echo "Both backend instances are healthy"
 
       - name: Run dual-instance load test

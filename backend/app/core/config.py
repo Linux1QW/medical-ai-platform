@@ -96,6 +96,14 @@ class Settings(BaseSettings):
         Path(__file__).resolve().parents[2] / "data" / "rag_indexes"
     )
 
+    @field_validator("BM25_HEADING_BOOST", "BM25_ENTITY_BOOST")
+    @classmethod
+    def _validate_bm25_field_boost(cls, value: int) -> int:
+        """Keep field-token expansion bounded across Pydantic versions."""
+        if not 1 <= value <= 3:
+            raise ValueError("BM25 field boosts must be between 1 and 3")
+        return value
+
     # ── Metadata 预过滤（按疾病/关键词缩小候选集，降噪提精度）──
     # disease_tags 等以 JSON 字符串存储，ChromaDB where 无法子串匹配，
     # 故改用 where_document={"$contains": ...} 对文档内容做子串过滤；

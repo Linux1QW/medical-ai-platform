@@ -33,7 +33,7 @@ def test_ci_playwright_job_is_self_contained_and_targets_real_base_url() -> None
     assert job.count("COACH_ENABLED: 'true'") >= 2
     assert "--port 8000" in job
     assert "--port 8001" in job
-    assert "curl -sf http://localhost:8001/health" in job
+    assert "curl -sf http://localhost:8001/health/ready" in job
     assert "image: redis/redis-stack-server:7.4.0-v8" in job
     assert "cat /tmp/backend-a.log" in job
     assert "cat /tmp/backend-b.log" in job
@@ -67,7 +67,7 @@ def test_rc_browser_job_migrates_seeds_and_starts_two_backends() -> None:
     assert job.count("COACH_ENABLED: 'true'") >= 2
     assert "--port 8000" in job
     assert "--port 8001" in job
-    assert "curl -sf http://127.0.0.1:8001/health" in job
+    assert "curl -sf http://127.0.0.1:8001/health/ready" in job
 
 
 def test_rc_dual_load_initializes_its_own_database() -> None:

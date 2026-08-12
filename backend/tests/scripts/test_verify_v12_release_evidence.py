@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from scripts.ci.verify_v12_release_evidence import (
     VerificationResult,
     generate_signature,

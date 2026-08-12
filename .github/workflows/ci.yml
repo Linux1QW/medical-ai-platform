@@ -194,6 +194,12 @@ jobs:
   # ============================================================================
   migration-gate:
     runs-on: ubuntu-latest
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: test
+      MYSQL_DATABASE: test_db
     services:
       mysql:
         image: mysql:8.0

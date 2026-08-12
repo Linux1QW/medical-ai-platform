@@ -43,6 +43,16 @@ def test_ci_dependency_and_integration_gates_are_fail_closed() -> None:
     assert "MYSQL_INTEGRATION_DATABASE_URL:" in workflow
 
 
+def test_ci_migration_gate_receives_the_mysql_service_credentials() -> None:
+    migration = _job(CI.read_text(encoding="utf-8"), "migration-gate")
+
+    assert "MYSQL_HOST: 127.0.0.1" in migration
+    assert "MYSQL_PORT: 3306" in migration
+    assert "MYSQL_USER: root" in migration
+    assert "MYSQL_PASSWORD: test" in migration
+    assert "MYSQL_DATABASE: test_db" in migration
+
+
 def test_rc_browser_job_migrates_seeds_and_starts_two_backends() -> None:
     job = _job(RC.read_text(encoding="utf-8"), "browser-e2e")
 

@@ -45,6 +45,9 @@ markers = [
 filterwarnings = [
     # Treat all warnings as errors (lowest priority — checked last)
     "error",
+    # jieba 0.42.1 imports setuptools.pkg_resources; ignore only that
+    # third-party deprecation until jieba ships a replacement.
+    "ignore:pkg_resources is deprecated as an API.*:DeprecationWarning:jieba\\._compat",
     # anyio internal memory streams are not always closed by Starlette TestClient
     # (higher priority — checked first, overrides the error rule above)
     "ignore:Exception ignored in.*MemoryObject:pytest.PytestUnraisableExceptionWarning",

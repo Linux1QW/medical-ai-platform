@@ -1,0 +1,50 @@
+[Unit]
+Description=Medical AI Platform – Encrypted Database Backup
+Documentation=file:///opt/medical-ai-platform/docs/runbooks/production-v1.1.md
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=medical-backup
+Group=medical-backup
+
+# ── Environment ──
+EnvironmentFile=/etc/medical-ai/backup.env
+
+# ── Working directory ──
+WorkingDirectory=/opt/medical-ai-platform
+
+# ── Execute backup script ──
+ExecStart=/bin/bash /opt/medical-ai-platform/backend/scripts/backup_db.sh /var/backups/medical-ai
+
+# ── Security hardening ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/medical-ai /opt/medical-ai-platform/.deploy
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+ProtectHostname=true
+ProtectClock=true
+RestrictRealtime=true
+
+# ── Filesystem permissions ──
+UMask=0077
+
+# ── Resource limits ──
+TimeoutStartSec=600
+TimeoutStopSec=30
+
+# ── Logging ──
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=medical-ai-backup
+
+# ── Single instance lock ──
+# Prevent concurrent runs via systemd's built-in mechanism
+ExecCondition=/bin/bash -c '! systemctl is-active --quiet medical-ai-backup.service'

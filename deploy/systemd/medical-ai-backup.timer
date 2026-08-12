@@ -1,0 +1,15 @@
+[Unit]
+Description=Medical AI Platform – Backup Timer (every 12 hours)
+Documentation=file:///opt/medical-ai-platform/docs/runbooks/production-v1.1.md
+
+[Timer]
+# Run at midnight and noon every day
+OnCalendar=*-*-* 00,12:00:00
+Persistent=true
+RandomizedDelaySec=15m
+
+# Ensure the timer fires even if the system was off at the scheduled time
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

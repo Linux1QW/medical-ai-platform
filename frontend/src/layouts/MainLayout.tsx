@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   HomeOutlined,
   EditOutlined,
+  AuditOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../store/useAuth';
@@ -27,9 +28,17 @@ const MainLayout: React.FC = () => {
     { key: '/stats', icon: <BarChartOutlined />, label: '数据统计' },
     ...(isAdmin ? [
       { key: '/admin/consultations', icon: <MessageOutlined />, label: '全部问诊' },
-      { key: '/admin/patients', icon: <EditOutlined />, label: '患者管理' }
+      { key: '/admin/patients', icon: <EditOutlined />, label: '患者管理' },
+      { key: '/admin/reviews', icon: <AuditOutlined />, label: '人工复核' }
     ] : []),
   ];
+
+  // 前缀匹配：确保子路由也高亮对应菜单
+  const getSelectedKey = () => {
+    const path = location.pathname;
+    const matched = menuItems.find(item => path === item.key || path.startsWith(item.key + '/'));
+    return matched ? [matched.key] : [path];
+  };
 
   const handleLogout = () => {
     logout();
@@ -51,7 +60,7 @@ const MainLayout: React.FC = () => {
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={getSelectedKey()}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderRight: 0 }}

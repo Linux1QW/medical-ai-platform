@@ -37,14 +37,18 @@ def extract_json_from_text(
 
     # Layer 1: 直接解析
     try:
-        return json.loads(text.strip())
+        result = json.loads(text.strip())
+        if isinstance(result, (dict, list)):
+            return result
     except (json.JSONDecodeError, ValueError):
         pass
 
     # Layer 2: 去除 markdown 代码块后重试
     cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
     try:
-        return json.loads(cleaned)
+        result = json.loads(cleaned)
+        if isinstance(result, (dict, list)):
+            return result
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -52,7 +56,9 @@ def extract_json_from_text(
     try:
         match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            result = json.loads(match.group(1))
+            if isinstance(result, (dict, list)):
+                return result
     except (json.JSONDecodeError, AttributeError):
         pass
 

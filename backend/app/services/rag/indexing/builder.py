@@ -487,7 +487,7 @@ async def build_medical_index(target_version: str = "rag-v2"):
 async def index_single_pdf(
     pdf_path: Path,
     force_replace: bool = False,
-    target_version: str = None,
+    target_version: Optional[str] = None,
 ) -> dict:
     """对单个 PDF 进行增量索引。
 

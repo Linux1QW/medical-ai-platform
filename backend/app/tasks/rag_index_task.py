@@ -1,6 +1,5 @@
 """Celery tasks for immutable RAG index generations."""
 
-import asyncio
 import hashlib
 import logging
 import threading
@@ -11,6 +10,7 @@ import redis
 
 from app.celery_app import celery_app
 from app.core.config import settings
+from app.tasks.async_runtime import run_worker_coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,8 @@ class RedisIndexBuildLock:
         )
 
     def is_owned_by(self, task_id: str) -> bool:
-        return self.redis.get(RAG_INDEX_BUILD_LOCK) == task_id
+        result = self.redis.get(RAG_INDEX_BUILD_LOCK)
+        return bool(result == task_id)
 
     def release(self, task_id: str) -> bool:
         return bool(
@@ -361,7 +362,7 @@ def _run_index_task(
     )
     heartbeat.start()
     try:
-        return asyncio.run(
+        return run_worker_coroutine(
             _build_candidate(
                 task,
                 operation=operation,

@@ -48,13 +48,8 @@ async def _get_redis() -> Optional[aioredis.Redis]:
         return _redis_client
 
     try:
-        # 复用 REDIS_CHECKPOINT_URL 指向的 Redis 实例，使用 db=2 避免与 checkpointer(db=1) 冲突
-        redis_url = settings.REDIS_CHECKPOINT_URL
-        # 替换 db 编号为 2（保留 db=1 给 checkpointer）
-        if "/1" in redis_url:
-            redis_url = redis_url.replace("/1", "/2")
-        elif redis_url.endswith("redis://localhost:6379"):
-            redis_url = redis_url + "/2"
+        # 使用独立的 LLM_CACHE_REDIS_URL（默认 redis://localhost:6380/0）
+        redis_url = settings.LLM_CACHE_REDIS_URL
         _redis_client = aioredis.from_url(
             redis_url,
             decode_responses=True,
@@ -125,7 +120,7 @@ class LLMResponseCache:
             if value is not None:
                 await _incr_counter(REDIS_KEY_HITS)
                 logger.debug(f"LLM 缓存命中: key={cache_key}")
-                return value
+                return str(value) if value is not None else None
             else:
                 await _incr_counter(REDIS_KEY_MISSES)
                 logger.debug(f"LLM 缓存未命中: key={cache_key}")

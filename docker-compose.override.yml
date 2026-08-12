@@ -2,43 +2,40 @@
 # Docker Compose Override - 本地开发环境
 # ============================================
 # 使用方式: docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-# 或: docker compose --profile dev up -d
 # ============================================
 
 services:
 
-  # ── Backend 开发模式（热重载 + 调试） ──────
+  # ── Backend 开发模式（热重载 + 调试）────────
   backend:
     build:
       target: development
     environment:
-      # 开发环境使用更宽松的 CORS
-      CORS_ORIGINS: '["http://localhost:5173", "http://localhost:3000", "http://localhost:80", "http://localhost"]'
+      ENVIRONMENT: development
+      CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","http://localhost:80","http://localhost"]'
     volumes:
       # 源码挂载实现热重载
       - ./backend/app:/app/backend/app:cached
       - ./backend/tests:/app/backend/tests:cached
-      - ./database:/app/database:cached
       - chroma_data:/app/backend/data
-      - ./data:/app/backend/data/medical_pdfs:ro
+      - ./data:/app/data:ro
     ports:
       - "8000:8000"
-    # 开发环境不需要健康检查那么严格
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 60s
 
-  # ── Frontend 开发模式（Vite dev server） ──
+  # ── Frontend 开发模式（Vite dev server）────
   frontend:
     build:
       context: ./frontend
       dockerfile: ../Dockerfile.frontend
       target: builder
     command: >
-      sh -c "npm install && npm run dev -- --host 0.0.0.0"
+      sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     volumes:
       - ./frontend/src:/app/src:cached
       - ./frontend/public:/app/public:cached
@@ -52,13 +49,12 @@ services:
       VITE_API_BASE_URL: http://backend:8000
     depends_on:
       - backend
-    # 开发模式不依赖 backend 健康检查
     deploy:
       resources:
         limits:
           memory: 512M
 
-  # ── MySQL 开发配置（暴露端口 + 更大内存） ──
+  # ── MySQL 开发配置（暴露端口 + 更大内存）────
   mysql:
     ports:
       - "3306:3306"
@@ -67,7 +63,11 @@ services:
         limits:
           memory: 2G
 
-  # ── Redis 开发配置 ──
-  redis:
+  # ── Redis 开发配置（暴露端口）───────────────
+  redis-state:
     ports:
       - "6379:6379"
+
+  redis-cache:
+    ports:
+      - "6380:6379"

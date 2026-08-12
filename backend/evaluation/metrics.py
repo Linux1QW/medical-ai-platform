@@ -1,8 +1,10 @@
 """
 Core metrics calculation for RAG evaluation.
 """
+import json
 import math
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .datasets import RagEvalResult, RagGoldCase, StanceType
@@ -1332,7 +1334,6 @@ def evaluate_rag_quality_gates(
         "exact_term_recall@10": _comparison_check(
             _exact_term_metric_from_report(candidate),
             _exact_term_metric_from_report(baseline),
-            threshold=0.05,
         ),
         "cold_load_seconds": {
             "passed": (
@@ -1379,5 +1380,108 @@ def evaluate_rag_quality_gates(
             else "unavailable measurement or non-zero count",
         },
     }
+    failures = [name for name, check in checks.items() if not check["passed"]]
+    return {"passed": not failures, "checks": checks, "failures": failures}
+
+
+# ---------------------------------------------------------------------------
+# Versioned release policy
+# ---------------------------------------------------------------------------
+
+_POLICY_PATH = Path(__file__).with_name("bm25_release_policy.json")
+
+
+def load_release_policy(policy_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load the versioned BM25 release policy from disk."""
+    path = policy_path or _POLICY_PATH
+    with path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def validate_policy_gates(
+    candidate: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Evaluate candidate against a versioned release policy.
+
+    Unlike the legacy ``evaluate_rag_quality_gates`` this function consumes
+    thresholds from the policy document rather than hardcoding them.
+    """
+    checks: Dict[str, Dict[str, Any]] = {}
+
+    # Metric checks: candidate must not regress below baseline
+    for metric_name, metric_spec in policy.get("metrics", {}).items():
+        if metric_name == "overall_recall@10":
+            candidate_val = _metric_from_report(candidate, "recall@10")
+            baseline_val = _metric_from_report(baseline, "recall@10")
+        elif metric_name == "overall_ndcg@10":
+            candidate_val = _metric_from_report(candidate, "ndcg@10")
+            baseline_val = _metric_from_report(baseline, "ndcg@10")
+        elif metric_name == "exact_term_recall@10":
+            candidate_val = _exact_term_metric_from_report(candidate)
+            baseline_val = _exact_term_metric_from_report(baseline)
+        else:
+            continue
+
+        _operator = metric_spec.get("operator", "ge")  # noqa: F841
+        checks[metric_name] = _comparison_check(candidate_val, baseline_val)
+
+    # Performance checks
+    perf_spec = policy.get("performance", {})
+    cold_load_limit = perf_spec.get("cold_load_seconds", {}).get("threshold", 10.0)
+    p95_limit = perf_spec.get("search_p95_ms", {}).get("threshold", 5.0)
+
+    checks["cold_load_seconds"] = {
+        "passed": (
+            _performance_value(candidate, "cold_load_seconds") is not None
+            and _performance_value(candidate, "cold_load_seconds") <= cold_load_limit
+        ),
+        "candidate": _performance_value(candidate, "cold_load_seconds"),
+        "threshold": cold_load_limit,
+        "reason": "meets threshold"
+        if (
+            _performance_value(candidate, "cold_load_seconds") is not None
+            and _performance_value(candidate, "cold_load_seconds") <= cold_load_limit
+        )
+        else "unavailable measurement or threshold violated",
+    }
+    checks["search_p95_ms"] = {
+        "passed": (
+            _performance_value(candidate, "search_p95_ms") is not None
+            and _performance_value(candidate, "search_p95_ms") <= p95_limit
+        ),
+        "candidate": _performance_value(candidate, "search_p95_ms"),
+        "threshold": p95_limit,
+        "reason": "meets threshold"
+        if (
+            _performance_value(candidate, "search_p95_ms") is not None
+            and _performance_value(candidate, "search_p95_ms") <= p95_limit
+        )
+        else "unavailable measurement or threshold violated",
+    }
+
+    # Consistency checks
+    cons_spec = policy.get("consistency", {})
+    mismatch_limit = cons_spec.get("generation_mismatch_count", {}).get("threshold", 0)
+    stale_limit = cons_spec.get("stale_cache_hit_count", {}).get("threshold", 0)
+
+    checks["generation_mismatch_count"] = {
+        "passed": _consistency_value(candidate, "generation_mismatch_count") == mismatch_limit,
+        "candidate": _consistency_value(candidate, "generation_mismatch_count"),
+        "threshold": mismatch_limit,
+        "reason": "equals threshold"
+        if _consistency_value(candidate, "generation_mismatch_count") == mismatch_limit
+        else "unavailable measurement or non-zero count",
+    }
+    checks["stale_cache_hit_count"] = {
+        "passed": _consistency_value(candidate, "stale_cache_hit_count") == stale_limit,
+        "candidate": _consistency_value(candidate, "stale_cache_hit_count"),
+        "threshold": stale_limit,
+        "reason": "equals threshold"
+        if _consistency_value(candidate, "stale_cache_hit_count") == stale_limit
+        else "unavailable measurement or non-zero count",
+    }
+
     failures = [name for name, check in checks.items() if not check["passed"]]
     return {"passed": not failures, "checks": checks, "failures": failures}

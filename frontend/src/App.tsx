@@ -16,6 +16,7 @@ const EvaluationPage = React.lazy(() => import('./pages/Evaluation'));
 const AdminStatsPage = React.lazy(() => import('./pages/AdminStats'));
 const AdminPatientsPage = React.lazy(() => import('./pages/AdminPatients'));
 const AdminConsultationsPage = React.lazy(() => import('./pages/AdminConsultations'));
+const AdminReviewsPage = React.lazy(() => import('./pages/AdminReviews'));
 const ProfilePage = React.lazy(() => import('./pages/Profile'));
 
 const PageFallback = (
@@ -69,6 +70,14 @@ function App() {
                 }
               />
               <Route path="profile" element={<ProfilePage />} />
+              <Route
+                path="admin/reviews"
+                element={
+                  <AdminRoute>
+                    <AdminReviewsPage />
+                  </AdminRoute>
+                }
+              />
               <Route
                 path="admin/patients"
                 element={

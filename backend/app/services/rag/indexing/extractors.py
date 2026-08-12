@@ -27,7 +27,8 @@ def _rects_overlap(block_bbox: tuple, table_bbox: tuple, threshold: float = 0.1)
     iy = max(0.0, min(by1, ty1) - max(by0, ty0))
     intersection = ix * iy
     block_area = max((bx1 - bx0) * (by1 - by0), 1e-6)
-    return intersection / block_area > threshold
+    result = intersection / block_area > threshold
+    return bool(result)
 
 
 def _table_to_text(rows: List, table_idx: int) -> str:

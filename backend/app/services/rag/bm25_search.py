@@ -55,6 +55,22 @@ class BM25Index:
         self._bm25: Optional[bm25s.BM25] = None
         self.initialized: bool = False
 
+    def close(self) -> None:
+        """Release file-backed corpus resources owned by a loaded index."""
+        documents = self.documents
+        close = getattr(documents, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - defensive cleanup path
+                logger.debug("failed to close BM25 corpus", exc_info=True)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # pragma: no cover - interpreter shutdown safety
+            pass
+
     @classmethod
     def _from_loaded(
         cls,
@@ -247,17 +263,19 @@ def _build_legacy_bm25_index() -> BM25Index:
 def _load_generation_candidate(
     generation: str, artifact_root: Optional[Path]
 ) -> BM25Index:
+    from typing import cast
+
     from app.services.rag.lexical.artifacts import (
         BM25ArtifactNotFound,
         load_bm25_artifact,
     )
 
     try:
-        return load_bm25_artifact(
+        return cast(BM25Index, load_bm25_artifact(
             generation,
             _artifact_root(artifact_root),
             mmap=True,
-        )
+        ))
     except BM25ArtifactNotFound:
         if not settings.RAG_LEGACY_COLLECTION_FALLBACK:
             raise

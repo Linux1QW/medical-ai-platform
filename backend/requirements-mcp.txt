@@ -1,0 +1,2 @@
+# MCP demo server — NOT installed in production image
+mcp>=1.27,<2

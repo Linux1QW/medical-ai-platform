@@ -142,15 +142,26 @@ class MedicalKnowledgeStore:
         self.client: Optional[ClientAPI] = None
         self.collection: Optional[chromadb.Collection] = None
 
+    def _ensure_raw_client(self) -> ClientAPI:
+        """Initialize Chroma without resolving an active generation.
+
+        Candidate publication must be able to create the first immutable
+        generation in an empty store.  Resolving the active collection here
+        would make that bootstrap path circular and fail closed too early.
+        """
+        if self.client is None:
+            PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+            self.client = chromadb.PersistentClient(
+                path=str(PERSIST_DIR),
+                settings=Settings(anonymized_telemetry=False),
+            )
+        return self.client
+
     def _init_client(self) -> None:
-        """初始化 ChromaDB 客户端（持久化模式）"""
-        PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(
-            path=str(PERSIST_DIR),
-            settings=Settings(anonymized_telemetry=False),
-        )
+        """初始化 ChromaDB 客户端及当前活跃 collection（持久化模式）"""
+        client = self._ensure_raw_client()
         collection_name = _get_collection_name()
-        self.collection = self.client.get_or_create_collection(
+        self.collection = client.get_or_create_collection(
             name=collection_name,
             metadata=dict(COLLECTION_METADATA),
         )
@@ -158,10 +169,7 @@ class MedicalKnowledgeStore:
 
     def _ensure_client(self) -> ClientAPI:
         """返回已初始化的 client（用于类型收窄）"""
-        if self.client is None:
-            self._init_client()
-        assert self.client is not None
-        return self.client
+        return self._ensure_raw_client()
 
     def _ensure_collection(self) -> chromadb.Collection:
         """返回已初始化的 collection（用于类型收窄）"""
@@ -600,7 +608,6 @@ def get_medical_store() -> MedicalKnowledgeStore:
     global _medical_store
     if _medical_store is None:
         _medical_store = MedicalKnowledgeStore()
-        _medical_store._init_client()
     return _medical_store
 
 
@@ -617,7 +624,7 @@ def list_index_versions() -> list[str]:
     return versions
 
 
-def get_collection_count(collection_name: str = None) -> int:
+def get_collection_count(collection_name: Optional[str] = None) -> int:
     """获取指定 collection 的文档数"""
     store = get_medical_store()
     client = store._ensure_client()

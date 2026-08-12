@@ -8,6 +8,7 @@ requires-python = ">=3.10"
 line-length = 120
 target-version = "py310"
 src = ["backend"]
+exclude = ["backend/alembic/versions/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "C90"]
@@ -29,12 +30,28 @@ target-version = ["py310"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 ignore_missing_imports = true
 check_untyped_defs = true
+no_implicit_optional = true
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as requiring real infrastructure (deselect with '-m \"not integration\"')",
+]
+filterwarnings = [
+    # Treat all warnings as errors (lowest priority — checked last)
+    "error",
+    # jieba 0.42.1 imports setuptools.pkg_resources; ignore only that
+    # third-party deprecation until jieba ships a replacement.
+    "ignore:pkg_resources is deprecated as an API.*:DeprecationWarning:jieba\\._compat",
+    # anyio internal memory streams are not always closed by Starlette TestClient
+    # (higher priority — checked first, overrides the error rule above)
+    "ignore:Exception ignored in.*MemoryObject:pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

@@ -1,5 +1,6 @@
 """审计日志记录模块"""
 import logging
+import re
 from typing import Optional
 
 from fastapi import Request
@@ -10,6 +11,20 @@ from app.models.audit_log import AuditLog
 
 logger = logging.getLogger(__name__)
 
+# 用于脱敏的 pattern：数据库连接串
+_DB_CONN_PATTERN = re.compile(
+    r"(mysql|postgresql|redis)://[^\s]+", re.IGNORECASE
+)
+
+
+def _sanitize_error_message(msg: str) -> str:
+    """脱敏错误消息 — 移除数据库连接串和敏感信息"""
+    sanitized = _DB_CONN_PATTERN.sub("<redacted>", msg)
+    # 截断过长的消息
+    if len(sanitized) > 200:
+        sanitized = sanitized[:200] + "..."
+    return sanitized
+
 
 async def record_audit_log(
     db: Optional[AsyncSession],
@@ -18,6 +33,8 @@ async def record_audit_log(
     request: Optional[Request] = None,
     resource_id: Optional[str] = None,
     detail: Optional[str] = None,
+    *,
+    strict: bool = False,
 ) -> None:
     """记录审计日志
 
@@ -28,6 +45,8 @@ async def record_audit_log(
         request: FastAPI 请求对象（用于提取 IP 和 UA）
         resource_id: 关联资源ID
         detail: 操作详情（禁止记录密码等敏感信息）
+        strict: 严格模式 — flush 失败时原样抛出供上层 rollback；
+                默认 False — flush 失败只记录安全 warning（不含 PII）
     """
     if db is None:
         return
@@ -53,5 +72,9 @@ async def record_audit_log(
     try:
         await db.flush()
     except Exception as e:
-        # 审计日志写入失败不应影响主流程，仅记录警告
-        logger.warning(f"Audit log write failed: {e}")
+        if strict:
+            # strict 模式：原样抛出供上层 rollback
+            raise
+        # 默认模式：记录安全 warning（不含 PII、不含数据库连接串）
+        safe_msg = _sanitize_error_message(str(e))
+        logger.warning(f"Audit log flush failed: {safe_msg}")

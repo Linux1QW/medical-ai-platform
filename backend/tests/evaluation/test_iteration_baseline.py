@@ -32,7 +32,7 @@ class TestGateExitCodes:
         result = subprocess.run(
             [sys.executable, str(BACKEND_DIR / "scripts" / "eval_regression.py"),
              "--report", str(report_path)],
-            capture_output=True, text=True, cwd=str(BACKEND_DIR),
+            capture_output=True, text=True, encoding="utf-8", cwd=str(BACKEND_DIR),
         )
         return result.returncode
 
@@ -51,7 +51,7 @@ class TestGateExitCodes:
         result = subprocess.run(
             [sys.executable, str(BACKEND_DIR / "scripts" / "eval_regression.py"),
              "--report", str(tmp_path / "nonexistent.json")],
-            capture_output=True, text=True, cwd=str(BACKEND_DIR),
+            capture_output=True, text=True, encoding="utf-8", cwd=str(BACKEND_DIR),
         )
         assert result.returncode == 2
 
@@ -63,6 +63,14 @@ class TestGateExitCodes:
         assert 'if [ "$CODE" -eq 1 ]' in content
         # 最终兜底 exit 0
         assert content.strip().endswith("exit 0")
+
+    def test_pre_push_labels_missing_report_as_non_release_skip(self):
+        hook_path = BACKEND_DIR / "scripts" / "hooks" / "pre-push"
+        content = hook_path.read_text(encoding="utf-8")
+
+        assert 'if [ "$CODE" -eq 2 ]' in content
+        assert "回归护栏 SKIP" in content
+        assert "发布验收仍需补齐报告" in content
 
 
 # ── 2. 五维分数语义 ──────────────────────────────────────────────────────────

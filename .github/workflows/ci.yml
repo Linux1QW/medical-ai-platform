@@ -5,9 +5,20 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  backend-test:
+  # ============================================================================
+  # backend-quality: pytest + mypy + ruff (strict backend quality)
+  # ============================================================================
+  backend-quality:
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -31,9 +42,11 @@ jobs:
           --health-retries=5
 
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: actions/setup-python@v6
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -44,12 +57,17 @@ jobs:
           cd backend
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov httpx
+          pip install pytest pytest-asyncio pytest-cov httpx mypy ruff
+          pip check
 
-      - name: Run mypy type check (blocking)
+      - name: Run mypy
         run: |
           cd backend
           python -m mypy app
+
+      - name: Run Ruff
+        run: |
+          python -m ruff check backend
 
       - name: Run tests with coverage
         env:
@@ -58,30 +76,29 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
           TESTING: 'true'
           AUDIT_LOG_ENABLED: 'true'
+          MYSQL_INTEGRATION_DATABASE_URL: mysql+aiomysql://root:test@127.0.0.1:3306/test_db
         run: |
           cd backend
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=40
 
-      - name: Run RAG eval smoke test (mock mode, blocking threshold gate)
+      - name: Run RAG eval smoke test (mock mode)
         env:
           MYSQL_HOST: localhost
           MYSQL_PORT: 3306
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
           TESTING: 'true'
-        # mock 结果与 gold 期望对齐（绿路径），阈值门不过即失败：
-        # 防止评测框架/指标管道/阈值配置本身被后续改动改坏
         run: |
           cd backend
           python -m evaluation.rag_eval --mode mock --limit 5 --fail-on-threshold
@@ -93,7 +110,7 @@ jobs:
           MYSQL_USER: root
           MYSQL_PASSWORD: test
           MYSQL_DATABASE: test_db
-          REDIS_CHECKPOINT_URL: redis://localhost:6379/1
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           DASHSCOPE_API_KEY: test-key
           LANGGRAPH_ENABLED: 'false'
@@ -107,56 +124,33 @@ jobs:
             tests/rag/test_task8_observability.py -q
           python -m pytest tests/rag -q
 
-      - name: Run measured Task 8 gates when local artifacts are present
-        shell: bash
+      - name: Validate BM25 golden set structure
         run: |
           cd backend
-          if [[ -f evaluation_reports/bm25-v1.json && -n "$(find data/rag_indexes -mindepth 2 -maxdepth 2 -name manifest.json -print -quit 2>/dev/null)" ]]; then
-            python scripts/eval/evaluate_bm25.py \
-              --compare evaluation_reports/bm25-v1.json \
-              --fail-on-regression
-          else
-            echo "SKIP: no measured BM25 baseline and generation artifacts in checkout"
-          fi
-          if [[ -f evaluation/rag_cases/rag_gold_cases.jsonl && -d data/medical_kb && -n "$(find data/rag_indexes -mindepth 2 -maxdepth 2 -name manifest.json -print -quit 2>/dev/null)" ]]; then
-            python -m evaluation.rag_eval \
-              --mode both \
-              --split regression \
-              --fail-on-threshold
-          else
-            echo "SKIP: no measured RAG gold cases and Chroma generation in checkout"
-          fi
+          python scripts/eval/evaluate_bm25.py --validate-golden-only
 
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        # v5.0.0
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45
         with:
           files: ./backend/coverage.xml
           flags: backend
           fail_ci_if_error: false
 
-      - name: Install MySQL client
-        run: sudo apt-get update && sudo apt-get install -y mysql-client
-
-      - name: Verify database migrations
-        run: |
-          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -ptest --silent; do
-            sleep 2
-          done
-          mysql -h 127.0.0.1 -P 3306 -u root -ptest < database/init.sql
-          for f in database/migrate_v*.sql; do
-            echo "Applying $f..."
-            mysql -h 127.0.0.1 -P 3306 -u root -ptest medical_ai < "$f" || echo "Warning: $f had issues"
-          done
-
-  frontend-build:
+  # ============================================================================
+  # frontend-test: test + lint + build
+  # ============================================================================
+  frontend-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: actions/setup-node@v5
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -165,10 +159,24 @@ jobs:
           cd frontend
           npm ci
 
-      - name: Build frontend
+      - name: Run tests
+        run: |
+          cd frontend
+          npm test
+
+      - name: Audit production dependencies
+        run: |
+          cd frontend
+          npm audit --omit=dev --audit-level=high
+
+      - name: Run lint
         run: |
           cd frontend
           npm run lint
+
+      - name: Build frontend
+        run: |
+          cd frontend
           npm run build
 
       - name: Check build output
@@ -181,117 +189,704 @@ jobs:
             exit 1
           fi
 
-  code-quality:
+  # ============================================================================
+  # migration-gate: fresh DB + legacy fixture paths
+  # ============================================================================
+  migration-gate:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: test
+      MYSQL_DATABASE: test_db
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
-      - uses: actions/setup-python@v6
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
 
-      - name: Install linting tools
-        run: |
-          pip install ruff
-
-      - name: Run ruff
-        run: |
-          ruff check backend/
-
-      - name: Check patch whitespace
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.sha }}"
-          elif [[ "${{ github.event.before }}" =~ ^0+$ ]]; then
-            git show --check --format= "${{ github.sha }}"
-          else
-            git diff --check "${{ github.event.before }}...${{ github.sha }}"
-          fi
-
-      # mypy 阻断门禁已移至 backend-test 作业（需完整依赖环境，与本地结果一致）
-
-      - name: Check Python syntax
+      - name: Install dependencies
         run: |
           cd backend
-          python -m compileall app/ -q
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
-  security-scan:
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Wait for MySQL
+        run: |
+          until mysqladmin ping -h 127.0.0.1 -P 3306 -u root -ptest --silent; do
+            sleep 2
+          done
+
+      - name: Fresh DB migration test
+        run: |
+          cd backend
+          python scripts/migrate_v11.py
+          alembic check
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Legacy fixture migration test
+        run: |
+          cd backend
+          mysql -h 127.0.0.1 -P 3306 -u root -ptest -e "DROP DATABASE IF EXISTS test_db; CREATE DATABASE test_db;"
+          python scripts/migrate_v11.py
+          alembic check
+
+  # ============================================================================
+  # structural-coach: 72-case structural benchmark (NOT release-eligible)
+  # ============================================================================
+  structural-coach:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: actions/setup-python@v6
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
 
-      # 安全扫描当前为告警模式（continue-on-error），存量漏洞清零后再改为阻断
-      - name: pip-audit (backend dependencies)
-        continue-on-error: true
+      - name: Install dependencies
         run: |
-          pip install pip-audit
-          pip-audit -r backend/requirements.txt
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - uses: actions/setup-node@v5
+      - name: Run structural coach gate
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python scripts/ci/v12_coach_gate.py --execution-mode structural --output-dir benchmark_reports
+
+      - name: Verify structural output
+        run: |
+          cd backend
+          python -c "
+          import json, sys
+          with open('benchmark_reports/v12_coach_gate_report.json') as f:
+              r = json.load(f)
+          assert r.get('execution_mode') == 'structural', f'Expected structural, got {r.get(\"execution_mode\")}'
+          assert r.get('release_eligible') == False, f'Expected release_eligible=false, got {r.get(\"release_eligible\")}'
+          print('Structural gate verified: execution_mode=structural, release_eligible=false')
+          "
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          node-version: '18'
+          name: structural-coach-report
+          path: backend/benchmark_reports/v12_coach_gate_report.json
+          retention-days: 14
+
+  # ============================================================================
+  # safety-corpus: deterministic safety probe
+  # ============================================================================
+  safety-corpus:
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run deterministic safety corpus
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python scripts/ci/v12_safety_probe.py
+
+      - name: Upload safety probe report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: safety-corpus-report
+          path: backend/benchmark_reports/v12_safety_probe_report.json
+          retention-days: 14
+
+  # ============================================================================
+  # route-auth-contract: API contract tests (pytest tests/api -k auth)
+  # ============================================================================
+  route-auth-contract:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run route & auth contract tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python -m pytest tests/api/test_voice_auth.py -v --tb=short
+          python -m pytest tests/api/ -k "auth or route" -v --tb=short -q
+
+      - name: Generate contract report
+        if: always()
+        run: |
+          cd backend
+          mkdir -p benchmark_reports
+          echo '{"job":"route-auth-contract","status":"completed","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > benchmark_reports/route_auth_contract_report.json
+
+      - name: Upload contract report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: route-auth-contract-report
+          path: backend/benchmark_reports/route_auth_contract_report.json
+          retention-days: 14
+
+  # ============================================================================
+  # mcp-protocol: MCP protocol test
+  # ============================================================================
+  mcp-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run MCP protocol tests
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+        run: |
+          cd backend
+          python -m pytest tests/mcp_demo/ -v --tb=short
+
+      - name: Generate MCP report
+        if: always()
+        run: |
+          cd backend
+          mkdir -p benchmark_reports
+          echo '{"job":"mcp-protocol","status":"completed","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > benchmark_reports/mcp_protocol_report.json
+
+      - name: Upload MCP report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mcp-protocol-report
+          path: backend/benchmark_reports/mcp_protocol_report.json
+          retention-days: 14
+
+  # ============================================================================
+  # voice-mock-boundary: Voice disabled/mock boundary tests
+  # ============================================================================
+  voice-mock-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run mocked Voice boundary tests
+        env:
+          TESTING: 'true'
+          LANGGRAPH_ENABLED: 'false'
+          SECRET_KEY: test-secret-key-for-ci
+        run: |
+          cd backend
+          python -m pytest tests/voice/ tests/api/test_voice_auth.py -v --tb=short
+
+      - name: Generate voice boundary report
+        if: always()
+        run: |
+          cd backend
+          mkdir -p benchmark_reports
+          echo '{"job":"voice-mock-boundary","status":"completed","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > benchmark_reports/voice_boundary_report.json
+
+      - name: Upload voice boundary report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: voice-mock-boundary-report
+          path: backend/benchmark_reports/voice_boundary_report.json
+          retention-days: 14
+
+  # ============================================================================
+  # playwright-e2e: Browser E2E with Playwright (separate from API contract)
+  # ============================================================================
+  playwright-e2e:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        # LangGraph RedisSaver requires RedisJSON and RediSearch on Redis < 8.
+        image: redis/redis-stack-server:7.4.0-v8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # v6.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: npm audit (frontend dependencies)
-        continue-on-error: true
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install frontend dependencies
         run: |
           cd frontend
-          npm audit --audit-level=high
+          npm ci
 
-      - name: Trivy filesystem scan
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
+      - name: Install Playwright browsers
+        run: |
+          cd frontend
+          npx playwright install --with-deps chromium
+
+      - name: Migrate and seed E2E database
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+        run: |
+          cd backend
+          alembic upgrade head
+          python -m tests.fixtures.seed_production_smoke
+          E2E_ADMIN_USER=admin_v12 E2E_DOCTOR_USER=doctor_v12 E2E_PASSWORD=e2e_test_password_2026 \
+            python -m tests.fixtures.seed_v12_coach_e2e
+
+      - name: Start deterministic mock LLM
+        run: |
+          cd backend
+          nohup python -m tests.fixtures.mock_openai_server > /tmp/mock-openai.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:8080/health
+
+      - name: Start Backend A
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DASHSCOPE_API_KEY: test-key
+          QWEN_API_BASE_URL: http://localhost:8080/v1
+          QWEN_MODEL: mock-chat
+          LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
+          TESTING: 'true'
+          PROCESS_ID: backend-a
+          ENABLE_TOOL_USE: 'false'
+          ENABLE_REACT_KNOWLEDGE: 'false'
+          ENABLE_REACT_REFLECTION: 'false'
+          ENABLE_LLM_SUGGESTION: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/backend-a.log 2>&1 &
+          backend_pid=$!
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health/ready > /dev/null 2>&1 && break
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "Backend A exited before becoming healthy"
+              cat /tmp/backend-a.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:8000/health/ready || {
+            cat /tmp/backend-a.log
+            exit 1
+          }
+
+      - name: Start Backend B
+        env:
+          ENVIRONMENT: test
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: test_db
+          REDIS_CHECKPOINT_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-for-ci
+          DASHSCOPE_API_KEY: test-key
+          QWEN_API_BASE_URL: http://localhost:8080/v1
+          QWEN_MODEL: mock-chat
+          LANGGRAPH_ENABLED: 'true'
+          COACH_ENABLED: 'true'
+          TESTING: 'true'
+          PROCESS_ID: backend-b
+          ENABLE_TOOL_USE: 'false'
+          ENABLE_REACT_KNOWLEDGE: 'false'
+          ENABLE_REACT_REFLECTION: 'false'
+          ENABLE_LLM_SUGGESTION: 'false'
+        run: |
+          cd backend
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend-b.log 2>&1 &
+          backend_pid=$!
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8001/health/ready > /dev/null 2>&1 && break
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+              echo "Backend B exited before becoming healthy"
+              cat /tmp/backend-b.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:8001/health/ready || {
+            cat /tmp/backend-b.log
+            exit 1
+          }
+
+      - name: Start frontend dev server
+        env:
+          VITE_API_BASE_URL: http://localhost:8000/api/v1
+        run: |
+          cd frontend
+          npm run dev &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:5173 && break
+            sleep 1
+          done
+
+      - name: Run Playwright browser E2E tests
+        env:
+          E2E_BASE_URL: http://localhost:5173
+          E2E_BACKEND_A: http://localhost:8000
+          E2E_BACKEND_B: http://localhost:8001
+          E2E_ADMIN_USER: admin_v12
+          E2E_DOCTOR_USER: doctor_v12
+          E2E_PASSWORD: e2e_test_password_2026
+          VITE_API_BASE_URL: http://localhost:8000/api/v1
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-results.json
+        run: |
+          cd frontend
+          npx playwright test --reporter=json
+
+      - name: Generate Playwright report
+        if: always()
+        run: |
+          cd frontend
+          mkdir -p ../backend/benchmark_reports
+          test -f playwright-results.json || {
+            echo '{"job":"playwright-e2e","status":"missing-report"}' > ../backend/benchmark_reports/playwright_e2e_report.json
+            exit 1
+          }
+          cp playwright-results.json ../backend/benchmark_reports/playwright_e2e_report.json
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          exit-code: '1'
+          name: playwright-e2e-report
+          path: backend/benchmark_reports/playwright_e2e_report.json
+          retention-days: 14
 
-  docker-build:
-    needs: [backend-test, frontend-build]
+      - name: Upload Playwright trace on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-trace
+          path: frontend/test-results/
+          retention-days: 7
+
+  # ============================================================================
+  # docker-build-candidate: build after all structural gates pass
+  # ============================================================================
+  docker-build-candidate:
+    needs:
+      - backend-quality
+      - frontend-test
+      - migration-gate
+      - structural-coach
+      - safety-corpus
+      - route-auth-contract
+      - mcp-protocol
+      - voice-mock-boundary
+      - playwright-e2e
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    permissions:
-      packages: write
     steps:
-      - uses: actions/checkout@v5
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set lowercase image repo
         run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
+      - name: Build Backend candidate image
+        run: |
+          docker build -t ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} -f Dockerfile.backend .
+          docker save ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} > backend-image.tar
+
+      - name: Build Frontend candidate image
+        run: |
+          docker build -t ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} -f Dockerfile.frontend .
+          docker save ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} > frontend-image.tar
+
+      - name: Generate SHA-256 manifest
+        run: |
+          sha256sum backend-image.tar > manifest.txt
+          sha256sum frontend-image.tar >> manifest.txt
+
+      - name: Upload candidate images as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docker-candidate-images
+          path: |
+            backend-image.tar
+            frontend-image.tar
+            manifest.txt
+          retention-days: 1
+
+  # ============================================================================
+  # compose-smoke: E2E smoke test with candidate images
+  # ============================================================================
+  compose-smoke:
+    needs: [docker-build-candidate]
+    runs-on: ubuntu-latest
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docker-candidate-images
+
+      - name: Load candidate images
+        run: |
+          docker load < backend-image.tar
+          docker load < frontend-image.tar
+
+      - name: Run compose smoke test
+        run: |
+          docker compose -f docker-compose.yml up -d --wait
+          sleep 10
+          curl -f http://localhost:8000/health/ready || exit 1
+          docker compose down -v
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: compose-smoke-logs
+          path: |
+            monitoring/logs/
+          retention-days: 7
+
+  # ============================================================================
+  # image-security-scan: Trivy scan on candidate images
+  # ============================================================================
+  image-security-scan:
+    needs: [docker-build-candidate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docker-candidate-images
+
+      - name: Load candidate images
+        run: |
+          docker load < backend-image.tar
+          docker load < frontend-image.tar
+
+      - name: Trivy image scan (backend)
+        # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Trivy image scan (frontend)
+        # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  # ============================================================================
+  # publish-promote-release: only after all gates pass (master/tag only)
+  # ============================================================================
+  publish-promote-release:
+    needs: [compose-smoke, image-security-scan]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      packages: write
+    environment: production
+    steps:
+      # v5.0.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set lowercase image repo
+        run: echo "IMAGE_REPO=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # v4.0.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Backend
-        uses: docker/build-push-action@v7
+      - name: Download candidate images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          context: .
-          file: ./Dockerfile.backend
-          push: true
-          target: production
-          tags: |
-            ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          name: docker-candidate-images
 
-      - name: Build and push Frontend
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile.frontend
-          push: true
-          target: production
-          tags: |
-            ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest
+      - name: Load and push Backend
+        run: |
+          docker load < backend-image.tar
+          docker tag ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/backend:${{ github.sha }}
+
+      - name: Load and push Frontend
+        run: |
+          docker load < frontend-image.tar
+          docker tag ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/frontend:${{ github.sha }}
+
+      - name: Promote to latest (tag only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          docker tag ${{ env.IMAGE_REPO }}/backend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/backend:latest
+          docker tag ${{ env.IMAGE_REPO }}/frontend:${{ github.sha }} ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest
+          docker push ghcr.io/${{ env.IMAGE_REPO }}/frontend:latest

@@ -150,7 +150,8 @@ def _calculate_empathy_score(empathy_data: dict) -> float:
 
     # 计算平均分并归一化到 0-1
     avg_score = (empathy + politeness + clarity) / 3
-    return avg_score / 10
+    result = avg_score / 10
+    return float(result)
 
 
 def _calculate_behavior_score(behavior_data: dict) -> float:

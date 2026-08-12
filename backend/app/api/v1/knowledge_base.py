@@ -10,11 +10,11 @@ try:
     from celery.result import AsyncResult
 except ModuleNotFoundError:  # pragma: no cover - dependency-light test fallback
     from app.celery_app import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.celery_app import celery_app
-from app.core.deps import get_current_admin
+from app.core.permissions import require_permission
 from app.models.user import User
 from app.services.rag.build_medical_index import PDF_DIR, get_indexed_sources
 from app.services.rag.embeddings import clear_embed_cache, get_embed_cache_stats
@@ -108,7 +108,7 @@ def _manifest_payload(generation: str | None) -> dict | None:
 
 
 @router.get("/stats", response_model=KBStatsResponse, summary="获取知识库统计信息")
-async def get_kb_stats(_: User = Depends(get_current_admin)):
+async def get_kb_stats(_: User = require_permission("knowledge:manage")):
     store = get_medical_store()
     generation = await get_active_index_generation()
     if generation is None:
@@ -134,7 +134,7 @@ async def get_kb_stats(_: User = Depends(get_current_admin)):
 )
 async def add_pdf(
     body: AddPDFRequest,
-    _: User = Depends(get_current_admin),
+    _: User = require_permission("knowledge:manage"),
 ):
     pdf_path = _resolve_pdf_path(body.filename)
     source_id = _source_id_for_path(pdf_path)
@@ -163,7 +163,7 @@ async def add_pdf(
 )
 async def delete_source(
     source_name: str,
-    _: User = Depends(get_current_admin),
+    _: User = require_permission("knowledge:manage"),
 ):
     _reject_unsafe_relative_path(source_name)
     from app.tasks import rag_index_task
@@ -178,7 +178,7 @@ async def delete_source(
     status_code=status.HTTP_202_ACCEPTED,
     summary="异步触发全量重建",
 )
-async def rebuild_index(_: User = Depends(get_current_admin)):
+async def rebuild_index(_: User = require_permission("knowledge:manage")):
     from app.tasks import rag_index_task
 
     result = rag_index_task.rebuild_rag_index.delay()
@@ -188,7 +188,7 @@ async def rebuild_index(_: User = Depends(get_current_admin)):
 @router.get("/rebuild/status", summary="查询 Celery 重建任务状态")
 async def get_rebuild_status(
     task_id: str | None = Query(default=None),
-    _: User = Depends(get_current_admin),
+    _: User = require_permission("knowledge:manage"),
 ):
     if task_id:
         result = AsyncResult(task_id, app=celery_app)
@@ -204,7 +204,8 @@ async def get_rebuild_status(
         if state == "SUCCESS":
             response["result"] = result.result
         elif state == "FAILURE":
-            response["error"] = str(result.result)
+            response["error_code"] = "TASK_FAILED"
+            response["error"] = "任务执行失败"
         generation = response.get("generation")
         manifest = _manifest_payload(generation)
         if manifest is not None:
@@ -226,6 +227,6 @@ async def get_rebuild_status(
 
 
 @router.post("/cache/clear", summary="清空 Embedding 缓存")
-async def clear_cache(_: User = Depends(get_current_admin)):
+async def clear_cache(_: User = require_permission("knowledge:manage")):
     clear_embed_cache()
     return {"message": "Embedding 缓存已清空"}

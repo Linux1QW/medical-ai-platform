@@ -2,6 +2,7 @@ import logging
 import time
 import traceback
 from contextlib import asynccontextmanager
+from importlib import import_module
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -14,26 +15,22 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import models as _models  # noqa: F401
 from app.api.v1 import router as api_v1_router
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.logging import setup_logging
 from app.db.session import engine
-from app.models.base import Base
 from app.orchestration.adapters import register_all as register_all_adapters
 from app.orchestration.checkpointer import close_checkpointer, get_checkpointer, init_checkpointer
 from app.services.jwt_blacklist import close_blacklist_redis
-from app.services.llm_cache import LLMResponseCache, close_cache_redis
 from app.services.llm_cache import _get_redis as _get_cache_redis
+from app.services.llm_cache import close_cache_redis
 from app.services.observability.metrics import (
-    CACHE_HIT_RATE,
     HTTP_REQUEST_DURATION,
     HTTP_REQUESTS_TOTAL,
 )
-from app.services.qwen_client import get_llm_metrics
-from app.services.rag.retrieval_cache import close_retrieval_cache_redis, get_retrieval_cache_stats
-from app.services.token_tracker import token_tracker
+from app.services.progress_bus import RedisProgressBus
+from app.services.rag.retrieval_cache import close_retrieval_cache_redis
 
 # 初始化结构化日志
 setup_logging()
@@ -42,12 +39,18 @@ logger = logging.getLogger(__name__)
 # ── 速率限制器 ────────────────────────────────────────────────────────────────
 
 
+# Module-level reference to progress bus (set during lifespan, used by /health/ready)
+_progress_bus = None
+
+
+async def _check_progress_bus() -> bool:
+    """检查 progress bus Redis 连通性"""
+    return _progress_bus is not None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables ensured.")
-
+    # 生命周期顺序固定：check_security → adapters → checkpointer → progress listener → tool health
     # 安全检查
     settings.check_security()
 
@@ -62,14 +65,51 @@ async def lifespan(app: FastAPI):
         ttl=settings.REDIS_CHECKPOINT_TTL,
     )
 
+    # Validate Coach production dependencies when COACH_ENABLED=true
+    if settings.COACH_ENABLED and not settings.TESTING:
+        from app.services.coach_runtime_factory import validate_production_dependencies
+
+        missing = validate_production_dependencies()
+        if missing:
+            raise RuntimeError(
+                f"Coach enabled but missing dependencies: {', '.join(missing)}"
+            )
+        logger.info("Coach production dependencies validated.")
+
+    # 初始化 Progress Bus（Redis Pub/Sub 跨进程进度广播）
+    import redis.asyncio as aioredis
+
+    from app.core.websocket import init_manager
+    global _progress_bus
+    progress_redis = aioredis.from_url(settings.PROGRESS_REDIS_URL, decode_responses=True)
+    progress_bus = RedisProgressBus(progress_redis, ttl=settings.PROGRESS_EVENT_TTL_SECONDS)
+    _progress_bus = progress_bus
+    mgr = init_manager(bus=progress_bus)
+    await mgr.start()
+
     # 启动工具健康探测（TOOL_HEALTH_CHECK_ENABLED=false 时无操作）
     from app.services.tools.runtime import start_tool_health_checks, stop_tool_health_checks
     await start_tool_health_checks()
 
     yield
 
+    # ── Shutdown（反向关闭）──
+    # Task 7: 统一 shutdown flush（Langfuse tracer 幂等 flush）
+    from app.services.observability.langfuse_client import get_tracer
+    try:
+        get_tracer().flush()
+    except Exception as e:
+        logger.debug(f"Langfuse tracer flush on shutdown failed: {e}")
+
     # 停止工具健康探测
     await stop_tool_health_checks()
+
+    # 关闭 Progress Bus
+    from app.core.websocket import get_manager
+    mgr = get_manager()
+    await mgr.close()
+    await progress_redis.aclose()
+    _progress_bus = None
 
     # 关闭 checkpointer（None 时无操作）
     await close_checkpointer()
@@ -87,6 +127,10 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
     lifespan=lifespan,
 )
+
+# Patch starlette BaseHTTPMiddleware to prevent MemoryObjectReceiveStream leaks.
+# Must be imported before any @app.middleware("http") decorator runs.
+import_module("app._starlette_patch")
 
 # ── 速率限制中间件 ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
@@ -123,16 +167,19 @@ def _error_response(
     error_code: str,
     message: str,
     error_type: str | None = None,
+    context: dict | None = None,
+    detail: str | None = None,
 ) -> JSONResponse:
     request_id = _get_request_id(request)
     content: dict = {
         "error_code": error_code,
         "message": message,
-        "detail": message,
+        "detail": detail if detail is not None else message,
         "request_id": request_id,
     }
     if error_type:
         content["error_type"] = error_type
+    content["context"] = context
     return JSONResponse(
         status_code=status_code,
         content=content,
@@ -205,11 +252,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         error_code = detail.get("error_code", f"HTTP_{exc.status_code}")
         message = detail.get("message", "请求失败")
         error_type = detail.get("error_type")
+        context = detail.get("context")
     else:
         error_code = f"HTTP_{exc.status_code}"
         message = str(detail)
         error_type = None
-    return _error_response(request, exc.status_code, error_code, message, error_type=error_type)
+        context = None
+    return _error_response(
+        request, exc.status_code, error_code, message,
+        error_type=error_type, context=context,
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -239,20 +291,86 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 
 
-@app.get("/health")
-async def health_check():
-    checkpointer = get_checkpointer()
+# ── 健康端点 ──────────────────────────────────────────────────────────────────
 
-    # 根据 LANGGRAPH_ENABLED 和 checkpointer 状态返回健康信息
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness probe：只证明进程存活，永远不查询外部依赖"""
+    return {"status": "ok", "version": settings.VERSION}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe：检查必需依赖（MySQL、状态 Redis、checkpointer、progress bus）
+
+    - 任一必需依赖不可用 → 503
+    - redis-cache 不可用 → 200 + degraded=["cache"]（缓存降级不影响核心功能）
+    """
+    checks = {}
+    degraded = []
+
+    # 1. MySQL（必需）
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(sa_text("SELECT 1"))
+        checks["mysql"] = "ok"
+    except Exception as e:
+        checks["mysql"] = "unavailable"
+        logger.warning(f"Readiness: MySQL unavailable: {e}")
+
+    # 2. LangGraph checkpointer（必需；LANGGRAPH_ENABLED=false 时视为 ok）
+    checkpointer = get_checkpointer()
     if settings.LANGGRAPH_ENABLED:
         if checkpointer is not None:
-            langgraph_status = "available"
+            checks["checkpointer"] = "ok"
         else:
-            langgraph_status = "not_available"
+            checks["checkpointer"] = "unavailable"
+    else:
+        checks["checkpointer"] = "disabled"
+
+    # 3. Progress bus（必需）
+    if await _check_progress_bus():
+        checks["progress_bus"] = "ok"
+    else:
+        checks["progress_bus"] = "unavailable"
+
+    # 4. redis-cache（非必需，降级不阻止服务）
+    try:
+        cache_redis = await _get_cache_redis()
+        if cache_redis is not None and await cache_redis.ping():
+            checks["cache"] = "ok"
+        else:
+            checks["cache"] = "degraded"
+            degraded.append("cache")
+    except Exception:
+        checks["cache"] = "degraded"
+        degraded.append("cache")
+
+    # 必需依赖任一不可用 → 503
+    required = [k for k in ("mysql", "checkpointer", "progress_bus") if checks.get(k) == "unavailable"]
+    if required:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "checks": checks, "version": settings.VERSION},
+        )
+
+    body = {"status": "ok", "checks": checks, "version": settings.VERSION}
+    if degraded:
+        body["degraded"] = degraded
+    return body
+
+
+@app.get("/health")
+async def health_check():
+    """兼容旧版健康端点：返回 minimal ready 结果，不暴露敏感指标"""
+    checkpointer = get_checkpointer()
+
+    if settings.LANGGRAPH_ENABLED:
+        langgraph_status = "available" if checkpointer is not None else "not_available"
     else:
         langgraph_status = "disabled"
 
-    # ── 依赖连通性检查（MySQL / Redis）──
     checks = {"mysql": "ok", "redis": "ok"}
     try:
         async with engine.connect() as conn:
@@ -268,25 +386,11 @@ async def health_check():
         checks["redis"] = "unavailable"
         logger.warning(f"Health check: Redis unavailable: {e}")
 
-    llm_cache_stats = await LLMResponseCache.get_stats()
-    retrieval_cache_stats = await get_retrieval_cache_stats()
-
-    # ── 更新 Prometheus 缓存命中率 Gauge ──
-    try:
-        CACHE_HIT_RATE.labels(cache="llm").set(llm_cache_stats.get("hit_rate", 0))
-        CACHE_HIT_RATE.labels(cache="retrieval").set(retrieval_cache_stats.get("hit_rate", 0))
-    except Exception:
-        pass
-
     healthy = all(v == "ok" for v in checks.values())
     body = {
         "status": "ok" if healthy else "degraded",
         "checks": checks,
         "version": settings.VERSION,
-        "llm": get_llm_metrics(),
-        "llm_cache": llm_cache_stats,
-        "retrieval_cache": retrieval_cache_stats,
-        "token_usage": await token_tracker.get_summary(),
         "langgraph_enabled": settings.LANGGRAPH_ENABLED,
         "checkpointer": langgraph_status,
     }

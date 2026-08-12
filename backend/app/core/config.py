@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import warnings
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -14,9 +16,17 @@ _DEFAULT_SECRET_KEY = "change-this-to-a-secure-random-string"
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "医学问诊评估平台"
-    VERSION: str = "1.0.0"
+    VERSION: str = "1.2.0"
     API_V1_PREFIX: str = "/api/v1"
-    ENVIRONMENT: str = "development"  # development | production
+    ENVIRONMENT: str = "development"  # development | test | staging | production
+
+    @field_validator("ENVIRONMENT")
+    @classmethod
+    def _validate_environment(cls, v: str) -> str:
+        allowed = {"development", "test", "staging", "production"}
+        if v not in allowed:
+            raise ValueError(f"ENVIRONMENT must be one of {allowed}, got {v!r}")
+        return v
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
@@ -26,9 +36,11 @@ class Settings(BaseSettings):
     # JWT
     SECRET_KEY: str = "change-this-to-a-secure-random-string"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_TOKEN_BLACKLIST_ENABLED: bool = True
+    JWT_BLACKLIST_FAIL_CLOSED: bool = False
+    JWT_BLACKLIST_REDIS_URL: str = "redis://localhost:6379/7"
 
     # MySQL
     MYSQL_HOST: str = "localhost"
@@ -39,16 +51,18 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
+        """Async DATABASE_URL — 使用 quote_plus 保证密码特殊字符被正确 percent-encode"""
         return (
-            f"mysql+aiomysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
+            f"mysql+aiomysql://{quote_plus(self.MYSQL_USER)}:{quote_plus(self.MYSQL_PASSWORD)}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{quote_plus(self.MYSQL_DATABASE)}"
         )
 
     @property
     def DATABASE_URL_SYNC(self) -> str:
+        """Sync DATABASE_URL — 使用 quote_plus 保证密码特殊字符被正确 percent-encode"""
         return (
-            f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
+            f"mysql+pymysql://{quote_plus(self.MYSQL_USER)}:{quote_plus(self.MYSQL_PASSWORD)}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{quote_plus(self.MYSQL_DATABASE)}"
         )
 
     # 阿里云百炼平台 Qwen API — 优先从系统环境变量 DASHSCOPE_API_KEY 读取
@@ -81,6 +95,14 @@ class Settings(BaseSettings):
     BM25_ARTIFACT_ROOT: str = str(
         Path(__file__).resolve().parents[2] / "data" / "rag_indexes"
     )
+
+    @field_validator("BM25_HEADING_BOOST", "BM25_ENTITY_BOOST")
+    @classmethod
+    def _validate_bm25_field_boost(cls, value: int) -> int:
+        """Keep field-token expansion bounded across Pydantic versions."""
+        if not 1 <= value <= 3:
+            raise ValueError("BM25 field boosts must be between 1 and 3")
+        return value
 
     # ── Metadata 预过滤（按疾病/关键词缩小候选集，降噪提精度）──
     # disease_tags 等以 JSON 字符串存储，ChromaDB where 无法子串匹配，
@@ -132,8 +154,22 @@ class Settings(BaseSettings):
     LANGGRAPH_CHECKPOINT_TTL_HOURS: int = 24
 
     # Redis Checkpoint
-    REDIS_CHECKPOINT_URL: str = "redis://localhost:6379/1"  # 使用 db=1 避免与应用缓存冲突
+    # RedisVL/RediSearch indexes are supported only on Redis database 0.
+    # Isolation is provided by the dedicated redis-state instance.
+    REDIS_CHECKPOINT_URL: str = "redis://localhost:6379/0"
     REDIS_CHECKPOINT_TTL: int = 86400  # 24小时过期（秒）
+
+    # LLM Cache Redis（独立实例，6380 对应 redis-cache）
+    LLM_CACHE_REDIS_URL: str = "redis://localhost:6380/0"
+    # Retrieval Cache Redis（独立实例，6380 对应 redis-cache）
+    RETRIEVAL_CACHE_REDIS_URL: str = "redis://localhost:6380/1"
+
+    # Evaluation Control Redis（取消标志和 task_id 映射）
+    EVALUATION_CONTROL_REDIS_URL: str = "redis://localhost:6379/8"
+
+    # Progress Bus Redis（跨进程进度广播）
+    PROGRESS_REDIS_URL: str = "redis://localhost:6379/6"
+    PROGRESS_EVENT_TTL_SECONDS: int = 3600
 
     # Function Call / Tool Use
     ENABLE_TOOL_USE: bool = True
@@ -199,7 +235,22 @@ class Settings(BaseSettings):
 
     # 数据留存策略
     AUDIT_LOG_RETENTION_DAYS: int = 90        # 审计日志保留天数
-    EVALUATION_RUN_RETENTION_DAYS: int = 180  # 评估运行记录保留天数
+    EVALUATION_RUN_RETENTION_DAYS: int = 180  # 评估运行记录保留天数（deprecated alias）
+
+    # Dispatch Outbox 配置
+    DISPATCH_POLL_INTERVAL_SECONDS: int = Field(default=1, ge=1, le=60)
+    DISPATCH_BATCH_SIZE: int = Field(default=20, ge=1, le=100)
+    DISPATCH_LEASE_SECONDS: int = Field(default=30, ge=10, le=300)
+    DISPATCH_MAX_ATTEMPTS: int = Field(default=1500, ge=1, le=10000)
+    DISPATCH_MAX_AGE_SECONDS: int = Field(default=86400, ge=3600, le=604800)  # 24h
+    DISPATCH_BREAKER_FAILURE_THRESHOLD: int = Field(default=5, ge=1, le=50)
+    DISPATCH_BREAKER_COOLDOWN_SECONDS: int = Field(default=30, ge=5, le=300)
+    DISPATCH_RETENTION_DAYS: int = Field(default=7, ge=1, le=90)
+    UNREPORTED_RUN_RETENTION_DAYS: int = Field(default=180, ge=30, le=365)
+
+    # 审计自动删除（默认关闭）
+    AUDIT_LOG_AUTO_DELETE_ENABLED: bool = False
+    DATA_RETENTION_POLICY_ID: str = ""
 
     # Token 用量管控
     TOKEN_DAILY_LIMIT: int = 1_000_000       # 每日 Token 上限
@@ -251,11 +302,36 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
     LANGFUSE_ENABLED: bool = False
 
+    # 可观测性隐私策略（Task 7）
+    OBSERVABILITY_CAPTURE_CONTENT: bool = False
+    OBSERVABILITY_CONTENT_MAX_CHARS: int = Field(default=500, ge=0, le=2000)
+    OBSERVABILITY_HMAC_KEY: Optional[SecretStr] = None
+
+    # 复核反馈导出 HMAC 密钥（Task 13）
+    # 用于 consultation_id / user_id 的 HMAC-SHA256 脱敏，不得复用 JWT SECRET_KEY
+    FEEDBACK_EXPORT_HMAC_KEY: Optional[SecretStr] = None
+
     # BGE-M3 双表示配置
     BGE_M3_ENABLED: bool = False          # 默认关闭，需要时通过环境变量开启
     BGE_M3_MODEL_PATH: str = "BAAI/bge-m3"  # 模型路径或 HuggingFace ID
     BGE_M3_USE_FP16: bool = False         # GPU 环境开启 FP16 量化
     BGE_M3_QUERY_INSTRUCTION: str = "为这个医学查询生成检索表示："
+
+    # ── Coach（临床教练智能体）────────────────────────────────
+    COACH_ENABLED: bool = False
+    COACH_HMAC_KEY: Optional[SecretStr] = None
+    COACH_CONTEXT_TOKEN_LIMIT: int = 16_000
+    COACH_OUTPUT_TOKEN_LIMIT: int = 250
+    COACH_HARD_TIMEOUT_SECONDS: int = 8
+    COACH_SSE_EVENT_TTL_SECONDS: int = 3_600
+    COACH_MODEL: str = ""
+    COACH_TEMPERATURE: float = 0.2
+
+    # ── Voice（语音问诊，LiveKit）──────────────────────────────
+    VOICE_ENABLED: bool = False               # 默认关闭；无真实 LiveKit 环境时不得开启
+    LIVEKIT_URL: Optional[str] = None
+    LIVEKIT_API_KEY: Optional[SecretStr] = None
+    LIVEKIT_API_SECRET: Optional[SecretStr] = None
 
     # 数据库连接池配置
     DB_POOL_SIZE: int = 20
@@ -295,6 +371,44 @@ class Settings(BaseSettings):
         """通用 LLM 模型（未配置时回退 QWEN_MODEL）。"""
         return self.LLM_MODEL or self.QWEN_MODEL
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_coach_and_voice(cls, values: dict) -> dict:
+        env = values.get("ENVIRONMENT", "development")
+        # --- Coach: staging/production 要求 HMAC key >= 32 bytes ---
+        if env in ("staging", "production"):
+            coach_enabled = values.get("COACH_ENABLED", False)
+            if isinstance(coach_enabled, str):
+                coach_enabled = coach_enabled.lower() in ("true", "1", "yes")
+            if coach_enabled:
+                hmac_key = values.get("COACH_HMAC_KEY")
+                if not hmac_key:
+                    raise ValueError(
+                        "COACH_HMAC_KEY is required (>= 32 bytes) when "
+                        "COACH_ENABLED=true in staging/production"
+                    )
+                key_str = (
+                    hmac_key.get_secret_value()
+                    if hasattr(hmac_key, "get_secret_value")
+                    else str(hmac_key)
+                )
+                if len(key_str.encode("utf-8")) < 32:
+                    raise ValueError(
+                        "COACH_HMAC_KEY must be >= 32 bytes in staging/production"
+                    )
+        # --- Voice: 三个 LiveKit 值必须同时配置 ---
+        lk_vals = [
+            values.get("LIVEKIT_URL"),
+            values.get("LIVEKIT_API_KEY"),
+            values.get("LIVEKIT_API_SECRET"),
+        ]
+        if any(lk_vals) and not all(lk_vals):
+            raise ValueError(
+                "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET "
+                "must all be set together for voice functionality"
+            )
+        return values
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     def check_security(self) -> None:
@@ -302,14 +416,58 @@ class Settings(BaseSettings):
         if self.TESTING:
             return
         if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
-            if self.ENVIRONMENT == "production":
+            if self.ENVIRONMENT in ("production", "staging"):
                 raise RuntimeError(
-                    "SECRET_KEY 未设置！生产环境必须通过环境变量 SECRET_KEY 配置安全密钥。"
+                    f"SECRET_KEY 未设置！{self.ENVIRONMENT} 环境必须通过环境变量 SECRET_KEY 配置安全密钥。"
                 )
             logger.warning(
                 "SECURITY WARNING: SECRET_KEY 仍为默认值！"
                 "请在生产环境中设置安全的随机密钥（环境变量 SECRET_KEY）。"
             )
+
+        # JWT 吊销 fail-closed 约束
+        if self.ENVIRONMENT in ("staging", "production"):
+            if self.JWT_TOKEN_BLACKLIST_ENABLED and not self.JWT_BLACKLIST_FAIL_CLOSED:
+                raise RuntimeError(
+                    f"[{self.ENVIRONMENT}] JWT_TOKEN_BLACKLIST_ENABLED=true 时"
+                    "必须设置 JWT_BLACKLIST_FAIL_CLOSED=true 以防止吊销存储故障时放行已吊销 token"
+                )
+            if self.ACCESS_TOKEN_EXPIRE_MINUTES > 60:
+                raise RuntimeError(
+                    f"[{self.ENVIRONMENT}] ACCESS_TOKEN_EXPIRE_MINUTES 不得超过 60 分钟，"
+                    f"当前值 {self.ACCESS_TOKEN_EXPIRE_MINUTES}。"
+                    "缩短暴露窗口是 redis-state 灾难恢复时的必要安全边界。"
+                )
+
+        # development 长 TTL 警告
+        if self.ENVIRONMENT == "development" and self.ACCESS_TOKEN_EXPIRE_MINUTES > 60:
+            warnings.warn(
+                f"[development] ACCESS_TOKEN_EXPIRE_MINUTES={self.ACCESS_TOKEN_EXPIRE_MINUTES}"
+                " 超过 60 分钟，仅建议用于本地调试，生产环境不得超过 60 分钟。",
+                stacklevel=2,
+            )
+
+        # Task 7: 可观测性隐私安全检查
+        if self.ENVIRONMENT in ("staging", "production"):
+            if self.LANGFUSE_ENABLED:
+                # HMAC key 必须存在且至少 32 字节
+                if not self.OBSERVABILITY_HMAC_KEY:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] LANGFUSE_ENABLED=true 时必须配置 "
+                        "OBSERVABILITY_HMAC_KEY（至少 32 字节随机密钥）"
+                    )
+                hmac_key_bytes = self.OBSERVABILITY_HMAC_KEY.get_secret_value().encode("utf-8")
+                if len(hmac_key_bytes) < 32:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] OBSERVABILITY_HMAC_KEY 长度不足 32 字节，"
+                        "请使用更安全的随机密钥"
+                    )
+                # capture=true 在 staging/production 禁止
+                if self.OBSERVABILITY_CAPTURE_CONTENT:
+                    raise RuntimeError(
+                        f"[{self.ENVIRONMENT}] OBSERVABILITY_CAPTURE_CONTENT=true 被禁止，"
+                        "医疗数据不得上传至外部观测平台"
+                    )
 
 
 settings = Settings()

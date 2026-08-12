@@ -282,10 +282,6 @@ class TestSecurityConfig:
 
 # ── 测试速率限制配置 ──────────────────────────────────────────────────────────
 
-# 注意：以下测试需要导入 app.main，在 Windows 上可能因 .env 编码问题失败
-# 实际 CI 环境中这些测试会正常运行
-
-@pytest.mark.skip(reason="Windows .env 编码问题，CI 中验证")
 class TestRateLimitConfig:
     """测试速率限制配置"""
 
@@ -294,11 +290,12 @@ class TestRateLimitConfig:
         from app.main import limiter
         assert limiter is not None
 
-    def test_rate_limit_handler_returns_429(self):
+    @pytest.mark.asyncio
+    async def test_rate_limit_handler_returns_429(self):
         """验证速率限制处理器返回 429"""
-        import asyncio
-
+        from limits import parse
         from slowapi.errors import RateLimitExceeded
+        from slowapi.wrappers import Limit
 
         from app.main import rate_limit_handler
 
@@ -306,11 +303,21 @@ class TestRateLimitConfig:
         mock_request.state = MagicMock()
         mock_request.state.request_id = "test-id"
 
-        exc = RateLimitExceeded("10/minute")
-
-        response = asyncio.get_event_loop().run_until_complete(
-            rate_limit_handler(mock_request, exc)
+        exc = RateLimitExceeded(
+            Limit(
+                limit=parse("10/minute"),
+                key_func=lambda: "test",
+                scope=None,
+                per_method=False,
+                methods=None,
+                error_message=None,
+                exempt_when=None,
+                cost=1,
+                override_defaults=False,
+            )
         )
+
+        response = await rate_limit_handler(mock_request, exc)
         assert response.status_code == 429
 
     def test_consultation_message_rate_limit(self):

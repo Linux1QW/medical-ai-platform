@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, Input, Button, List, Avatar, Typography, Tag, Space, Spin, message, Modal, Form, Popconfirm, Divider, Progress } from 'antd';
-import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined, LoadingOutlined, TrophyOutlined } from '@ant-design/icons';
+import { SendOutlined, UserOutlined, MedicineBoxOutlined, FileTextOutlined, StopOutlined, PlusOutlined, LoadingOutlined, TrophyOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getConsultationDetail, sendMessageStream, submitDiagnosis, endConsultation, extendRounds } from '../../api/consultation';
 import type { SSEProgressEvent } from '../../api/consultation';
@@ -8,6 +8,13 @@ import { getPatient } from '../../api/patient';
 import { getEvaluation } from '../../api/evaluation';
 import type { Message, VirtualPatient, Evaluation } from '../../types';
 import { ScoreDisplay, getScoreColor, getScoreLevel, PersonalityTag } from '../../components';
+import { CoachPanel } from '../../components/CoachPanel';
+import { VoiceConsultation } from '../../components/VoiceConsultation';
+import { AgentTraceDrawer } from '../../components/AgentTraceDrawer';
+import { useAuth } from '../../store/useAuth';
+
+/** Voice feature flag — mirrors backend VOICE_ENABLED. Default false (no real LiveKit). */
+const VOICE_ENABLED = import.meta.env.VITE_VOICE_ENABLED === 'true';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -15,6 +22,7 @@ const { TextArea } = Input;
 const ConsultationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [patient, setPatient] = useState<VirtualPatient | null>(null);
   const [input, setInput] = useState('');
@@ -26,6 +34,7 @@ const ConsultationPage: React.FC = () => {
   const [progressInfo, setProgressInfo] = useState<SSEProgressEvent | null>(null);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [evalLoading, setEvalLoading] = useState(false);
+  const [traceDrawerOpen, setTraceDrawerOpen] = useState(false);
   const [form] = Form.useForm();
   const listRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -210,6 +219,16 @@ const ConsultationPage: React.FC = () => {
             <Divider style={{ margin: '8px 0' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>问诊轮次：{currentRounds} / {maxRounds}</Text>
             <Progress percent={parseFloat(Math.min(100, (currentRounds / maxRounds) * 100).toFixed(1))} size="small" status={isRoundLimitReached ? 'exception' : 'active'} />
+            {isAdmin && (
+              <Button
+                size="small"
+                icon={<NodeIndexOutlined />}
+                onClick={() => setTraceDrawerOpen(true)}
+                style={{ marginTop: 4 }}
+              >
+                Agent Trace
+              </Button>
+            )}
           </Space>
         ) : (
           <Spin />
@@ -309,6 +328,26 @@ const ConsultationPage: React.FC = () => {
         )}
       </Card>
 
+      {/* 语音问诊 (Beta) — 仅当 VOICE_ENABLED=true 时显示 */}
+      {!isEnded && (
+        <div style={{ width: VOICE_ENABLED ? 280 : 0, flexShrink: 0, overflow: VOICE_ENABLED ? 'auto' : 'hidden' }}>
+          {VOICE_ENABLED ? (
+            <VoiceConsultation consultationId={Number(id)} />
+          ) : null}
+        </div>
+      )}
+
+      {/* 问诊教练面板 */}
+      {!isEnded && (
+        <div style={{ width: 280, flexShrink: 0, overflow: 'auto' }}>
+          <CoachPanel
+            consultationId={Number(id)}
+            onApplySuggestion={(text) => setInput(text)}
+            disabled={isEnded || sending}
+          />
+        </div>
+      )}
+
       {/* 评估结果摘要 */}
       {isEnded && (
         <Card
@@ -372,6 +411,14 @@ const ConsultationPage: React.FC = () => {
           )}
         </Card>
       )}
+
+      {/* Agent Trace Drawer (admin only) */}
+      <AgentTraceDrawer
+        isAdmin={isAdmin}
+        consultationId={id ? Number(id) : null}
+        isOpen={traceDrawerOpen}
+        onClose={() => setTraceDrawerOpen(false)}
+      />
 
       <Modal
         title="提交诊断结果与治疗方案"

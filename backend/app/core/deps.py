@@ -1,11 +1,10 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decode_access_token
+from app.core.authentication import AuthenticationError, authenticate_access_token
 from app.db.session import get_db
 from app.models.user import User
-from app.services.jwt_blacklist import is_token_blacklisted
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -14,43 +13,16 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    # 先检查黑名单
-    if await is_token_blacklisted(token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error_code": "AUTH_TOKEN_REVOKED", "message": "凭据已失效，请重新登录"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = decode_access_token(token)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error_code": "AUTH_INVALID_TOKEN", "message": "无效的认证凭据"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user_id_str = payload.get("sub")
-    if user_id_str is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"error_code": "AUTH_INVALID_TOKEN", "message": "无效的认证凭据"},
-        )
+    """HTTP 认证依赖：调用统一 authenticate_access_token 并将 AuthenticationError 转为 HTTPException"""
     try:
-        user_id = int(user_id_str)
-    except (TypeError, ValueError):
+        user = await authenticate_access_token(db, token)
+    except AuthenticationError as e:
+        headers = {"WWW-Authenticate": "Bearer"} if e.status_code == 401 else {}
         raise HTTPException(
-            status_code=401,
-            detail={"error_code": "AUTH_INVALID_TOKEN", "message": "无效的认证凭据"},
-        ) from None
-
-    from app.services.user_service import get_user_by_id
-
-    user = await get_user_by_id(db, user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error_code": "AUTH_USER_NOT_FOUND", "message": "用户不存在"},
-        )
+            status_code=e.status_code,
+            detail={"error_code": e.error_code, "message": e.message},
+            headers=headers,
+        ) from e
     return user
 
 

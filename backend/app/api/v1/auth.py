@@ -110,11 +110,24 @@ async def logout(
     token: str = Depends(oauth2_scheme),
     current_user: User = Depends(get_current_user),
 ):
-    """登出：将当前 access_token 加入黑名单"""
+    """登出：将当前 access_token 加入黑名单
+
+    生产环境（fail-closed）：blacklist 写失败时返回 503，不假装成功。
+    """
     success = await blacklist_token(token)
+    if not success:
+        # 生产环境：写失败不能回复"已成功登出"，返回 503
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "AUTH_BLACKLIST_UNAVAILABLE",
+                "message": "登出服务暂不可用，token 未能安全吊销，请稍后重试",
+            },
+        )
+    # 审计日志只记录状态，不记录 token/jti
     await record_audit_log(
         None, user_id=current_user.id, action="logout", request=request,
-        detail=f"登出: username={current_user.username}, blacklist={'ok' if success else 'skipped'}",
+        detail=f"登出: username={current_user.username}, blacklist=ok",
     )
     return {"message": "已成功登出"}
 

@@ -41,14 +41,14 @@ const LoginPage: React.FC = () => {
         </div>
         <Form form={form} onFinish={onFinish} size="large">
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" />
+            <Input data-testid="username-input" prefix={<UserOutlined />} placeholder="用户名" />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+            <Input.Password data-testid="password-input" prefix={<LockOutlined />} placeholder="密码" />
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" block loading={loading}>
-              登 录
+              登录
             </Button>
           </Form.Item>
           <div style={{ textAlign: 'center' }}>

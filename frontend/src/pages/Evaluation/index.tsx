@@ -2,10 +2,11 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Card, Typography, Progress, Row, Col, Collapse, Button, Spin, message, Tag, Badge } from 'antd';
 import { FileTextOutlined, RobotOutlined, MedicineBoxOutlined, ReadOutlined, HeartOutlined, CheckCircleOutlined, ExperimentOutlined, BulbOutlined, TrophyOutlined, WarningOutlined, ToolOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getEvaluation, createEvaluation, getEvaluationLockStatus, cancelEvaluation } from '../../api/evaluation';
+import { getEvaluation, getEvaluationLockStatus } from '../../api/evaluation';
 import { getConsultationDetail } from '../../api/consultation';
 import type { Evaluation, ConsultationDetail, Citation } from '../../types';
 import { ScoreDisplay, DimensionRadar, getScoreColor, getScoreLevel } from '../../components';
+import { useEvaluationJob } from '../../hooks/useEvaluationJob';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -48,228 +49,109 @@ const translateEnumTerms = (text?: string | null) => {
 
 const EvaluationPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const consultationId = Number(id);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [consultation, setConsultation] = useState<ConsultationDetail | null>(null);
   const [loading, setLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [progressMsg, setProgressMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
-  const [lockActive, setLockActive] = useState(false);
-  const pollingRef = useRef<number | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const lockCheckedRef = useRef(false);
 
-  useEffect(() => {
-    let timer: number;
-    if (generating) {
-      timer = window.setInterval(() => {
-        setElapsed(prev => prev + 1);
-      }, 1000);
-    } else {
-      setElapsed(0);
-    }
-    return () => clearInterval(timer);
-  }, [generating]);
-
-  const fetchData = useCallback(async () => {
+  // 终态后重新加载完整 Evaluation
+  const loadEvaluation = useCallback(async () => {
     if (!id) return;
-    setLoading(true);
     try {
-      const detail = await getConsultationDetail(Number(id));
-      setConsultation(detail);
-    } catch {
-      message.error('加载问诊详情失败');
-    }
-    try {
-      const data = await getEvaluation(Number(id));
+      const data = await getEvaluation(consultationId);
       setEvaluation(data);
     } catch {
-      setEvaluation(null);
+      // ignore
     }
-    setLoading(false);
-  }, [id]);
+  }, [id, consultationId]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { state: jobState, start, cancel, resume } = useEvaluationJob(consultationId, loadEvaluation);
 
-  const startPolling = useCallback(() => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = window.setInterval(async () => {
-      try {
-        const data = await getEvaluation(Number(id));
-        if (data) {
-          setEvaluation(data);
-          setGenerating(false);
-          setLockActive(false);
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          message.success('评估报告已生成');
-        }
-      } catch {
-        // 评估尚未完成
-      }
-    }, 5000);
-  }, [id]);
+  // 计时器
+  useEffect(() => {
+    if (!jobState.isActive) {
+      startTimeRef.current = 0;
+      return;
+    }
+    startTimeRef.current = Date.now();
+    const timer = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [jobState.isActive]);
 
-  // 页面加载时检查是否有进行中的评估
+  // 页面加载：获取既有数据 + 检查锁
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
 
-    const checkLock = async () => {
+    const init = async () => {
+      setLoading(true);
       try {
-        const status = await getEvaluationLockStatus(Number(id));
-        if (!cancelled && status.is_active && !evaluation) {
-          setLockActive(true);
-          setGenerating(true);
-          startPolling();
-        }
+        const detail = await getConsultationDetail(consultationId);
+        if (!cancelled) setConsultation(detail);
       } catch {
-        // 接口不可用时降级
+        if (!cancelled) message.error('加载问诊详情失败');
       }
-    };
 
-    if (!evaluation) {
-      checkLock();
-    }
-
-    return () => {
-      cancelled = true;
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [id, evaluation, startPolling]);
-
-  const handleGenerate = async (isAutoRetry = false) => {
-    if (!id) return;
-    setGenerating(true);
-    setProgress(0);
-    setProgressMsg('正在初始化评估环境...');
-    
-    // 建立 WebSocket 连接以接收进度推送（token 通过首条消息发送，避免暴露在 URL）
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = sessionStorage.getItem('token') || '';
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/evaluations/ws/${id}`;
-    const ws = new WebSocket(wsUrl);
-    let wsAuthed = false;
-
-    // 设置 WebSocket 事件处理
-    ws.onopen = () => {
-      // 首条消息传递 JWT 完成鉴权，服务端验证后回复 auth_ok
-      ws.send(JSON.stringify({ type: 'auth', token }));
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket connection error:', error);
-    };
-    
-    ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'auth_ok') {
-          wsAuthed = true;
-          console.log('WebSocket authenticated for evaluation progress');
-          return;
+        const data = await getEvaluation(consultationId);
+        if (!cancelled) setEvaluation(data);
+      } catch {
+        if (!cancelled) setEvaluation(null);
+      }
+
+      // 没有既有评估时检查锁状态
+      if (!cancelled) {
+        try {
+          const lockStatus = await getEvaluationLockStatus(consultationId);
+          if (!cancelled && lockStatus.is_active && lockStatus.run_id) {
+            await resume();
+          }
+        } catch {
+          // 接口不可用时降级
         }
-        console.log('Progress update:', data);
-        setProgress(data.progress);
-        setProgressMsg(data.message);
-      } catch (e) {
-        console.error('Failed to parse WS message', e);
+      }
+
+      if (!cancelled) {
+        lockCheckedRef.current = true;
+        setLoading(false);
       }
     };
 
-    ws.onclose = () => {
-      console.log('WebSocket connection closed');
-    };
+    init();
+    return () => { cancelled = true; };
+  }, [id, consultationId, resume]);
 
-    // 等待 WebSocket 鉴权完成（最多等待 3 秒）
-    const waitForConnection = () => new Promise<void>((resolve) => {
-      if (wsAuthed) {
-        resolve();
-        return;
-      }
-      const checkInterval = setInterval(() => {
-        if (wsAuthed) {
-          clearInterval(checkInterval);
-          resolve();
-        }
-      }, 100);
-      // 3秒超时，即使鉴权未完成也继续执行
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        resolve();
-      }, 3000);
-    });
-
-    await waitForConnection();
-
-    try {
-      const data = await createEvaluation(Number(id));
-      setEvaluation(data);
-      message.success('评估报告已生成');
-    } catch (error: unknown) {
-      const data = (error as { response?: { data?: { error_type?: string } } })?.response?.data;
-      if (data?.error_type === 'ValidationError' && !isAutoRetry) {
-        message.warning('评估格式异常，正在尝试重新生成...');
-        ws.close();
-        handleGenerate(true);
-        return;
-      } else if (data?.error_type === 'ValidationError' && isAutoRetry) {
-        message.error('评估格式异常，请稍后重试');
-      } else {
-        message.error('生成评估报告失败');
-      }
-    } finally {
-      ws.close();
-      setGenerating(false);
-      setLockActive(false);
-    }
+  const handleGenerate = async () => {
+    await start();
   };
 
-  // 取消进行中的评估：后端双通道取消（revoke 排队任务 / 看守中断执行中任务）
   const handleCancel = async () => {
-    if (!id) return;
-    setCancelling(true);
-    try {
-      await cancelEvaluation(Number(id));
-      message.info('已请求取消评估');
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-      setGenerating(false);
-      setLockActive(false);
-      setProgress(0);
-      setProgressMsg('');
-    } catch {
-      message.error('取消失败，请稍后重试');
-    } finally {
-      setCancelling(false);
-    }
+    await cancel();
   };
 
   if (loading) return <Spin style={{ display: 'block', margin: '100px auto' }} size="large" />;
 
-  if (generating) {
+  if (jobState.isActive) {
     return (
       <div style={{ textAlign: 'center', padding: '100px 0' }}>
         <RobotOutlined style={{ fontSize: 64, color: '#1677ff', marginBottom: 24 }} spin />
         <Title level={3}>AI 评估进行中</Title>
         <div style={{ maxWidth: 500, margin: '0 auto', padding: '0 24px' }}>
-          <Progress percent={progress} status="active" strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }} />
-          <div style={{ marginTop: 16, fontSize: 16, color: '#666', fontWeight: 500 }}>{progressMsg}</div>
+          <Progress percent={jobState.progress} status="active" strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }} />
+          <div style={{ marginTop: 16, fontSize: 16, color: '#666', fontWeight: 500 }}>{jobState.message}</div>
           {elapsed > 30 && (
             <div style={{ marginTop: 24, color: '#999', fontSize: 14 }}>
               后端正在深度分析中，请耐心等待... <br />
               预计剩余时间：约 {Math.max(5, 60 - elapsed)} 秒
             </div>
           )}
-          <Button danger style={{ marginTop: 24 }} loading={cancelling} onClick={handleCancel}>
-            取消评估
+          <Button danger style={{ marginTop: 24 }} loading={jobState.cancelRequested} onClick={handleCancel}>
+            {jobState.cancelRequested ? '正在取消...' : '取消评估'}
           </Button>
         </div>
       </div>
@@ -292,19 +174,9 @@ const EvaluationPage: React.FC = () => {
         ) : (
           <Paragraph type="warning">提示：您尚未提交诊断结果和治疗方案，相关维度评估可能不完整</Paragraph>
         )}
-        {!lockActive && (
-          <Button type="primary" size="large" onClick={() => handleGenerate()} icon={<FileTextOutlined />} style={{ marginTop: 16 }} loading={generating}>
-            生成评估报告
-          </Button>
-        )}
-        {lockActive && (
-          <div style={{ marginTop: 16, textAlign: 'center' }}>
-            <Spin size="large" />
-            <div style={{ marginTop: 12, color: '#666', fontSize: 15 }}>
-              评估正在进行中，请稍候...
-            </div>
-          </div>
-        )}
+        <Button type="primary" size="large" onClick={handleGenerate} icon={<FileTextOutlined />} style={{ marginTop: 16 }}>
+          生成评估报告
+        </Button>
       </div>
     );
   }

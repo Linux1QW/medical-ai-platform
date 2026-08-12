@@ -75,60 +75,6 @@ async def test_resume_state_read_error_falls_back_to_fresh_run():
     assert result is _INITIAL_STATE
 
 
-# ── _ensure_worker_checkpointer：Celery worker 侧按任务重建 ──────────────────
-
-
-@pytest.mark.asyncio
-async def test_ensure_worker_checkpointer_noop_when_disabled(monkeypatch):
-    """LANGGRAPH_ENABLED=false 时不触碰 checkpointer"""
-    from app.tasks.evaluation_task import _ensure_worker_checkpointer
-
-    monkeypatch.setattr(settings, "LANGGRAPH_ENABLED", False)
-
-    import app.orchestration.checkpointer as cp
-
-    async def boom(*args, **kwargs):
-        raise AssertionError("disabled 时不应重建 checkpointer")
-
-    monkeypatch.setattr(cp, "init_checkpointer", boom)
-
-    await _ensure_worker_checkpointer()
-
-
-@pytest.mark.asyncio
-async def test_ensure_worker_checkpointer_rebuilds(monkeypatch):
-    """启用时：关旧 → 重置图缓存 → 以配置的 URL/TTL 重建"""
-    from app.tasks.evaluation_task import _ensure_worker_checkpointer
-
-    monkeypatch.setattr(settings, "LANGGRAPH_ENABLED", True)
-
-    import app.orchestration.checkpointer as cp
-    import app.orchestration.graph as graph_mod
-
-    calls: list = []
-
-    async def fake_close():
-        calls.append("close_checkpointer")
-
-    async def fake_close_graph():
-        calls.append("close_graph")
-
-    async def fake_init(redis_url=None, ttl=None):
-        calls.append(("init", redis_url, ttl))
-
-    monkeypatch.setattr(cp, "close_checkpointer", fake_close)
-    monkeypatch.setattr(cp, "init_checkpointer", fake_init)
-    monkeypatch.setattr(graph_mod, "close_graph", fake_close_graph)
-
-    await _ensure_worker_checkpointer()
-
-    assert calls == [
-        "close_checkpointer",
-        "close_graph",
-        ("init", settings.REDIS_CHECKPOINT_URL, settings.REDIS_CHECKPOINT_TTL),
-    ]
-
-
 # ── checkpointer：TTL 接通与关闭容错 ─────────────────────────────────────────
 
 
@@ -151,8 +97,8 @@ async def test_init_checkpointer_passes_ttl_in_minutes(monkeypatch):
     monkeypatch.setattr(aio_mod.AsyncRedisSaver, "from_conn_string", fake_from_conn_string)
 
     try:
-        await cp.init_checkpointer(redis_url="redis://test:6379/1", ttl=86400)
-        assert captured["redis_url"] == "redis://test:6379/1"
+        await cp.init_checkpointer(redis_url="redis://test:6379/0", ttl=86400)
+        assert captured["redis_url"] == "redis://test:6379/0"
         assert captured["ttl"] == {"default_ttl": 1440}  # 86400s = 1440min
     finally:
         await cp.close_checkpointer()
@@ -176,7 +122,7 @@ async def test_init_checkpointer_zero_ttl_means_no_expiry(monkeypatch):
     monkeypatch.setattr(aio_mod.AsyncRedisSaver, "from_conn_string", fake_from_conn_string)
 
     try:
-        await cp.init_checkpointer(redis_url="redis://test:6379/1", ttl=0)
+        await cp.init_checkpointer(redis_url="redis://test:6379/0", ttl=0)
         assert captured["ttl"] is None
     finally:
         await cp.close_checkpointer()

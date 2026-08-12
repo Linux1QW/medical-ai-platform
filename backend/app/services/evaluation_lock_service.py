@@ -64,7 +64,7 @@ async def update_lock_status(
     db: AsyncSession,
     consultation_id: int,
     new_status: str,
-    error_message: str = None,
+    error_message: Optional[str] = None,
 ) -> bool:
     """更新锁状态（带状态机校验）"""
     result = await db.execute(
@@ -84,11 +84,14 @@ async def update_lock_status(
     lock.heartbeat_at = datetime.utcnow()
     if error_message:
         lock.error_message = error_message[:500]
-    if new_status in ("completed", "needs_review", "failed"):
+    if new_status in ("completed", "needs_review", "failed", "cancelled"):
         lock.expires_at = datetime.utcnow() + timedelta(hours=24)
     elif new_status == "pending":
         # failed → pending（Celery 重试前重置）：恢复短 TTL，
         # 避免重试丢失时锁以 24h 过期时间长期占位
+        lock.expires_at = datetime.utcnow() + timedelta(seconds=EVALUATION_TIMEOUT)
+    elif new_status == "retrying":
+        # retrying 保持短 TTL
         lock.expires_at = datetime.utcnow() + timedelta(seconds=EVALUATION_TIMEOUT)
 
     await db.flush()

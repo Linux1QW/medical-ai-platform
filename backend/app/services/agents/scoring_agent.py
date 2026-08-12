@@ -41,7 +41,8 @@ def calculate_total(scores: dict) -> int | None:
         return None
 
     weighted_sum = sum(valid[k] * SCORING_WEIGHTS[k] for k in valid)
-    return round(weighted_sum / total_weight)
+    result = round(weighted_sum / total_weight)
+    return int(result) if result is not None else None
 
 
 def _generate_fallback_summary(

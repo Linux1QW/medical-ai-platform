@@ -1,0 +1,104 @@
+{
+  "candidate_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+  "passed": false,
+  "ci": {
+    "mypy": {
+      "errors": null,
+      "passed": false,
+      "status": "not_run"
+    },
+    "ruff": {
+      "errors": null,
+      "passed": false,
+      "status": "not_run"
+    },
+    "branch": "local",
+    "timestamp": "2026-08-12T11:07:01.817700+00:00",
+    "measurement_mode": "not_run"
+  },
+  "rc": {
+    "workflow_run_url": "",
+    "status": "simulated"
+  },
+  "metrics": {
+    "backend_tests_collected": null,
+    "backend_tests_status": "not_run",
+    "frontend_tests_passed": null,
+    "frontend_tests_status": "not_run",
+    "mypy_errors": null,
+    "ruff_errors": null,
+    "ci_status": "not_run"
+  },
+  "migration": {
+    "alembic_head": "5e6f7a8b9c0d",
+    "upgrade_tested": false,
+    "downgrade_tested": false,
+    "migration_files": [
+      "4d5e6f7a8b9c_v12_agent_runtime.py",
+      "5e6f7a8b9c0d_v12_runtime_remediation.py"
+    ]
+  },
+  "e2e": {
+    "scenarios": 0,
+    "passed": false,
+    "note": "Populated only from measured E2E workflow evidence"
+  },
+  "load": {
+    "p95_latency_ms": null,
+    "error_rate": null,
+    "note": "Requires deployed environment with real LLM endpoints"
+  },
+  "rollback": {
+    "drill_documented": true,
+    "drill_file": "docs/release-evidence/v1.2/rollback-drill.md",
+    "rto_target_minutes": 15,
+    "steps": 8
+  },
+  "approvals": {
+    "code_owner_review": false,
+    "security_review": false,
+    "qa_sign_off": false,
+    "note": "Approvals must be supplied by the protected release workflow"
+  },
+  "artifacts": {
+    "final_acceptance_json": "docs/release-evidence/v1.2/final-acceptance.json",
+    "final_acceptance_md": "docs/release-evidence/v1.2/final-acceptance.md",
+    "acceptance_summary_md": "docs/release-evidence/v1.2/acceptance-summary.md",
+    "rollback_drill_md": "docs/release-evidence/v1.2/rollback-drill.md"
+  },
+  "provenance": {
+    "generated_at": "2026-08-12T11:07:01.817700+00:00",
+    "generator_script": "backend/scripts/ci/build_v12_acceptance_bundle.py",
+    "python_version": "3.10.4",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "git_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+    "candidate_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+    "candidate_matches_checkout": true,
+    "git_branch": "codex/v1.2-final-blockers-remediation"
+  },
+  "signature": {
+    "algorithm": "sha256",
+    "computed": true,
+    "hash": "af96193277db40b914ffa0a226398d3d2987bec5ee777c737700f9956c9b6f59"
+  },
+  "voice": {
+    "status": "NOT_ACCEPTED",
+    "default_enabled": false,
+    "reason": "No real LiveKit credentials configured; Voice feature is opt-in and disabled by default (VOICE_ENABLED=false). Not included in acceptance criteria.",
+    "evidence": "Missing: LiveKit room creation, real audio session, transcript persistence test in deployed environment"
+  },
+  "coach": {
+    "status": "CODE_COMPLETE",
+    "default_enabled": false,
+    "safety_controls": [
+      "COACH_ENABLED defaults to false",
+      "CoachContextView extra=forbid blocks hidden fields",
+      "WorkingMemory validate_memory_sources blocks hidden context",
+      "Critic agent checks all suggestions",
+      "All tool outputs marked UNTRUSTED_EVIDENCE",
+      "Trainee memory consent defaults false",
+      "IDOR guard on coach endpoints",
+      "PHI rejection in profile memory"
+    ]
+  }
+}

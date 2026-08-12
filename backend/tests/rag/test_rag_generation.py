@@ -23,6 +23,7 @@ from app.services.rag.indexing.versioning import (
 from app.services.rag.medical_store import (
     COLLECTION_NAME,
     IndexGenerationUnavailable,
+    MedicalKnowledgeStore,
     _get_collection_name,
     _reset_collection_cache,
 )
@@ -158,6 +159,24 @@ def test_legacy_fallback_requires_explicit_migration_flag(monkeypatch):
     _reset_collection_cache()
 
     assert _get_collection_name(generation="rag-missing", use_cache=False) == COLLECTION_NAME
+
+
+def test_raw_chroma_client_does_not_require_an_active_generation(monkeypatch):
+    """Candidate publication must work before the first active generation exists."""
+    client = Mock()
+    monkeypatch.setattr(
+        "app.services.rag.medical_store.chromadb.PersistentClient",
+        lambda **_: client,
+    )
+    monkeypatch.setattr(
+        "app.services.rag.medical_store._get_collection_name",
+        Mock(side_effect=AssertionError("active generation must not be resolved")),
+    )
+
+    store = MedicalKnowledgeStore()
+
+    assert store._ensure_client() is client
+    assert store.collection is None
 
 
 def test_incremental_replacement_builds_snapshot_without_mutating_active():

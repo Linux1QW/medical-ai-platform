@@ -18,4 +18,5 @@ class ReviewRecord(Base):
     feedback: Mapped[str] = mapped_column(Text, nullable=False)
     review_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     score_adjustments: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    original_scores: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True, comment="复核时五维原始分数快照")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)

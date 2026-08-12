@@ -157,7 +157,120 @@ TOOL_CALL_DURATION = Histogram(
 EVALUATION_RUNS_TOTAL = Counter(
     "evaluation_runs_total",
     "Total evaluation runs",
+    ["status", "error_code"],
+)
+
+EVALUATION_RUN_DURATION = Histogram(
+    "evaluation_run_duration_seconds",
+    "Evaluation run duration",
     ["status"],
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600),
+)
+
+EVALUATION_QUEUE_WAIT = Histogram(
+    "evaluation_queue_wait_seconds",
+    "Time a run spends in queue before being claimed",
+    buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300),
+)
+
+EVALUATION_ACTIVE_RUNS = Gauge(
+    "evaluation_active_runs",
+    "Currently active evaluation runs",
+    ["status"],
+)
+
+EVALUATION_RETRIES_TOTAL = Counter(
+    "evaluation_retries_total",
+    "Total evaluation run retries",
+    ["error_code"],
+)
+
+EVALUATION_CANCELLATIONS_TOTAL = Counter(
+    "evaluation_cancellations_total",
+    "Total evaluation cancellations",
+    ["phase"],
+)
+
+EVALUATION_PROGRESS_PUBLISH_TOTAL = Counter(
+    "evaluation_progress_publish_total",
+    "Total progress publish operations",
+    ["result"],
+)
+
+EVALUATION_PROGRESS_DELIVERY = Histogram(
+    "evaluation_progress_delivery_seconds",
+    "Progress delivery latency (Redis publish → WS arrival)",
+    buckets=(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10),
+)
+
+EVALUATION_STALE_RUNS_TOTAL = Counter(
+    "evaluation_stale_runs_total",
+    "Total stale runs detected",
+    ["reason"],
+)
+
+EVALUATION_RUN_LEASE_LOST_TOTAL = Counter(
+    "evaluation_run_lease_lost_total",
+    "Total run lease lost events",
+    ["phase"],
+)
+
+EVALUATION_OUTBOX_EVENTS_TOTAL = Counter(
+    "evaluation_outbox_events_total",
+    "Total outbox events processed",
+    ["result"],
+)
+
+EVALUATION_OUTBOX_PENDING = Gauge(
+    "evaluation_outbox_pending",
+    "Current number of pending outbox events",
+)
+
+EVALUATION_OUTBOX_OLDEST_SECONDS = Gauge(
+    "evaluation_outbox_oldest_seconds",
+    "Age of the oldest pending outbox event in seconds",
+)
+
+EVALUATION_DISPATCH_DURATION = Histogram(
+    "evaluation_dispatch_duration_seconds",
+    "Dispatch tick duration",
+    ["result"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+)
+
+EVALUATION_DISPATCH_DEAD_LETTER_TOTAL = Counter(
+    "evaluation_dispatch_dead_letter_total",
+    "Total dispatches moved to dead letter",
+    ["reason"],
+)
+
+EVALUATION_DISPATCH_BREAKER_OPEN = Gauge(
+    "evaluation_dispatch_breaker_open",
+    "Whether the dispatch circuit breaker is open (1=open, 0=closed)",
+)
+
+# ── 基础设施指标 ─────────────────────────────────────────────────────────────
+
+REDIS_DEPENDENCY_STATUS = Gauge(
+    "redis_dependency_status",
+    "Redis dependency health (1=healthy, 0=degraded)",
+    ["role"],
+)
+
+BACKUP_LAST_SUCCESS_TIMESTAMP = Gauge(
+    "backup_last_success_timestamp_seconds",
+    "Timestamp of last successful backup (Unix epoch seconds)",
+)
+
+REVIEW_QUEUE_DEPTH = Gauge(
+    "review_queue_depth",
+    "Current number of items in review queue",
+)
+
+REVIEW_COMPLETION_SECONDS = Histogram(
+    "review_completion_seconds",
+    "Review completion duration",
+    buckets=(1, 5, 10, 30, 60, 300, 600, 1800, 3600),
 )
 
 # ── 缓存指标 ─────────────────────────────────────────────────────────────────
@@ -166,4 +279,36 @@ CACHE_HIT_RATE = Gauge(
     "cache_hit_rate",
     "Cache hit rate",
     ["cache"],
+)
+
+# ── Coach 安全门控指标 ────────────────────────────────────────────────────────
+
+COACH_SAFETY_CHECKS_TOTAL = Counter(
+    "coach_safety_checks_total",
+    "Total coach safety checks performed",
+    ["check_category", "result"],
+)
+
+COACH_SAFETY_GATE_DECISIONS = Counter(
+    "coach_safety_gate_decisions_total",
+    "Total coach safety gate decisions",
+    ["decision", "risk_level"],
+)
+
+COACH_POLICY_BLOCKS_TOTAL = Counter(
+    "coach_policy_blocks_total",
+    "Total coach policy blocks",
+    ["reason"],
+)
+
+COACH_EVENTS_TOTAL = Counter(
+    "coach_events_total",
+    "Total coach lifecycle events",
+    ["event_type", "status"],
+)
+
+COACH_SUGGESTION_DURATION = Histogram(
+    "coach_suggestion_duration_seconds",
+    "Coach suggestion generation duration",
+    ["agent_name"],
 )

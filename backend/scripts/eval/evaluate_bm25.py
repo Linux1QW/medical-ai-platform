@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -23,11 +25,34 @@ from evaluation.metrics import (  # noqa: E402
     RAG_STRATA,
     aggregate_stratified_retrieval_metrics,
     evaluate_rag_quality_gates,
+    load_release_policy,
+    validate_policy_gates,
+)
+from evaluation.provenance import (  # noqa: E402
+    ProvenanceError,
+    validate_baseline_provenance,
 )
 
 DEFAULT_GOLDEN = Path(__file__).with_name("bm25_golden_set.json")
 REQUIRED_CATEGORIES = tuple(RAG_STRATA)
 REQUIRED_K_VALUES = tuple(RAG_K_VALUES)
+
+
+# Regex that preserves medical abbreviations (PD-L1, EGFR-T790M),
+# numbers with ASCII units (50%, 100mg, ml/min/1.73m2), dotted/gt-lt
+# notation (c.2573T>G), and CJK runs.  Symbols like >= < are
+# treated as separators.
+MEDICAL_TOKEN_RE = re.compile(
+    r"[a-z]+(?:[-_./><][a-z0-9]+)*\d*"          # letter-led token with connectors + trailing digits
+    r"|\d+(?:\.\d+)?%?(?:[a-z]+(?:[-_/][a-z]+)*)?"  # number + optional ASCII unit
+    r"|[^\W\d_]+(?:[-_/][^\W\d_]+)*",            # Unicode-letter-led token
+    re.IGNORECASE,
+)
+
+
+def _simple_tokenize(text: str) -> List[str]:
+    """Tokenize text preserving medical abbreviations, numbers, percentages and connectors."""
+    return [m.group(0).casefold() for m in MEDICAL_TOKEN_RE.finditer(text)]
 
 
 def _match_group(source: str, groups: Iterable[str]) -> str:
@@ -286,7 +311,151 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit non-zero when any Task 8 candidate-generation gate fails",
     )
+    parser.add_argument(
+        "--validate-golden-only",
+        action="store_true",
+        help="Only validate golden set structure without initializing BM25/Chroma",
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        help="Path to bm25_release_policy.json",
+    )
+    parser.add_argument(
+        "--baseline-provenance",
+        type=Path,
+        help="Path to baseline provenance sidecar JSON",
+    )
+    parser.add_argument(
+        "--consistency-report",
+        type=Path,
+        help="Path to consistency probe report JSON",
+    )
     return parser
+
+
+def validate_golden_only(golden_path: Path) -> Dict[str, Any]:
+    """Validate the golden set structure without initializing BM25/Chroma.
+
+    Returns a dict with 'passed' (bool) and optional 'error' message.
+    """
+    try:
+        with golden_path.open(encoding="utf-8") as f:
+            golden = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        return {"passed": False, "error": str(exc)}
+
+    cases = golden.get("cases", [])
+
+    # Check minimum case count
+    if len(cases) < 40:
+        return {"passed": False, "error": f"BM25 golden set must contain at least 40 cases (found {len(cases)})"}
+
+    # Check unique IDs
+    ids = [case.get("id") for case in cases]
+    if len(ids) != len(set(ids)):
+        return {"passed": False, "error": "Golden set contains duplicate case IDs; all IDs must be unique"}
+
+    # Check required fields and non-empty values
+    required_fields = {"id", "category", "query", "relevant_source_contains", "must_preserve_tokens"}
+    for case in cases:
+        missing = required_fields - case.keys()
+        if missing:
+            return {"passed": False, "error": f"Case {case.get('id', '?')} missing fields: {sorted(missing)}"}
+        if not case.get("query"):
+            return {"passed": False, "error": f"Case {case['id']} has empty query"}
+        if not case.get("relevant_source_contains"):
+            return {"passed": False, "error": f"Case {case['id']} has empty relevant_source_contains"}
+        if not case.get("must_preserve_tokens"):
+            return {"passed": False, "error": f"Case {case['id']} has empty must_preserve_tokens"}
+
+    # Check all 6 required categories present
+    present_categories = {case.get("category") for case in cases}
+    missing_categories = set(REQUIRED_CATEGORIES) - present_categories
+    if missing_categories:
+        return {"passed": False, "error": f"Missing required categories: {sorted(missing_categories)}"}
+
+    # Check token preservation: each must_preserve_token must be derivable from query
+    for case in cases:
+        query_tokens = set(_simple_tokenize(case["query"]))
+        for token in case["must_preserve_tokens"]:
+            token_tokens = set(_simple_tokenize(token))
+            if not token_tokens or not token_tokens <= query_tokens:
+                return {
+                    "passed": False,
+                    "error": f"Case {case['id']}: token '{token}' not preservable from query tokens",
+                }
+
+    return {"passed": True, "case_count": len(cases), "categories": sorted(present_categories)}
+
+
+def _write_report(report: Dict[str, Any], output: Optional[Path]) -> None:
+    """Write the report to the output path or print a summary."""
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("w", encoding="utf-8") as output_file:
+            json.dump(report, output_file, ensure_ascii=False, indent=2)
+            output_file.write("\n")
+        print(f"BM25 report written to {output} ({report['case_count']} cases)")
+    else:
+        print(f"BM25 report evaluated ({report['case_count']} cases)")
+
+
+def _run_policy_gates(
+    args: argparse.Namespace,
+    report: dict,
+    baseline: dict,
+) -> Tuple[Optional[dict], Optional[int]]:
+    """Validate provenance and policy gates.
+
+    Returns (policy_gate_result, error_exit_code).
+    error_exit_code is None when no error occurred.
+    """
+    if not (
+        args.fail_on_regression
+        and args.policy
+        and args.baseline_provenance
+        and args.consistency_report
+    ):
+        return None, None
+
+    # Validate provenance
+    try:
+        candidate_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, cwd=Path(__file__).resolve().parents[2]
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        candidate_commit = "unknown"
+
+    manifest_path = (
+        Path(args.compare).parent / "index-manifest.json" if args.compare else Path("index-manifest.json")
+    )
+    try:
+        validate_baseline_provenance(
+            provenance_path=Path(args.baseline_provenance),
+            baseline_path=Path(args.compare),
+            golden_path=Path(args.golden),
+            evaluator_path=Path(__file__),
+            manifest_path=manifest_path,
+            candidate_commit=candidate_commit,
+        )
+    except ProvenanceError as e:
+        print(f"ERROR: provenance validation failed: {e}", file=sys.stderr)
+        return None, 1
+
+    # Load consistency report and inject into candidate report
+    consistency = json.loads(Path(args.consistency_report).read_text(encoding="utf-8"))
+    report["consistency"] = {
+        "measured": True,
+        "generation_mismatch_count": consistency.get("generation_mismatch_count", 0),
+        "stale_cache_hit_count": consistency.get("stale_cache_hit_count", 0),
+    }
+
+    # Load policy and validate gates
+    policy = load_release_policy(Path(args.policy))
+    policy_gate_result = validate_policy_gates(report, baseline, policy)
+    report["policy_gates"] = policy_gate_result
+    return policy_gate_result, None
 
 
 def main() -> int:
@@ -296,9 +465,25 @@ def main() -> int:
         parser.error("--top-k must be positive")
     if args.fail_on_regression and args.compare is None:
         parser.error("--fail-on-regression requires --compare")
+    if args.fail_on_regression and not (
+        args.compare and args.policy and args.baseline_provenance and args.consistency_report
+    ):
+        parser.error(
+            "--fail-on-regression requires --compare, --policy, "
+            "--baseline-provenance, --consistency-report"
+        )
     golden_path = args.golden.resolve()
     if not golden_path.is_file():
         parser.error(f"golden set does not exist: {golden_path}")
+
+    # --validate-golden-only: structure check without BM25/Chroma init
+    if args.validate_golden_only:
+        result = validate_golden_only(golden_path)
+        if result["passed"]:
+            print(f"Golden set valid: {result['case_count']} cases, categories: {result['categories']}")
+            return 0
+        print(f"Golden set validation failed: {result['error']}", file=sys.stderr)
+        return 1
 
     # A missing/empty active index is an honest offline skip.  It is not a
     # fabricated green candidate and leaves the real-gate decision to CI once
@@ -316,6 +501,7 @@ def main() -> int:
 
     report = evaluate(golden_path, args.top_k, index=active_index)
     gate_result = None
+    policy_gate_result = None
     if args.compare is not None:
         if not args.compare.is_file():
             parser.error(f"baseline report does not exist: {args.compare.resolve()}")
@@ -324,14 +510,12 @@ def main() -> int:
         gate_result = compare_reports(report, baseline)
         report["gates"] = gate_result
 
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", encoding="utf-8") as output_file:
-            json.dump(report, output_file, ensure_ascii=False, indent=2)
-            output_file.write("\n")
-        print(f"BM25 report written to {args.output} ({report['case_count']} cases)")
-    else:
-        print(f"BM25 report evaluated ({report['case_count']} cases)")
+        # Provenance + policy gate path
+        policy_gate_result, err = _run_policy_gates(args, report, baseline)
+        if err is not None:
+            return err
+
+    _write_report(report, args.output)
 
     exit_code = _preservation_exit_code(
         report,
@@ -348,6 +532,12 @@ def main() -> int:
     if args.fail_on_regression and gate_result is not None and not gate_result["passed"]:
         print(
             "BM25 Task 8 gates failed: " + ", ".join(gate_result["failures"]),
+            file=sys.stderr,
+        )
+        exit_code = 1
+    if args.fail_on_regression and policy_gate_result is not None and not policy_gate_result["passed"]:
+        print(
+            "BM25 policy gates failed: " + ", ".join(policy_gate_result["failures"]),
             file=sys.stderr,
         )
         exit_code = 1

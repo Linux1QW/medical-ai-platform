@@ -33,8 +33,8 @@ class TestSecurityHeaders:
 
     def test_hsts_only_in_production(self, client, monkeypatch):
         monkeypatch.setattr(settings, "ENVIRONMENT", "development")
-        assert "Strict-Transport-Security" not in client.get("/health").headers
+        assert "Strict-Transport-Security" not in client.get("/health/live").headers
 
         monkeypatch.setattr(settings, "ENVIRONMENT", "production")
-        resp = client.get("/health")
+        resp = client.get("/health/live")
         assert resp.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"

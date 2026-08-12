@@ -184,7 +184,7 @@ class LLMConcurrencyTimeoutError(Exception):
 
 async def call_qwen_chat(
     messages: List[Dict[str, str]],
-    model: str = None,
+    model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
 ) -> str:

@@ -1,0 +1,5 @@
+# Optional LiveKit voice dependencies
+# Install only when voice profile is built:
+#   pip install -r requirements-voice.txt
+livekit>=0.12.0
+livekit-agents>=0.12.0

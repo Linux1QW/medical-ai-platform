@@ -8,9 +8,14 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]
+      python-security:
+        update-types: ["patch"]
+        applies-to: security-updates
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -18,6 +23,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
@@ -28,6 +35,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -35,3 +44,5 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    commit-message:
+      prefix: "docker"

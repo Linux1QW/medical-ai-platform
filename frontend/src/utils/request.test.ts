@@ -58,11 +58,11 @@ describe('request 拦截器', () => {
     expect(config.headers.Authorization).toBeUndefined();
   });
 
-  it('评估类接口使用 300s 超时，普通接口 60s', async () => {
-    const { onRequest } = await loadInterceptors();
-    expect(onRequest(makeConfig('/evaluation/1')).timeout).toBe(300000);
-    expect(onRequest(makeConfig('/reports/2')).timeout).toBe(300000);
-    expect(onRequest(makeConfig('/patients')).timeout).toBe(60000);
+  it('所有接口默认 60s 超时（POST 仅排队，不再等待 300s）', async () => {
+    vi.resetModules();
+    const request = (await import('./request')).default;
+    // timeout 在 axios 实例创建时设置，不再由拦截器分级设置
+    expect(request.defaults.timeout).toBe(60000);
   });
 
   it('响应成功时直接返回 response.data', async () => {
@@ -131,5 +131,20 @@ describe('request 拦截器', () => {
       }),
     ).rejects.toBeTruthy();
     expect(sessionStorage.getItem('token')).toBe('stale-token');
+  });
+
+  it('带 error_code 的 4xx 错误不重复弹提示（由调用方处理）', async () => {
+    const { onResponse } = await loadInterceptors();
+    await expect(
+      onResponse.rejected({
+        response: {
+          status: 409,
+          data: { error_code: 'EVALUATION_IN_PROGRESS', message: '已有评估进行中', context: { run_id: 'r1' } },
+        },
+        config: { url: '/evaluations/' },
+      }),
+    ).rejects.toBeTruthy();
+    // 全局拦截器不应重复弹错误，由 hook/调用方自行处理
+    expect(message.error).not.toHaveBeenCalled();
   });
 });

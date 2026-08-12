@@ -47,9 +47,13 @@ backend/evaluation/reports/*
 !backend/evaluation/reports/.gitkeep
 backend/evaluation_reports/
 
+# 复核反馈私有目录（含完整问诊内容，禁止提交）
+backend/evaluation/private_feedback/
+
 # Agent 开发过程材料与内部实施计划
 .superpowers/
-docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-08-09-v1.1-production-closure.md
 
 # OS
 .DS_Store
@@ -75,5 +79,16 @@ backend/_*.py
 # E2E 测试截图（临时产物）
 e2e_*.png
 
+# Playwright 测试产物
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
+# E2E docker compose 临时文件
+.e2e/
+
 # git 历史重写备份（含旧历史，确认无误后应删除）
 *.bundle
+
+# 部署维护/备份状态目录（宿主机运行时产物，不构建进镜像）
+.deploy/

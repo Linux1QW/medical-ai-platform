@@ -116,7 +116,8 @@ def _load_overrides() -> dict:
         return {}
     try:
         with open(OVERRIDES_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            result = json.load(f)
+            return dict(result) if isinstance(result, dict) else {}
     except Exception as e:
         logger.warning(f"加载元数据配置文件失败: {e}")
         return {}

@@ -18,7 +18,7 @@
 | 生产验收 | 必须以 `docs/release-evidence/v1.2/final-acceptance.json` 为唯一事实来源；当前证据仍为 `passed=false`，不能宣称生产发布已验收 |
 | Git 状态 | 当前修复分支尚未合并到 `master` |
 
-注意：功能迭代名称为 V1.2，但后端 `backend/app/core/config.py` 的 `VERSION` 及 `/health/live` 当前仍返回 `1.1.0`。这是版本元数据待对齐问题，不影响本文对功能边界的描述，但正式发布前必须修正并重新生成验收证据。
+后端 API/OpenAPI 和健康端点的版本元数据已统一为 `1.2.0`。生产是否可发布仍由候选 SHA 对应的验收证据决定，不能只根据版本号判断。
 
 ## 2. 谁使用这个项目
 
@@ -417,15 +417,14 @@ npm run build
 
 ## 16. 当前已知限制
 
-1. 后端版本元数据仍为 `1.1.0`，与 V1.2 功能迭代名称不一致。
-2. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价，新环境必须以 Alembic 为准。
-3. 生产验收 bundle 当前为 `passed=false`；真实 LLM 性能、负载、审批和真实部署 E2E 仍需受保护 RC 工作流生成。
-4. Voice 是默认关闭的 Beta，缺少真实 LiveKit 房间、音频链路和转录持久化验收证据。
-5. BGE-M3、OCR 和部分 RAG 增强默认关闭，额外依赖不随基础 requirements 安装。
-6. 没有正式的 RAG generation 回滚 REST/CLI；模型版本 rollback 只操作模型版本登记状态。
-7. 知识库、模型版本、监控等管理能力以 API 为主，前端管理 UI 尚未覆盖全部运维操作。
-8. ChromaDB 使用较大的 `hnsw:sync_threshold` 规避跨进程段加载问题；旧 collection 需重建才能继承新 metadata。
-9. Dispatcher 和 Beat 必须各自保持单实例；跨主机部署需要共享 MySQL、Redis 和 RAG artifact，并重新做故障与一致性验证。
+1. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价，新环境必须以 Alembic 为准。
+2. 生产验收 bundle 当前为 `passed=false`；真实 LLM 性能、负载、审批和真实部署 E2E 仍需受保护 RC 工作流生成。
+3. Voice 是默认关闭的 Beta，缺少真实 LiveKit 房间、音频链路和转录持久化验收证据。
+4. BGE-M3、OCR 和部分 RAG 增强默认关闭，额外依赖不随基础 requirements 安装。
+5. 没有正式的 RAG generation 回滚 REST/CLI；模型版本 rollback 只操作模型版本登记状态。
+6. 知识库、模型版本、监控等管理能力以 API 为主，前端管理 UI 尚未覆盖全部运维操作。
+7. ChromaDB 使用较大的 `hnsw:sync_threshold` 规避跨进程段加载问题；旧 collection 需重建才能继承新 metadata。
+8. Dispatcher 和 Beat 必须各自保持单实例；跨主机部署需要共享 MySQL、Redis 和 RAG artifact，并重新做故障与一致性验证。
 
 ## 17. 文档导航
 

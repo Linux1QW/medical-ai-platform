@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""V1.1 健康端点测试 — /health/live 和 /health/ready
+"""健康端点测试 — /health/live 和 /health/ready
 
 TDD Phase 1: 这些测试在实现之前应该失败。
 """
@@ -26,12 +26,12 @@ class TestHealthLive:
     """liveness: 只证明进程存活，永远不查询外部依赖"""
 
     def test_live_returns_200_with_status_and_version(self, client):
-        """live 端点返回 200 + {status: ok, version: 1.1.0}"""
+        """live 端点返回 200 + 当前应用版本"""
         resp = client.get("/health/live")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
-        assert body["version"] == "1.1.0"
+        assert body["version"] == "1.2.0"
 
     def test_live_does_not_contain_sensitive_info(self, client):
         """live 响应不含 token_usage、prompt、API key"""

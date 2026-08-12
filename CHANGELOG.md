@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - 新增 `docs/README.md` 文档中心，明确文档优先级、角色化阅读路径和“代码质量通过不等于生产验收通过”的证据口径。
 - 将 PROJECT_GUIDE 和平台操作说明的事实基线更新到 V1.2，并移除已经被代码修复的旧限制描述。
 
+### Fixed
+
+- 将 FastAPI/OpenAPI、配置和健康端点的版本元数据统一为 `1.2.0`，移除 `/health/live` 中硬编码的旧版本。
+
 ## [1.2.0] - 2026-08-10
 
 ### Added

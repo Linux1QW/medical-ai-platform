@@ -16,7 +16,7 @@ _DEFAULT_SECRET_KEY = "change-this-to-a-secure-random-string"
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "医学问诊评估平台"
-    VERSION: str = "1.1.0"
+    VERSION: str = "1.2.0"
     API_V1_PREFIX: str = "/api/v1"
     ENVIRONMENT: str = "development"  # development | test | staging | production
 

@@ -291,13 +291,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 
 
-# ── V1.1 健康端点 ─────────────────────────────────────────────────────────────
+# ── 健康端点 ──────────────────────────────────────────────────────────────────
 
 
 @app.get("/health/live")
 async def health_live():
     """Liveness probe：只证明进程存活，永远不查询外部依赖"""
-    return {"status": "ok", "version": "1.1.0"}
+    return {"status": "ok", "version": settings.VERSION}
 
 
 @app.get("/health/ready")

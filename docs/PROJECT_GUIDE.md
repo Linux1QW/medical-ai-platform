@@ -772,15 +772,14 @@ CI 在 push/PR 到 `main/master` 时执行：
 
 ## 20. 已知限制
 
-1. 功能迭代名称为 V1.2，但 `settings.VERSION` 和 `/health/live` 仍报告 `1.1.0`；正式发布前必须对齐版本元数据和测试。
-2. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；新环境必须以 Alembic 为准，不能把 init.sql 与 baseline 迁移盲目串联。
-3. 当前 `release-evidence/v1.2/final-acceptance.json` 为 `passed=false`；真实 LLM 性能、负载、迁移、部署 E2E 与人工审批未齐全前不得宣称生产验收通过。
-4. Voice 仍是默认关闭的 `NOT_ACCEPTED` Beta，缺少真实 LiveKit 房间、音频链路和转录持久化证据。
-5. RAG generation 没有面向运维的正式回滚 REST/CLI；模型版本登记接口的 rollback 不会回滚 immutable RAG generation。
-6. `AdminReviews` 已接入 `/admin/reviews`，但知识库、模型版本和监控等管理能力仍缺少完整 UI，部分操作需使用 API。
-7. ChromaDB 1.5.7 使用较大的 `hnsw:sync_threshold` 规避跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
-8. BGE-M3 依赖默认未安装，Sparse、OCR 和多项检索增强默认关闭；启用前必须做资源、质量和稳定性验证。
-9. API/Worker 可以在共享依赖和共享 artifact 前提下扩展，但 Dispatcher 与 Beat 必须分别保持单实例；跨主机部署需重新验证 fencing、缓存和 generation 一致性。
+1. `database/init.sql` 与当前 ORM/Alembic schema 不完整等价；新环境必须以 Alembic 为准，不能把 init.sql 与 baseline 迁移盲目串联。
+2. 当前 `release-evidence/v1.2/final-acceptance.json` 为 `passed=false`；真实 LLM 性能、负载、迁移、部署 E2E 与人工审批未齐全前不得宣称生产验收通过。
+3. Voice 仍是默认关闭的 `NOT_ACCEPTED` Beta，缺少真实 LiveKit 房间、音频链路和转录持久化证据。
+4. RAG generation 没有面向运维的正式回滚 REST/CLI；模型版本登记接口的 rollback 不会回滚 immutable RAG generation。
+5. `AdminReviews` 已接入 `/admin/reviews`，但知识库、模型版本和监控等管理能力仍缺少完整 UI，部分操作需使用 API。
+6. ChromaDB 1.5.7 使用较大的 `hnsw:sync_threshold` 规避跨进程段加载问题，代价是冷查询可能从 WAL 重建；旧 collection 需重建才继承 metadata。
+7. BGE-M3 依赖默认未安装，Sparse、OCR 和多项检索增强默认关闭；启用前必须做资源、质量和稳定性验证。
+8. API/Worker 可以在共享依赖和共享 artifact 前提下扩展，但 Dispatcher 与 Beat 必须分别保持单实例；跨主机部署需重新验证 fencing、缓存和 generation 一致性。
 
 ## 21. 文档维护规则
 

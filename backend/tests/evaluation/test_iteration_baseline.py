@@ -64,6 +64,14 @@ class TestGateExitCodes:
         # 最终兜底 exit 0
         assert content.strip().endswith("exit 0")
 
+    def test_pre_push_labels_missing_report_as_non_release_skip(self):
+        hook_path = BACKEND_DIR / "scripts" / "hooks" / "pre-push"
+        content = hook_path.read_text(encoding="utf-8")
+
+        assert 'if [ "$CODE" -eq 2 ]' in content
+        assert "回归护栏 SKIP" in content
+        assert "发布验收仍需补齐报告" in content
+
 
 # ── 2. 五维分数语义 ──────────────────────────────────────────────────────────
 

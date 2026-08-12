@@ -247,8 +247,12 @@ def seed_low_evidence_index():
         manifest_path,
         write_rag_index_manifest,
     )
-    from app.services.rag.lexical.artifacts import build_bm25_artifact
+    from app.services.rag.lexical.artifacts import (
+        build_bm25_artifact,
+        load_bm25_artifact,
+    )
     from app.services.rag.lexical.tokenizer import TOKENIZER_VERSION
+    from app.services.rag.medical_store import get_medical_store
 
     # Stable non-zero vector; query embeddings still come from mock-openai.
     digest = hashlib.sha256(synthetic_chunk["content"].encode("utf-8")).digest()
@@ -292,6 +296,11 @@ def seed_low_evidence_index():
             created_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
         )
         write_rag_index_manifest(manifest)
+
+    collection = get_medical_store().get_collection_for_generation(E2E_INDEX_VERSION)
+    assert collection.count() == manifest.chunk_count
+    bm25_index = load_bm25_artifact(E2E_INDEX_VERSION)
+    assert bm25_index.doc_count == manifest.chunk_count
 
     import redis
 

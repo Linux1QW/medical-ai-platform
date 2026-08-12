@@ -188,7 +188,7 @@ jobs:
 
       - name: Start frontend
         env:
-          VITE_API_BASE_URL: http://127.0.0.1:8000
+          VITE_API_BASE_URL: http://127.0.0.1:8000/api/v1
         run: |
           cd frontend
           nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/frontend.log 2>&1 &
@@ -552,7 +552,7 @@ jobs:
 
       - name: Start frontend for E2E
         env:
-          VITE_API_BASE_URL: http://127.0.0.1:8000
+          VITE_API_BASE_URL: http://127.0.0.1:8000/api/v1
         run: |
           cd frontend
           nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/frontend-e2e.log 2>&1 &
@@ -569,7 +569,7 @@ jobs:
           E2E_ADMIN_USER: admin_v12
           E2E_DOCTOR_USER: doctor_v12
           E2E_PASSWORD: e2e_test_password_2026
-          VITE_API_BASE_URL: http://127.0.0.1:8000
+          VITE_API_BASE_URL: http://127.0.0.1:8000/api/v1
         run: |
           cd frontend
           npx playwright test --reporter=json

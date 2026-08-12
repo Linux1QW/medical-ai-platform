@@ -55,6 +55,22 @@ class BM25Index:
         self._bm25: Optional[bm25s.BM25] = None
         self.initialized: bool = False
 
+    def close(self) -> None:
+        """Release file-backed corpus resources owned by a loaded index."""
+        documents = self.documents
+        close = getattr(documents, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # pragma: no cover - defensive cleanup path
+                logger.debug("failed to close BM25 corpus", exc_info=True)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # pragma: no cover - interpreter shutdown safety
+            pass
+
     @classmethod
     def _from_loaded(
         cls,

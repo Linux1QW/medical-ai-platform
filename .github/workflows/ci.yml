@@ -676,7 +676,7 @@ jobs:
 
       - name: Start frontend dev server
         env:
-          VITE_API_BASE_URL: http://localhost:8000
+          VITE_API_BASE_URL: http://localhost:8000/api/v1
         run: |
           cd frontend
           npm run dev &
@@ -693,7 +693,7 @@ jobs:
           E2E_ADMIN_USER: admin_v12
           E2E_DOCTOR_USER: doctor_v12
           E2E_PASSWORD: e2e_test_password_2026
-          VITE_API_BASE_URL: http://localhost:8000
+          VITE_API_BASE_URL: http://localhost:8000/api/v1
           PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-results.json
         run: |
           cd frontend

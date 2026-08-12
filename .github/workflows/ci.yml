@@ -58,6 +58,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov httpx mypy ruff
+          pip check
 
       - name: Run mypy
         run: |
@@ -81,6 +82,7 @@ jobs:
           LANGGRAPH_ENABLED: 'false'
           TESTING: 'true'
           AUDIT_LOG_ENABLED: 'true'
+          MYSQL_INTEGRATION_DATABASE_URL: mysql+aiomysql://root:test@127.0.0.1:3306/test_db
         run: |
           cd backend
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=40
@@ -161,6 +163,11 @@ jobs:
         run: |
           cd frontend
           npm test
+
+      - name: Audit production dependencies
+        run: |
+          cd frontend
+          npm audit --omit=dev --audit-level=high
 
       - name: Run lint
         run: |
@@ -662,21 +669,21 @@ jobs:
           E2E_DOCTOR_USER: doctor_v12
           E2E_PASSWORD: e2e_test_password_2026
           VITE_API_BASE_URL: http://localhost:8000
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-results.json
         run: |
           cd frontend
-          npx playwright test --reporter=json --output=playwright-results.json || true
-          npx playwright test
+          npx playwright test --reporter=json
 
       - name: Generate Playwright report
         if: always()
         run: |
           cd frontend
           mkdir -p ../backend/benchmark_reports
-          if [ -f playwright-results.json ]; then
-            cp playwright-results.json ../backend/benchmark_reports/playwright_e2e_report.json
-          else
-            echo '{"job":"playwright-e2e","status":"completed","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' > ../backend/benchmark_reports/playwright_e2e_report.json
-          fi
+          test -f playwright-results.json || {
+            echo '{"job":"playwright-e2e","status":"missing-report"}' > ../backend/benchmark_reports/playwright_e2e_report.json
+            exit 1
+          }
+          cp playwright-results.json ../backend/benchmark_reports/playwright_e2e_report.json
 
       - name: Upload Playwright report
         if: always()

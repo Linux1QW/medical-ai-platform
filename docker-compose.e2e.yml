@@ -39,7 +39,7 @@ x-e2e-backend-environment: &e2e-backend-environment
   QWEN_MODEL: mock-chat
   RERANK_MODEL: mock-rerank
   # RAG 索引版本
-  ACTIVE_INDEX_VERSION: e2e-coach-v12
+  ACTIVE_INDEX_VERSION: rag-20260812000000-d4465500
   # E2E 测试凭据
   E2E_ADMIN_USER: admin_v12
   E2E_DOCTOR_USER: doctor_v12
@@ -116,6 +116,9 @@ services:
       PROCESS_ID: backend-b
     ports:
       - "${E2E_BACKEND_B_PORT:-8001}:8000"
+    volumes:
+      - chroma_data:/app/backend/data
+      - ./data:/app/data:ro
     depends_on:
       mock-openai:
         condition: service_healthy
@@ -190,6 +193,9 @@ services:
     command: python -m tests.fixtures.seed_v12_coach_e2e
     environment:
       <<: *e2e-backend-environment
+    volumes:
+      - chroma_data:/app/backend/data
+      - ./data:/app/data:ro
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -204,4 +210,3 @@ volumes:
   e2e_mysql_data:
   e2e_redis_state_data:
   e2e_redis_cache_data:
-  e2e_chroma_data:

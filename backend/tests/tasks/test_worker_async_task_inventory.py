@@ -26,8 +26,7 @@ class TestNoAsyncioRunInProductionTasks:
     @pytest.mark.parametrize("filename", PROD_TASK_FILES)
     def test_no_asyncio_run(self, filename):
         filepath = TASKS_DIR / filename
-        if not filepath.exists():
-            pytest.skip(f"{filename} does not exist yet")
+        assert filepath.exists(), f"required production task is missing: {filename}"
 
         content = filepath.read_text(encoding="utf-8")
         # Match asyncio.run( but not inside comments

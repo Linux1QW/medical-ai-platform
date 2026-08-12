@@ -15,6 +15,7 @@ Only runs in ENVIRONMENT=test against the isolated E2E database.
 
 import hashlib
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 E2E_ADMIN_USER = os.environ.get("E2E_ADMIN_USER", "admin_v12")
 E2E_DOCTOR_USER = os.environ.get("E2E_DOCTOR_USER", "doctor_v12")
 E2E_PASSWORD = os.environ.get("E2E_PASSWORD", "e2e_test_password_2026")
-E2E_INDEX_VERSION = "e2e-coach-v12"
+E2E_INDEX_VERSION = "rag-20260812000000-d4465500"
 
 # Fixed IDs for deterministic E2E tests
 FIXED_PATIENT_ID = 1
@@ -216,9 +217,10 @@ def seed_patient_and_consultation(session):
 # Low-evidence index fixture
 # ──────────────────────────────────────────
 def seed_low_evidence_index():
-    """Idempotently create a low-evidence index fixture for Coach testing.
+    """Persist one synthetic dense/BM25 generation and activate it in Redis.
 
-    Contains a single synthetic chunk clearly marked as test data.
+    This uses the same Chroma, BM25 artifact, manifest, and active-generation
+    contracts as production. The only synthetic part is the document content.
     """
     synthetic_chunk = {
         "id": "e2e-coach-v12-chunk-001",
@@ -230,32 +232,82 @@ def seed_low_evidence_index():
         "metadata": {
             "source": "e2e-synthetic-test-v12",
             "is_synthetic": True,
-            "version": E2E_INDEX_VERSION,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "version": "e2e-v12",
+            "created_at": "2026-08-12T00:00:00+00:00",
         },
     }
 
-    chunk_json = json.dumps(synthetic_chunk, sort_keys=True, ensure_ascii=False)
-    checksum = hashlib.sha256(chunk_json.encode()).hexdigest()
+    from app.services.rag.embeddings import EMBEDDING_DIM, EMBEDDING_MODEL
+    from app.services.rag.indexing.builder import _publish_chroma_candidate
+    from app.services.rag.indexing.chunking import CHUNK_SIZE
+    from app.services.rag.indexing.manifest import (
+        RAGIndexManifest,
+        compute_corpus_sha256,
+        load_rag_index_manifest,
+        manifest_path,
+        write_rag_index_manifest,
+    )
+    from app.services.rag.lexical.artifacts import build_bm25_artifact
+    from app.services.rag.lexical.tokenizer import TOKENIZER_VERSION
 
-    manifest = {
-        "version": E2E_INDEX_VERSION,
-        "schema_version": "1.0",
-        "candidate_count": 1,
-        "source_count": 1,
-        "chunks": [
-            {
-                "id": synthetic_chunk["id"],
-                "checksum": checksum,
-                "source": synthetic_chunk["metadata"]["source"],
-            }
-        ],
-        "created_at": datetime.now(timezone.utc).isoformat(),
+    # Stable non-zero vector; query embeddings still come from mock-openai.
+    digest = hashlib.sha256(synthetic_chunk["content"].encode("utf-8")).digest()
+    raw = [float(digest[index % len(digest)] + 1) for index in range(EMBEDDING_DIM)]
+    norm = math.sqrt(sum(value * value for value in raw))
+    embedding = [value / norm for value in raw]
+    metadata = {
+        **synthetic_chunk["metadata"],
+        "page": 1,
+        "heading_path": "E2E synthetic evidence",
+        "content_type": "text",
+        "chunk_seq": 0,
     }
+    record = {
+        "id": synthetic_chunk["id"],
+        "text": synthetic_chunk["content"],
+        "metadata": metadata,
+        "embedding": embedding,
+    }
+    bm25_documents = [{"id": record["id"], "text": record["text"], **metadata}]
+    corpus_sha256 = compute_corpus_sha256(bm25_documents)
+
+    if manifest_path(E2E_INDEX_VERSION).exists():
+        manifest = load_rag_index_manifest(E2E_INDEX_VERSION)
+    else:
+        collection_name = _publish_chroma_candidate(E2E_INDEX_VERSION, [record])
+        build_bm25_artifact(E2E_INDEX_VERSION, bm25_documents)
+        manifest = RAGIndexManifest(
+            index_generation=E2E_INDEX_VERSION,
+            corpus_sha256=corpus_sha256,
+            source_count=1,
+            chunk_count=1,
+            parser_version="e2e-synthetic-v1",
+            chunker_version=f"e2e-fixed-{CHUNK_SIZE}",
+            tokenizer_version=TOKENIZER_VERSION,
+            embedding_model=EMBEDDING_MODEL,
+            embedding_dimension=EMBEDDING_DIM,
+            chroma_collection=collection_name,
+            bm25_artifact=f"{E2E_INDEX_VERSION}/bm25",
+            sparse_artifact=None,
+            created_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        )
+        write_rag_index_manifest(manifest)
+
+    import redis
+
+    from app.core.config import settings
+    from app.services.rag.indexing.versioning import ACTIVE_GENERATION_KEY
+
+    client = redis.Redis.from_url(settings.REDIS_CHECKPOINT_URL, decode_responses=True)
+    try:
+        client.set(ACTIVE_GENERATION_KEY, E2E_INDEX_VERSION)
+        assert client.get(ACTIVE_GENERATION_KEY) == E2E_INDEX_VERSION
+    finally:
+        client.close()
 
     print(f"[seed] Low-evidence index: {E2E_INDEX_VERSION}")
-    print(f"[seed]   candidate_count={manifest['candidate_count']}")
-    return synthetic_chunk, manifest
+    print(f"[seed]   candidate_count={manifest.chunk_count}")
+    return synthetic_chunk, manifest.model_dump(mode="json")
 
 
 # ──────────────────────────────────────────
@@ -281,7 +333,7 @@ def main():
             # 2. Patient and consultation
             patient, consultation, messages = seed_patient_and_consultation(conn)
 
-            # 3. Low-evidence index (in-memory, for verification)
+            # 3. Persist and activate the low-evidence RAG generation
             chunk, manifest = seed_low_evidence_index()
 
             conn.commit()
@@ -290,7 +342,7 @@ def main():
             raise
 
     # Assertions
-    assert manifest["candidate_count"] == 1
+    assert manifest["chunk_count"] == 1
     assert manifest["source_count"] == 1
     assert len(messages) >= 4
     assert consultation["status"] == "in_progress"

@@ -11,7 +11,7 @@ setup(
         "aiomysql==0.2.0",
         "pymysql==1.1.1",
         "pydantic==2.10.4",
-        "pydantic-settings==2.7.1",
+        "pydantic-settings==2.10.1",
         "python-jose[cryptography]==3.3.0",
         "passlib[bcrypt]==1.7.4",
         "bcrypt==4.0.1",

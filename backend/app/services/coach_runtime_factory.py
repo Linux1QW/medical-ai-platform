@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agent_runtime.evidence import EvidenceAgent
+from app.agent_runtime.evidence import EvidenceAgent, RetrievalFn, RubricFn
 from app.agent_runtime.graph import CoachDependencies, build_coach_graph
 from app.agent_runtime.model_gateway import CoachModelGateway, QwenModelGateway
 from app.agent_runtime.policy import SkillPolicy
@@ -65,12 +66,10 @@ def _build_production_evidence_agent() -> EvidenceAgent:
     Loads skills from the skills/ directory. If no skills are found,
     the agent will return empty results (no demo fallback in production).
     """
-    import os
-
     registry = SkillRegistry(strict=False)
-    skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills")
-    if os.path.isdir(skills_dir):
-        loaded = registry.load_directory(skills_dir)
+    skills_dir = Path(__file__).resolve().parents[2] / "skills"
+    if skills_dir.is_dir():
+        loaded = registry.load_directory(str(skills_dir))
         logger.info("Loaded %d skill(s) from %s", loaded, skills_dir)
 
     policy = SkillPolicy()
@@ -88,22 +87,25 @@ def _build_production_evidence_agent() -> EvidenceAgent:
     )
 
 
-def _try_build_retrieval_fn() -> Any:
+def _try_build_retrieval_fn() -> RetrievalFn | None:
     """Try to build a real retrieval function from the RAG system.
 
     Returns None if RAG dependencies are not available.
     """
     try:
-        from app.rag.hybrid_search import hybrid_search
+        from app.services.rag.retriever.fusion import hybrid_recall
 
         async def retrieval_fn(query: str, top_k: int) -> list[dict[str, Any]]:
-            results = await hybrid_search(query=query, top_k=top_k)
+            results, _meta = await hybrid_recall(query=query, top_k=top_k)
             return [
                 {
                     "doc_id": r.get("doc_id", r.get("id", "")),
                     "source": r.get("source", "medical_kb"),
                     "text": r.get("text", r.get("content", "")),
-                    "score": r.get("score", 0.0),
+                    "score": r.get(
+                        "score",
+                        r.get("rrf_score", r.get("bm25_score", 0.0)),
+                    ),
                 }
                 for r in results
             ]
@@ -114,26 +116,44 @@ def _try_build_retrieval_fn() -> Any:
         return None
 
 
-def _try_build_rubric_fn() -> Any:
-    """Try to build a real rubric retrieval function.
-
-    Returns None if rubric dependencies are not available.
-    """
+def _try_build_rubric_fn() -> RubricFn | None:
+    """Build retrieval over the versioned authoritative rubric artifact."""
     try:
-        from app.rag.hybrid_search import hybrid_search
+        from evaluation.rubric import load_rubric_v1
+
+        rubric = load_rubric_v1()
+        stage_dimensions = {
+            "history_taking": "inquiry",
+            "inquiry": "inquiry",
+            "diagnosis": "diagnosis",
+            "treatment": "treatment",
+            "communication": "humanistic",
+            "humanistic": "humanistic",
+            "evidence": "knowledge",
+            "knowledge": "knowledge",
+        }
 
         async def rubric_fn(query: str, top_k: int, stage: str | None) -> list[dict[str, Any]]:
-            results = await hybrid_search(query=query, top_k=top_k, collection="teaching_rubric")
-            return [
-                {
-                    "id": r.get("doc_id", r.get("id", "")),
-                    "criteria": r.get("criteria", ""),
-                    "stage": r.get("stage", stage or ""),
-                    "example": r.get("example", r.get("text", "")),
-                    "score": r.get("score", 0.0),
-                }
-                for r in results
-            ]
+            selected_dimension = stage_dimensions.get((stage or "").casefold())
+            terms = [term for term in query.casefold().split() if term]
+            candidates: list[dict[str, Any]] = []
+            for dimension, definitions in rubric.dimensions.items():
+                if selected_dimension and dimension != selected_dimension:
+                    continue
+                for definition in definitions:
+                    description = definition.description
+                    score = sum(term in description.casefold() for term in terms)
+                    candidates.append(
+                        {
+                            "id": definition.item_id,
+                            "criteria": description,
+                            "stage": dimension,
+                            "example": description,
+                            "score": float(score),
+                        }
+                    )
+            candidates.sort(key=lambda item: (-float(item["score"]), str(item["id"])))
+            return candidates[:top_k]
 
         return rubric_fn
     except Exception as exc:
@@ -216,15 +236,13 @@ def validate_production_dependencies() -> list[str]:
         missing.append("Coach safety policy (empty)")
 
     # 4. Skill Manifest
-    import os
-
-    skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills")
-    if not os.path.isdir(skills_dir) or not os.listdir(skills_dir):
+    skills_dir = Path(__file__).resolve().parents[2] / "skills"
+    if not skills_dir.is_dir() or not any(skills_dir.iterdir()):
         missing.append("Skill manifest directory (empty or missing)")
 
     # 5. RAG dependencies (soft check — log warning if not available)
     try:
-        from app.rag.hybrid_search import hybrid_search  # noqa: F401
+        from app.services.rag.retriever.fusion import hybrid_recall  # noqa: F401
     except Exception:
         missing.append("RAG hybrid search (not available)")
 

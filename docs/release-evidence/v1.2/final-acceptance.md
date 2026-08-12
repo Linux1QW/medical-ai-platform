@@ -1,42 +1,42 @@
 # V1.2 Final Acceptance Report
 
-> **Generated**: 2026-08-11T10:45:37.227496+00:00
-> **Candidate SHA**: `1ce32f2a4a145061233b7f03710f96e12fc2ce21`
-> **Passed**: **YES**
-> **Signature**: `b4563471605a36ad...`
+> **Generated**: 2026-08-12T11:07:01.817700+00:00
+> **Candidate SHA**: `d047966ef428e072ba90929f33fa32fc0ea1c975`
+> **Passed**: **NO**
+> **Signature**: `af96193277db40b9...`
 
 ## CI Status
 
 | Check | Result |
 |-------|--------|
-| mypy errors | 0 |
-| ruff errors | 0 |
+| mypy errors | None |
+| ruff errors | None |
 | Branch | local |
 
 ## Test Metrics
 
 | Metric | Value |
 |--------|-------|
-| Backend tests | 2103+ |
-| Frontend tests passed | 106 |
-| mypy errors | 0 |
-| ruff errors | 0 |
+| Backend tests | None |
+| Frontend tests passed | None |
+| mypy errors | None |
+| ruff errors | None |
 
 ## Migration
 
 - Alembic head: `5e6f7a8b9c0d`
-- Upgrade tested: True
-- Downgrade tested: True
+- Upgrade tested: False
+- Downgrade tested: False
 
 ## E2E Scenarios
 
-- Scenarios: 25
-- All passed: True
+- Scenarios: 0
+- All passed: False
 
 ## Load Test
 
-- p95 latency: TBD-live-only
-- Error rate: TBD-live-only
+- p95 latency: None
+- Error rate: None
 - Note: Requires deployed environment with real LLM endpoints
 
 ## Rollback
@@ -69,22 +69,22 @@
 
 | Approval | Status |
 |----------|--------|
-| Code owner review | True |
-| Security review | True |
-| QA sign-off | True |
+| Code owner review | False |
+| Security review | False |
+| QA sign-off | False |
 
 ## Provenance
 
-- Generated at: 2026-08-11T10:45:37.227496+00:00
+- Generated at: 2026-08-12T11:07:01.817700+00:00
 - Generator: backend/scripts/ci/build_v12_acceptance_bundle.py
 - Python: 3.10.4
-- Git SHA: `1ce32f2a4a145061233b7f03710f96e12fc2ce21`
-- Git branch: codex/v1.2-acceptance-remediation-v3
+- Git SHA: `d047966ef428e072ba90929f33fa32fc0ea1c975`
+- Git branch: codex/v1.2-final-blockers-remediation
 
 ## Signature
 
 - Algorithm: sha256
-- Hash: `b4563471605a36ad427a734852358c7949d1cdd2a1da634bf48558dea7c818cf`
+- Hash: `af96193277db40b914ffa0a226398d3d2987bec5ee777c737700f9956c9b6f59`
 
 ---
 *This document was auto-generated from `final-acceptance.json`. Do not edit manually.*

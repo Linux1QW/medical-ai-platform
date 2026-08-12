@@ -1,8 +1,8 @@
 # V1.2 Acceptance Summary
 
-> **Status**: PASSED on branch `codex/v1.2-acceptance-remediation-v3`.
-> **Candidate SHA**: `1ce32f2a4a145061233b7f03710f96e12fc2ce21`
-> **Generated**: 2026-08-11T10:45:37.227496+00:00
+> **Status**: NOT PASSED on branch `codex/v1.2-final-blockers-remediation`.
+> **Candidate SHA**: `d047966ef428e072ba90929f33fa32fc0ea1c975`
+> **Generated**: 2026-08-12T11:07:01.817700+00:00
 
 ## Milestones Delivered
 
@@ -49,10 +49,10 @@
 
 | Metric | Threshold | Actual | Status |
 |---|---|---|---|
-| Backend tests | ≥ 2000 | 2103+ | PASS |
-| Frontend tests | ≥ 100 | 106 | PASS |
-| mypy errors | 0 | 0 | PASS |
-| ruff errors | 0 | 0 | PASS |
+| Backend tests | ≥ 2000 | None | FAIL |
+| Frontend tests | ≥ 100 | None | FAIL |
+| mypy errors | 0 | None | FAIL |
+| ruff errors | 0 | None | FAIL |
 | Intent macro-F1 | ≥ 0.85 | TBD (live-only) | Pending |
 | Hidden-fact leakage | 0/72 | TBD (live-only) | Pending |
 | Text hint p95 latency | ≤ 2.5 s | TBD (live-only) | Pending |

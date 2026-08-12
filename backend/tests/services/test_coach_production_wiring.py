@@ -34,6 +34,9 @@ from app.services.coach_context_builder import CoachContextBuilder
 from app.services.coach_runtime_factory import (
     CoachRuntimeFactory,
     CoachUnavailableError,
+    _build_production_evidence_agent,
+    _try_build_retrieval_fn,
+    _try_build_rubric_fn,
     build_evidence_fn,
     validate_production_dependencies,
 )
@@ -416,6 +419,48 @@ def test_validate_production_deps_all_present():
             # Should not report missing checkpointer or API key
             assert not any("Checkpointer" in m for m in missing)
             assert not any("LLM_API_KEY" in m for m in missing)
+            assert not any("Skill manifest" in m for m in missing)
+            assert not any("RAG hybrid" in m for m in missing)
+
+
+def test_production_agent_loads_real_skill_manifests():
+    agent = _build_production_evidence_agent()
+    assert agent.registry is not None
+    assert agent.registry.get("search_medical_kb") is not None
+    assert agent.registry.get("search_teaching_rubric") is not None
+
+
+@pytest.mark.asyncio
+async def test_production_retrieval_uses_canonical_hybrid_recall():
+    hit = {"doc_id": "doc-1", "text": "evidence", "rrf_score": 0.42}
+    with patch(
+        "app.services.rag.retriever.fusion.hybrid_recall",
+        new=AsyncMock(return_value=([hit], {"index_generation": "rag-test"})),
+    ) as recall:
+        retrieval_fn = _try_build_retrieval_fn()
+        assert retrieval_fn is not None
+        results = await retrieval_fn("query", 3)
+
+    recall.assert_awaited_once_with(query="query", top_k=3)
+    assert results == [
+        {
+            "doc_id": "doc-1",
+            "source": "medical_kb",
+            "text": "evidence",
+            "score": 0.42,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_production_rubric_reads_versioned_authoritative_definitions():
+    rubric_fn = _try_build_rubric_fn()
+    assert rubric_fn is not None
+    results = await rubric_fn("medical history", 3, "history_taking")
+
+    assert len(results) == 3
+    assert all(item["stage"] == "inquiry" for item in results)
+    assert all(str(item["id"]).startswith("inq_") for item in results)
 
 
 # ── Test: CoachService uses real context builder ─────────────────────────────

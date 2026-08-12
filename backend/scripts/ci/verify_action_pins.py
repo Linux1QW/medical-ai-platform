@@ -37,7 +37,7 @@ REQUIRED_RC_JOBS = [
     "validate-input",
     "setup-services",
     "db-migrate-seed",
-    "72-case-live",
+    "coach-72-case-live",
     "browser-e2e",
     "dual-load",
     "disconnect-replay",

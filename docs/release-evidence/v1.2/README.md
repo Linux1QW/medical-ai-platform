@@ -18,18 +18,19 @@ The **single source of truth** for V1.2 acceptance is:
 ### Build Command
 
 ```bash
-python backend/scripts/ci/build_v12_acceptance_bundle.py --skip-tests
+python backend/scripts/ci/build_v12_acceptance_bundle.py
 ```
+
+`--skip-tests` 仅生成不可发布的草稿，输出必须为 `passed=false`。迁移、E2E、
+负载和审批字段只能由受保护的发布工作流通过环境证据写入；本地默认均为未验证。
 
 ### Key Findings
 
-- **Passed**: true (code-complete, all safety controls verified)
+- **Passed**: 以 `final-acceptance.json` 的实测结果为准；缺少任一证据即为 false
 - **Voice**: NOT_ACCEPTED — no real LiveKit evidence, default OFF
 - **Coach**: CODE_COMPLETE — default OFF, 8 safety controls verified
-- **Backend tests**: 2103+
-- **Frontend tests**: 106
-- **mypy**: 0 errors
-- **ruff**: 0 errors
+- **Backend / Frontend tests**: 由生成命令实时采集，不使用固定数字
+- **mypy / ruff**: 由生成命令实时执行，不使用历史结果
 
 ## Workflows
 
@@ -53,7 +54,7 @@ Triggered manually via `workflow_dispatch` with a required `candidate_sha` param
 
 | Job Name | Description |
 |----------|-------------|
-| `v12-72case-live` | Real-model 72-case benchmark (live LLM) |
+| `coach-72-case-live` | Real-model 72-case benchmark (live LLM) |
 | `v12-auth-e2e` | Authenticated end-to-end API tests |
 | `v12-load-test` | HTTP load test (p95 <= 2500ms, error rate < 1%) |
 | `v12-fault-recovery` | Fault injection and recovery verification |

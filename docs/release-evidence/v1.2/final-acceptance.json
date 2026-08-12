@@ -1,47 +1,51 @@
 {
-  "candidate_sha": "1ce32f2a4a145061233b7f03710f96e12fc2ce21",
-  "passed": true,
+  "candidate_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+  "passed": false,
   "ci": {
     "mypy": {
-      "errors": 0,
-      "passed": true,
-      "output_snippet": "Success: no issues found (from known state)"
+      "errors": null,
+      "passed": false,
+      "status": "not_run"
     },
     "ruff": {
-      "errors": 0,
-      "passed": true
+      "errors": null,
+      "passed": false,
+      "status": "not_run"
     },
     "branch": "local",
-    "timestamp": "2026-08-11T10:45:37.227496+00:00"
+    "timestamp": "2026-08-12T11:07:01.817700+00:00",
+    "measurement_mode": "not_run"
   },
   "rc": {
     "workflow_run_url": "",
     "status": "simulated"
   },
   "metrics": {
-    "backend_tests_collected": "2103+",
-    "frontend_tests_passed": 106,
-    "mypy_errors": 0,
-    "ruff_errors": 0,
-    "ci_status": "green"
+    "backend_tests_collected": null,
+    "backend_tests_status": "not_run",
+    "frontend_tests_passed": null,
+    "frontend_tests_status": "not_run",
+    "mypy_errors": null,
+    "ruff_errors": null,
+    "ci_status": "not_run"
   },
   "migration": {
     "alembic_head": "5e6f7a8b9c0d",
-    "upgrade_tested": true,
-    "downgrade_tested": true,
+    "upgrade_tested": false,
+    "downgrade_tested": false,
     "migration_files": [
       "4d5e6f7a8b9c_v12_agent_runtime.py",
       "5e6f7a8b9c0d_v12_runtime_remediation.py"
     ]
   },
   "e2e": {
-    "scenarios": 25,
-    "passed": true,
-    "note": "E2E scenarios cover all iteration tasks 0-16"
+    "scenarios": 0,
+    "passed": false,
+    "note": "Populated only from measured E2E workflow evidence"
   },
   "load": {
-    "p95_latency_ms": "TBD-live-only",
-    "error_rate": "TBD-live-only",
+    "p95_latency_ms": null,
+    "error_rate": null,
     "note": "Requires deployed environment with real LLM endpoints"
   },
   "rollback": {
@@ -51,10 +55,10 @@
     "steps": 8
   },
   "approvals": {
-    "code_owner_review": true,
-    "security_review": true,
-    "qa_sign_off": true,
-    "note": "All approvals recorded in this bundle"
+    "code_owner_review": false,
+    "security_review": false,
+    "qa_sign_off": false,
+    "note": "Approvals must be supplied by the protected release workflow"
   },
   "artifacts": {
     "final_acceptance_json": "docs/release-evidence/v1.2/final-acceptance.json",
@@ -63,17 +67,19 @@
     "rollback_drill_md": "docs/release-evidence/v1.2/rollback-drill.md"
   },
   "provenance": {
-    "generated_at": "2026-08-11T10:45:37.227496+00:00",
+    "generated_at": "2026-08-12T11:07:01.817700+00:00",
     "generator_script": "backend/scripts/ci/build_v12_acceptance_bundle.py",
     "python_version": "3.10.4",
     "platform": "Windows-10-10.0.26200-SP0",
-    "git_sha": "1ce32f2a4a145061233b7f03710f96e12fc2ce21",
-    "git_branch": "codex/v1.2-acceptance-remediation-v3"
+    "git_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+    "candidate_sha": "d047966ef428e072ba90929f33fa32fc0ea1c975",
+    "candidate_matches_checkout": true,
+    "git_branch": "codex/v1.2-final-blockers-remediation"
   },
   "signature": {
     "algorithm": "sha256",
     "computed": true,
-    "hash": "b4563471605a36ad427a734852358c7949d1cdd2a1da634bf48558dea7c818cf"
+    "hash": "af96193277db40b914ffa0a226398d3d2987bec5ee777c737700f9956c9b6f59"
   },
   "voice": {
     "status": "NOT_ACCEPTED",

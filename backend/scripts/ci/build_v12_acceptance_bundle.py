@@ -73,11 +73,9 @@ def count_backend_tests() -> dict[str, Any]:
         output = result.stdout + result.stderr
         # Look for "X tests collected" or similar
         match = re.search(r"(\d+)\s+tests?\s+collected", output)
-        if match:
+        if match and result.returncode == 0:
             return {"collected": int(match.group(1)), "status": "collected"}
-        # Fallback: count lines
-        lines = [line for line in output.strip().split("\n") if line.strip() and not line.startswith(("=", "-", "WARNING"))]
-        return {"collected": len(lines), "status": "estimated"}
+        return {"collected": None, "status": "collection_failed"}
     except Exception as exc:
         return {"collected": 0, "status": f"error: {exc}"}
 
@@ -91,9 +89,9 @@ def count_frontend_tests() -> dict[str, Any]:
         )
         output = result.stdout + result.stderr
         match = re.search(r"Tests?\s+(\d+)", output)
-        if match:
+        if match and result.returncode == 0:
             return {"passed": int(match.group(1)), "status": "passed"}
-        return {"passed": 0, "status": "unknown"}
+        return {"passed": None, "status": "test_failed"}
     except Exception as exc:
         return {"passed": 0, "status": f"error: {exc}"}
 
@@ -133,23 +131,30 @@ def get_ruff_result() -> dict[str, Any]:
 
 def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> dict[str, Any]:
     """Build the complete acceptance bundle."""
-    sha = candidate_sha or get_git_sha()
+    checkout_sha = get_git_sha()
+    sha = candidate_sha or checkout_sha
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     # Collect CI results
     if skip_tests:
-        # Use known values from the task description
-        mypy = {"errors": 0, "passed": True, "output_snippet": "Success: no issues found (from known state)"}
-        ruff = {"errors": 0, "passed": True}
+        mypy = {"errors": None, "passed": False, "status": "not_run"}
+        ruff = {"errors": None, "passed": False, "status": "not_run"}
+        backend_tests = {"collected": None, "status": "not_run"}
+        frontend_tests = {"passed": None, "status": "not_run"}
+        measurement_mode = "not_run"
     else:
         mypy = get_mypy_result()
         ruff = get_ruff_result()
+        backend_tests = count_backend_tests()
+        frontend_tests = count_frontend_tests()
+        measurement_mode = "measured"
 
     ci = {
         "mypy": mypy,
         "ruff": ruff,
         "branch": os.environ.get("GITHUB_REF_NAME", "local"),
         "timestamp": now,
+        "measurement_mode": measurement_mode,
     }
 
     # RC results placeholder (populated from CI artifacts in real runs)
@@ -158,20 +163,21 @@ def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> 
         "status": "simulated" if not os.environ.get("CI") else "live",
     }
 
-    # Metrics - from known test results (2103+ backend, 106 frontend)
     metrics = {
-        "backend_tests_collected": "2103+",
-        "frontend_tests_passed": 106,
+        "backend_tests_collected": backend_tests["collected"],
+        "backend_tests_status": backend_tests["status"],
+        "frontend_tests_passed": frontend_tests["passed"],
+        "frontend_tests_status": frontend_tests["status"],
         "mypy_errors": mypy["errors"],
         "ruff_errors": ruff["errors"],
-        "ci_status": "green",
+        "ci_status": "measured" if measurement_mode == "measured" else "not_run",
     }
 
     # Migration
     migration = {
         "alembic_head": "5e6f7a8b9c0d",
-        "upgrade_tested": True,
-        "downgrade_tested": True,
+        "upgrade_tested": os.environ.get("MIGRATION_UPGRADE_TESTED") == "true",
+        "downgrade_tested": os.environ.get("MIGRATION_DOWNGRADE_TESTED") == "true",
         "migration_files": [
             "4d5e6f7a8b9c_v12_agent_runtime.py",
             "5e6f7a8b9c0d_v12_runtime_remediation.py",
@@ -180,15 +186,23 @@ def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> 
 
     # E2E
     e2e = {
-        "scenarios": 25,
-        "passed": True,
-        "note": "E2E scenarios cover all iteration tasks 0-16",
+        "scenarios": int(os.environ.get("E2E_SCENARIOS", "0")),
+        "passed": os.environ.get("E2E_PASSED") == "true",
+        "note": "Populated only from measured E2E workflow evidence",
     }
 
     # Load
     load = {
-        "p95_latency_ms": "TBD-live-only",
-        "error_rate": "TBD-live-only",
+        "p95_latency_ms": (
+            float(os.environ["LOAD_P95_LATENCY_MS"])
+            if os.environ.get("LOAD_P95_LATENCY_MS")
+            else None
+        ),
+        "error_rate": (
+            float(os.environ["LOAD_ERROR_RATE"])
+            if os.environ.get("LOAD_ERROR_RATE")
+            else None
+        ),
         "note": "Requires deployed environment with real LLM endpoints",
     }
 
@@ -202,10 +216,10 @@ def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> 
 
     # Approvals
     approvals = {
-        "code_owner_review": True,
-        "security_review": True,
-        "qa_sign_off": True,
-        "note": "All approvals recorded in this bundle",
+        "code_owner_review": os.environ.get("CODE_OWNER_APPROVED") == "true",
+        "security_review": os.environ.get("SECURITY_APPROVED") == "true",
+        "qa_sign_off": os.environ.get("QA_APPROVED") == "true",
+        "note": "Approvals must be supplied by the protected release workflow",
     }
 
     # Artifacts
@@ -222,7 +236,9 @@ def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> 
         "generator_script": "backend/scripts/ci/build_v12_acceptance_bundle.py",
         "python_version": platform.python_version(),
         "platform": platform.platform(),
-        "git_sha": sha,
+        "git_sha": checkout_sha,
+        "candidate_sha": sha,
+        "candidate_matches_checkout": bool(sha) and sha == checkout_sha,
         "git_branch": os.environ.get("GITHUB_REF_NAME", subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5,
@@ -297,8 +313,52 @@ def build_bundle(candidate_sha: str | None = None, skip_tests: bool = False) -> 
     return bundle
 
 
+def _quality_results_are_valid(ci: dict[str, Any], metrics: dict[str, Any]) -> bool:
+    backend_count = metrics.get("backend_tests_collected")
+    frontend_count = metrics.get("frontend_tests_passed")
+    return bool(
+        ci.get("measurement_mode") == "measured"
+        and ci.get("mypy", {}).get("passed")
+        and ci.get("ruff", {}).get("passed")
+        and isinstance(backend_count, int)
+        and backend_count >= 2000
+        and isinstance(frontend_count, int)
+        and frontend_count >= 100
+        and metrics.get("backend_tests_status") == "collected"
+        and metrics.get("frontend_tests_status") == "passed"
+    )
+
+
+def _release_results_are_valid(sections: dict[str, Any]) -> bool:
+    migration = sections.get("migration", {})
+    load = sections.get("load", {})
+    approvals = sections.get("approvals", {})
+    p95 = load.get("p95_latency_ms")
+    error_rate = load.get("error_rate")
+    return bool(
+        migration.get("upgrade_tested")
+        and migration.get("downgrade_tested")
+        and sections.get("e2e", {}).get("passed")
+        and isinstance(p95, (int, float))
+        and p95 <= 2500
+        and isinstance(error_rate, (int, float))
+        and error_rate <= 0.01
+        and all(
+            approvals.get(key)
+            for key in ("code_owner_review", "security_review", "qa_sign_off")
+        )
+    )
+
+
+def _provenance_is_valid(provenance: dict[str, Any]) -> bool:
+    return bool(
+        SHA_PATTERN.fullmatch(str(provenance.get("git_sha", "")))
+        and provenance.get("candidate_matches_checkout")
+    )
+
+
 def _evaluate_passed(**sections: Any) -> bool:
-    """Evaluate whether the bundle passes. Fail-closed: all required sections must be present and valid."""
+    """Fail closed unless every measured release section is valid."""
     for section_name in REQUIRED_SECTIONS:
         section = sections.get(section_name)
         if section is None:
@@ -311,11 +371,13 @@ def _evaluate_passed(**sections: Any) -> bool:
     if not sig.get("computed"):
         return False
 
-    # Mypy and ruff must pass
     ci = sections.get("ci", {})
-    if not ci.get("mypy", {}).get("passed"):
+    metrics = sections.get("metrics", {})
+    if not _quality_results_are_valid(ci, metrics):
         return False
-    if not ci.get("ruff", {}).get("passed"):
+    if not _release_results_are_valid(sections):
+        return False
+    if not _provenance_is_valid(sections.get("provenance", {})):
         return False
 
     return True
@@ -486,8 +548,10 @@ def generate_acceptance_summary_md(bundle: dict[str, Any]) -> str:
         "",
         "| Metric | Threshold | Actual | Status |",
         "|---|---|---|---|",
-        f"| Backend tests | ≥ 2000 | {bundle['metrics']['backend_tests_collected']} | PASS |",
-        f"| Frontend tests | ≥ 100 | {bundle['metrics']['frontend_tests_passed']} | PASS |",
+        f"| Backend tests | ≥ 2000 | {bundle['metrics']['backend_tests_collected']} | "
+        f"{'PASS' if isinstance(bundle['metrics']['backend_tests_collected'], int) and bundle['metrics']['backend_tests_collected'] >= 2000 else 'FAIL'} |",
+        f"| Frontend tests | ≥ 100 | {bundle['metrics']['frontend_tests_passed']} | "
+        f"{'PASS' if isinstance(bundle['metrics']['frontend_tests_passed'], int) and bundle['metrics']['frontend_tests_passed'] >= 100 else 'FAIL'} |",
         f"| mypy errors | 0 | {bundle['metrics']['mypy_errors']} | {'PASS' if bundle['metrics']['mypy_errors'] == 0 else 'FAIL'} |",
         f"| ruff errors | 0 | {bundle['metrics']['ruff_errors']} | {'PASS' if bundle['metrics']['ruff_errors'] == 0 else 'FAIL'} |",
         "| Intent macro-F1 | ≥ 0.85 | TBD (live-only) | Pending |",
@@ -526,32 +590,40 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build V1.2 acceptance bundle")
     parser.add_argument("--candidate-sha", help="Override candidate SHA")
     parser.add_argument("--output-dir", default=str(EVIDENCE_DIR), help="Output directory")
-    parser.add_argument("--skip-tests", action="store_true", help="Skip live test collection (use known values)")
+    parser.add_argument(
+        "--skip-tests",
+        action="store_true",
+        help="Generate a non-release draft without executing local checks",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("[bundle] Building V1.2 acceptance bundle...")
-    print(f"[bundle] Output dir: {output_dir.resolve()}")
+    try:
+        display_dir = output_dir.resolve().relative_to(PROJECT_ROOT)
+    except ValueError:
+        display_dir = output_dir.name
+    print(f"[bundle] Output dir: {display_dir.as_posix()}")
 
     bundle = build_bundle(candidate_sha=args.candidate_sha, skip_tests=args.skip_tests)
 
     # Write JSON
     json_path = output_dir / "final-acceptance.json"
     json_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"[bundle] Written: {json_path}")
+    print(f"[bundle] Written: {json_path.name}")
 
     # Generate and write Markdown files from JSON
     final_md = generate_final_acceptance_md(bundle)
     final_md_path = output_dir / "final-acceptance.md"
     final_md_path.write_text(final_md, encoding="utf-8")
-    print(f"[bundle] Written: {final_md_path}")
+    print(f"[bundle] Written: {final_md_path.name}")
 
     summary_md = generate_acceptance_summary_md(bundle)
     summary_md_path = output_dir / "acceptance-summary.md"
     summary_md_path.write_text(summary_md, encoding="utf-8")
-    print(f"[bundle] Written: {summary_md_path}")
+    print(f"[bundle] Written: {summary_md_path.name}")
 
     print(f"[bundle] Passed: {bundle['passed']}")
     print(f"[bundle] Signature: {bundle['signature']['hash'][:32]}...")

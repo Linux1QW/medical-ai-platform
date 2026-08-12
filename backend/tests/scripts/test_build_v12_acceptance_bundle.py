@@ -38,11 +38,14 @@ def _make_minimal_bundle(**overrides: Any) -> dict[str, Any]:
             "ruff": {"errors": 0, "passed": True},
             "branch": "test",
             "timestamp": "2026-01-01T00:00:00Z",
+            "measurement_mode": "measured",
         },
         "rc": {"workflow_run_url": "", "status": "simulated"},
         "metrics": {
-            "backend_tests_collected": "2103+",
+            "backend_tests_collected": 2103,
+            "backend_tests_status": "collected",
             "frontend_tests_passed": 106,
+            "frontend_tests_status": "passed",
             "mypy_errors": 0,
             "ruff_errors": 0,
             "ci_status": "green",
@@ -54,7 +57,7 @@ def _make_minimal_bundle(**overrides: Any) -> dict[str, Any]:
             "migration_files": ["4d5e6f7a8b9c.py", "5e6f7a8b9c0d.py"],
         },
         "e2e": {"scenarios": 25, "passed": True},
-        "load": {"p95_latency_ms": "TBD", "error_rate": "TBD", "note": "Requires deployed environment"},
+        "load": {"p95_latency_ms": 1000, "error_rate": 0.0, "note": "measured"},
         "rollback": {"drill_documented": True, "drill_file": "rollback-drill.md", "rto_target_minutes": 15, "steps": 8},
         "approvals": {"code_owner_review": True, "security_review": True, "qa_sign_off": True},
         "artifacts": {"final_acceptance_json": "final-acceptance.json"},
@@ -64,6 +67,8 @@ def _make_minimal_bundle(**overrides: Any) -> dict[str, Any]:
             "python_version": "3.10.0",
             "platform": "test",
             "git_sha": "a" * 40,
+            "candidate_sha": "a" * 40,
+            "candidate_matches_checkout": True,
             "git_branch": "test",
         },
         "signature": {"algorithm": "sha256", "computed": False, "hash": ""},
@@ -111,6 +116,31 @@ class TestFailClosed:
             artifacts=bundle["artifacts"],
             provenance=bundle["provenance"],
         ) is True
+
+    def test_skip_tests_can_never_create_release_evidence(self) -> None:
+        with patch("build_v12_acceptance_bundle.get_git_sha", return_value="a" * 40):
+            bundle = build_bundle(candidate_sha="a" * 40, skip_tests=True)
+
+        assert bundle["passed"] is False
+        assert bundle["ci"]["measurement_mode"] == "not_run"
+        assert bundle["metrics"]["backend_tests_collected"] is None
+        assert bundle["metrics"]["frontend_tests_passed"] is None
+
+    def test_candidate_must_match_checked_out_commit(self) -> None:
+        bundle = _make_minimal_bundle()
+        bundle["provenance"]["candidate_matches_checkout"] = False
+        assert _evaluate_passed(
+            ci=bundle["ci"],
+            metrics=bundle["metrics"],
+            migration=bundle["migration"],
+            e2e=bundle["e2e"],
+            load=bundle["load"],
+            signature=bundle["signature"],
+            rollback=bundle["rollback"],
+            approvals=bundle["approvals"],
+            artifacts=bundle["artifacts"],
+            provenance=bundle["provenance"],
+        ) is False
 
     def test_missing_metrics_fails(self) -> None:
         """Missing metrics section must cause failure."""
@@ -393,7 +423,7 @@ class TestMarkdownGeneration:
         """Generated summary must contain test metrics."""
         bundle = _make_minimal_bundle()
         md = generate_acceptance_summary_md(bundle)
-        assert "2103+" in md
+        assert "2103" in md
         assert "106" in md
 
     def test_markdown_is_auto_generated(self) -> None:

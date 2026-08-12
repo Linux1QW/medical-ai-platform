@@ -129,8 +129,10 @@ jobs:
           MYSQL_DATABASE: medical_ai_rc
         run: |
           cd backend
-          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql || true
-          python scripts/seed_patients.py || true
+          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql
+          python scripts/seed_patients.py
+          test "$(mysql -Nse "SELECT COUNT(*) FROM users" -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc)" -gt 0
+          test "$(mysql -Nse "SELECT COUNT(*) FROM virtual_patients" -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc)" -gt 0
 
       - name: Start backend-a (port 8000)
         env:
@@ -302,8 +304,10 @@ jobs:
           MYSQL_DATABASE: medical_ai_rc
         run: |
           cd backend
-          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql || true
-          python scripts/seed_patients.py || true
+          mysql -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc < ../database/seed.sql
+          python scripts/seed_patients.py
+          test "$(mysql -Nse "SELECT COUNT(*) FROM users" -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc)" -gt 0
+          test "$(mysql -Nse "SELECT COUNT(*) FROM virtual_patients" -h 127.0.0.1 -P 3306 -u root -prc-test-password medical_ai_rc)" -gt 0
 
       - name: Verify migration and seed
         env:
@@ -343,9 +347,9 @@ jobs:
           retention-days: 90
 
   # ============================================================================
-  # 72-case-live: real-model 72-case evaluation (no mock)
+  # coach-72-case-live: real-model 72-case evaluation (no mock)
   # ============================================================================
-  72-case-live:
+  coach-72-case-live:
     needs: [setup-services, db-migrate-seed]
     runs-on: ubuntu-latest
     services:
@@ -917,7 +921,7 @@ jobs:
   # evidence-manifest: aggregate all reports into signed evidence
   # ============================================================================
   evidence-manifest:
-    needs: [72-case-live, browser-e2e, dual-load, disconnect-replay, migration-verify]
+    needs: [coach-72-case-live, browser-e2e, dual-load, disconnect-replay, migration-verify]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -946,23 +950,23 @@ jobs:
             "candidate_sha": "$CANDIDATE_SHA",
             "timestamp": "$TIMESTAMP",
             "execution_mode": "live",
-            "release_eligible": $([ "${{ needs.72-case-live.result }}" = "success" ] && \
-              [ "${{ needs.browser-e2e.result }}" = "success" ] && \
-              [ "${{ needs.dual-load.result }}" = "success" ] && \
-              [ "${{ needs.disconnect-replay.result }}" = "success" ] && \
-              [ "${{ needs.migration-verify.result }}" = "success" ] && echo "true" || echo "false"),
+            "release_eligible": $([ "${{ needs['coach-72-case-live'].result }}" = "success" ] && \
+              [ "${{ needs['browser-e2e'].result }}" = "success" ] && \
+              [ "${{ needs['dual-load'].result }}" = "success" ] && \
+              [ "${{ needs['disconnect-replay'].result }}" = "success" ] && \
+              [ "${{ needs['migration-verify'].result }}" = "success" ] && echo "true" || echo "false"),
             "gates": {
-              "72-case-live": "${{ needs.72-case-live.result }}",
-              "browser-e2e": "${{ needs.browser-e2e.result }}",
-              "dual-load": "${{ needs.dual-load.result }}",
-              "disconnect-replay": "${{ needs.disconnect-replay.result }}",
-              "migration-verify": "${{ needs.migration-verify.result }}"
+              "coach-72-case-live": "${{ needs['coach-72-case-live'].result }}",
+              "browser-e2e": "${{ needs['browser-e2e'].result }}",
+              "dual-load": "${{ needs['dual-load'].result }}",
+              "disconnect-replay": "${{ needs['disconnect-replay'].result }}",
+              "migration-verify": "${{ needs['migration-verify'].result }}"
             },
-            "all_passed": $([ "${{ needs.72-case-live.result }}" = "success" ] && \
-              [ "${{ needs.browser-e2e.result }}" = "success" ] && \
-              [ "${{ needs.dual-load.result }}" = "success" ] && \
-              [ "${{ needs.disconnect-replay.result }}" = "success" ] && \
-              [ "${{ needs.migration-verify.result }}" = "success" ] && echo "true" || echo "false"),
+            "all_passed": $([ "${{ needs['coach-72-case-live'].result }}" = "success" ] && \
+              [ "${{ needs['browser-e2e'].result }}" = "success" ] && \
+              [ "${{ needs['dual-load'].result }}" = "success" ] && \
+              [ "${{ needs['disconnect-replay'].result }}" = "success" ] && \
+              [ "${{ needs['migration-verify'].result }}" = "success" ] && echo "true" || echo "false"),
             "reports_collected": [
               "rc-services-report",
               "rc-migration-report",

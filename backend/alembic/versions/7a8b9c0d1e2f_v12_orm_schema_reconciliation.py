@@ -150,6 +150,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Restore the exact schema represented by durable-streaming revision."""
+    # MySQL may replace the FK's implicit doctor_id index with the new unique
+    # index. Recreate the supporting index before dropping the unique one.
+    op.create_index(
+        "doctor_id", "trainee_memory_consents", ["doctor_id"], unique=False
+    )
     op.drop_constraint(
         "uq_trainee_memory_consent_doctor_id", "trainee_memory_consents", type_="unique",
     )

@@ -70,24 +70,27 @@ def _count_backfill_candidates(cwd: Optional[str] = None) -> Dict[str, int]:
     async def _count():
         from sqlalchemy import text
 
-        from app.db.session import AsyncSessionLocal
+        from app.db.session import AsyncSessionLocal, engine
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                text("SELECT COUNT(*) FROM evaluations WHERE run_id IS NULL")
-            )
-            null_count = result.scalar() or 0
-
-            result = await db.execute(
-                text(
-                    "SELECT COUNT(*) FROM evaluations e "
-                    "WHERE e.run_id IS NOT NULL "
-                    "AND NOT EXISTS (SELECT 1 FROM evaluation_runs er WHERE er.id = e.run_id)"
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    text("SELECT COUNT(*) FROM evaluations WHERE run_id IS NULL")
                 )
-            )
-            orphan_count = result.scalar() or 0
+                null_count = result.scalar() or 0
 
-        return {"null_run_id": null_count, "orphans": orphan_count, "ambiguous": 0}
+                result = await db.execute(
+                    text(
+                        "SELECT COUNT(*) FROM evaluations e "
+                        "WHERE e.run_id IS NOT NULL "
+                        "AND NOT EXISTS (SELECT 1 FROM evaluation_runs er WHERE er.id = e.run_id)"
+                    )
+                )
+                orphan_count = result.scalar() or 0
+
+            return {"null_run_id": null_count, "orphans": orphan_count, "ambiguous": 0}
+        finally:
+            await engine.dispose()
 
     try:
         return asyncio.run(_count())

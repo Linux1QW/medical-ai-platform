@@ -36,6 +36,12 @@ def test_migrate_v11_makes_backend_package_importable_when_executed_as_script(
     finally:
         sys.modules.pop(module_name, None)
 
+
+def test_backfill_count_disposes_the_async_engine() -> None:
+    """The script must close pooled aiomysql sockets before asyncio.run exits."""
+    source = MIGRATE_V11_PATH.read_text(encoding="utf-8")
+    assert "await engine.dispose()" in source
+
 # ── 1. 全新库无 operator ────────────────────────────────────────────────────
 
 

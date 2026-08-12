@@ -113,3 +113,4 @@ def test_orm_schema_reconciliation_covers_reported_drift() -> None:
     assert "uq_coach_stream_event_id" in upgrade
     assert "uq_trainee_memory_consent_doctor_id" in upgrade
     assert "evaluation_runs WHERE started_at IS NULL" in downgrade
+    assert '"doctor_id", "trainee_memory_consents"' in downgrade

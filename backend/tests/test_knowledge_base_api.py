@@ -18,9 +18,11 @@ def client():
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
         id=1, role="admin", permissions=None
     )
+    test_client = TestClient(app, raise_server_exceptions=False)
     try:
-        yield TestClient(app, raise_server_exceptions=False)
+        yield test_client
     finally:
+        test_client.close()
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous)
 

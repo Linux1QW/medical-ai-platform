@@ -48,7 +48,7 @@ const LoginPage: React.FC = () => {
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" block loading={loading}>
-              登 录
+              登录
             </Button>
           </Form.Item>
           <div style={{ textAlign: 'center' }}>
